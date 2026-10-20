@@ -1,0 +1,90 @@
+package ui
+
+import (
+	"strings"
+	"testing"
+
+	"github.com/charmbracelet/x/ansi"
+
+	"github.com/CLBRITTON2/perusal/internal/diff"
+)
+
+func TestSanitizeText(t *testing.T) {
+	t.Run("replacesEscapeSequenceStart", replacesEscapeSequenceStart)
+	t.Run("replacesBidiOverride", replacesBidiOverride)
+	t.Run("expandsTabs", expandsTabs)
+	t.Run("keepsLineBreaksOfMultilineText", keepsLineBreaksOfMultilineText)
+}
+
+func TestRenderSideBySide(t *testing.T) {
+	t.Run("everyRowFillsTheWidthExactly", everyRowFillsTheWidthExactly)
+	t.Run("showsOldTextLeftAndNewTextRight", showsOldTextLeftAndNewTextRight)
+}
+
+func replacesEscapeSequenceStart(t *testing.T) {
+	got := sanitizeText("a\x1b]0;title\x07b\x9bc")
+
+	if got != "a�]0;title�b�c" {
+		t.Fatalf("got %q", got)
+	}
+}
+
+func replacesBidiOverride(t *testing.T) {
+	got := sanitizeText("if admin‮ {")
+
+	if got != "if admin� {" {
+		t.Fatalf("got %q", got)
+	}
+}
+
+func expandsTabs(t *testing.T) {
+	got := sanitizeText("\tx")
+
+	if got != "    x" {
+		t.Fatalf("got %q", got)
+	}
+}
+
+func keepsLineBreaksOfMultilineText(t *testing.T) {
+	got := sanitizeLines("On branch master\r\n\tmodified: a\x1b.go\n")
+
+	if got != "On branch master\n    modified: a�.go\n" {
+		t.Fatalf("got %q", got)
+	}
+}
+
+func everyRowFillsTheWidthExactly(t *testing.T) {
+	fileDiff := diff.FileDiff{Hunks: []diff.Hunk{{
+		Header: "@@ -9,2 +9,2 @@",
+		Rows: []diff.Row{
+			{Left: diff.Line{Kind: diff.LineRemoved, Number: 9, Text: strings.Repeat("long ", 40)},
+				Right: diff.Line{Kind: diff.LineAdded, Number: 9, Text: "\t世界 wide"}},
+			{Left: diff.Line{Kind: diff.LineRemoved, Number: 10, Text: "x"}, Right: diff.Line{Kind: diff.LineBlank}},
+			{Left: diff.Line{Kind: diff.LineContext, Number: 11, Text: ""}, Right: diff.Line{Kind: diff.LineContext, Number: 11, Text: ""}},
+		},
+	}}}
+
+	for _, width := range []int{40, 41, 120} {
+		for index, line := range renderSideBySide(fileDiff, width) {
+			if got := ansi.StringWidth(line); got != width {
+				t.Errorf("width %d, row %d: %d cells: %q", width, index, got, ansi.Strip(line))
+			}
+		}
+	}
+}
+
+func showsOldTextLeftAndNewTextRight(t *testing.T) {
+	fileDiff := diff.FileDiff{Hunks: []diff.Hunk{{
+		Header: "@@ -7 +7 @@",
+		Rows: []diff.Row{
+			{Left: diff.Line{Kind: diff.LineRemoved, Number: 7, Text: "old"}, Right: diff.Line{Kind: diff.LineAdded, Number: 7, Text: "new"}},
+		},
+	}}}
+
+	lines := renderSideBySide(fileDiff, 21)
+
+	got := ansi.Strip(lines[1])
+	if got != "7 old     │7 new     " {
+		t.Fatalf("got %q", got)
+	}
+}
