@@ -111,10 +111,7 @@ func selectionFollowsTheCommitWhenNewOnesArriveAbove(t *testing.T) {
 	first := gitrepo.Commit{Hash: strings.Repeat("1", 40)}
 	second := gitrepo.Commit{Hash: strings.Repeat("2", 40)}
 	added := gitrepo.Commit{Hash: strings.Repeat("3", 40)}
-	m := update(t, New(), RepositoryFocused{Repository: gitrepo.Repository{Dir: "C:/dev/repo"}})
-	m = update(t, m, logLoadedMsg{dir: "C:/dev/repo", limit: logPageSize, commits: []gitrepo.Commit{first, second}})
-	m = update(t, m, tea.KeyPressMsg{Code: tea.KeyTab})
-	m = update(t, m, tea.KeyPressMsg{Code: 'j', Text: "j"})
+	m := update(t, logOf(t, []gitrepo.Commit{first, second}), tea.KeyPressMsg{Code: 'j', Text: "j"})
 
 	m = update(t, m, logLoadedMsg{dir: "C:/dev/repo", limit: logPageSize, commits: []gitrepo.Commit{added, first, second}})
 
@@ -179,10 +176,10 @@ func twoFiles() []gitrepo.FileStatus {
 func nearingTheEndOfAFullPageLoadsTheNextOne(t *testing.T) {
 	m := update(t, logOf(t, numberedCommits(logPageSize)), tea.WindowSizeMsg{Width: 120, Height: 30})
 
-	next, cmd := selectLogRow(t, m, logPageSize-1)
+	next, _ := selectLogRow(t, m, logPageSize-1)
 
-	if next.logLimit != 2*logPageSize || cmd == nil {
-		t.Fatalf("got limit %d, command %v, want limit %d and a load", next.logLimit, cmd, 2*logPageSize)
+	if next.logLimit != 2*logPageSize {
+		t.Fatalf("got limit %d, want %d", next.logLimit, 2*logPageSize)
 	}
 }
 

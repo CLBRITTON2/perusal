@@ -1,8 +1,10 @@
 package focus
 
 import (
+	"context"
 	"errors"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"testing"
 )
@@ -85,6 +87,64 @@ func stopsAtTheOwnerDevDirectory(t *testing.T) {
 	if !errors.Is(err, ErrNotWorkTree) {
 		t.Fatalf("got %v, want %v", err, ErrNotWorkTree)
 	}
+}
+
+func TestResolve(t *testing.T) {
+	t.Run("opensTheCheckedWorkTree", opensTheCheckedWorkTree)
+	t.Run("refusesAWorkTreeGitSkipsPast", refusesAWorkTreeGitSkipsPast)
+}
+
+const agentDevDir = `C:\agent\dev`
+
+func opensTheCheckedWorkTree(t *testing.T) {
+	devDir := t.TempDir()
+	repository := filepath.Join(devDir, "repo")
+	gitInit(t, repository)
+	denyGuests(t, filepath.Join(repository, ".git"), deniedWriteMask)
+	rules := Rules{AgentDevDir: agentDevDir, OwnerDevDir: devDir, AgentSID: guestsSID}
+
+	got, err := Resolve(context.Background(), rules, focusFileHolding(t, agentDevDir+`\repo`))
+
+	if err != nil {
+		t.Fatal(err)
+	}
+	same, err := isSameDirectory(got.Dir, repository)
+	if err != nil || !same {
+		t.Fatalf("got %q, %v, want %q", got.Dir, err, repository)
+	}
+}
+
+func refusesAWorkTreeGitSkipsPast(t *testing.T) {
+	outer := t.TempDir()
+	gitInit(t, outer)
+	devDir := filepath.Join(outer, "dev")
+	emptyGitDir := filepath.Join(devDir, "repo", ".git")
+	mustMkdir(t, emptyGitDir)
+	denyGuests(t, emptyGitDir, deniedWriteMask)
+	rules := Rules{AgentDevDir: agentDevDir, OwnerDevDir: devDir, AgentSID: guestsSID}
+
+	_, err := Resolve(context.Background(), rules, focusFileHolding(t, agentDevDir+`\repo`))
+
+	if !errors.Is(err, ErrWorkTreeMismatch) {
+		t.Fatalf("got %v, want %v", err, ErrWorkTreeMismatch)
+	}
+}
+
+func gitInit(t *testing.T, dir string) {
+	t.Helper()
+	output, err := exec.Command("git", "init", dir).CombinedOutput()
+	if err != nil {
+		t.Fatalf("git init %s: %v\n%s", dir, err, output)
+	}
+}
+
+func focusFileHolding(t *testing.T, agentPath string) string {
+	t.Helper()
+	focusFile := filepath.Join(t.TempDir(), ".herdr-focus")
+	if err := os.WriteFile(focusFile, []byte(agentPath), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	return focusFile
 }
 
 func mustMkdir(t *testing.T, dir string) {

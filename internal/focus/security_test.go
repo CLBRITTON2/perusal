@@ -80,6 +80,12 @@ func deniedGitDir(t *testing.T, mask uint32) string {
 	t.Helper()
 	gitDir := filepath.Join(t.TempDir(), ".git")
 	mustMkdir(t, gitDir)
+	denyGuests(t, gitDir, mask)
+	return gitDir
+}
+
+func denyGuests(t *testing.T, gitDir string, mask uint32) {
+	t.Helper()
 	guests, err := windows.StringToSid(guestsSID)
 	if err != nil {
 		t.Fatal(err)
@@ -110,5 +116,4 @@ func deniedGitDir(t *testing.T, mask uint32) string {
 	if err != nil {
 		t.Fatal(err)
 	}
-	return gitDir
 }

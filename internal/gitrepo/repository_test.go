@@ -18,10 +18,44 @@ func TestPush(t *testing.T) {
 	t.Run("sendsTheBranchToItsUpstream", sendsTheBranchToItsUpstream)
 }
 
+func TestStatus(t *testing.T) {
+	t.Run("leavesTheIndexUnwritten", leavesTheIndexUnwritten)
+}
+
+func leavesTheIndexUnwritten(t *testing.T) {
+	work := t.TempDir()
+	file := filepath.Join(work, "a.txt")
+	if err := os.WriteFile(file, []byte("a\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	runSteps(t, work, [][]string{
+		{"init", "--initial-branch=main", work},
+		{"-C", work, "add", "a.txt"},
+		{"-C", work, "-c", "user.name=perusal", "-c", "user.email=perusal@example.com", "-c", "commit.gpgsign=false",
+			"commit", "--no-verify", "--message", "Start"},
+	})
+	staleStat := time.Now().Add(-time.Hour)
+	if err := os.Chtimes(file, staleStat, staleStat); err != nil {
+		t.Fatal(err)
+	}
+	index := filepath.Join(work, ".git", "index")
+	before, err := os.Stat(index)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	_, statusErr := Repository{Dir: work}.Status(context.Background())
+
+	after, err := os.Stat(index)
+	if statusErr != nil || err != nil || !after.ModTime().Equal(before.ModTime()) {
+		t.Fatalf("got status error %v, index modified %v then %v (%v)", statusErr, before.ModTime(), after.ModTime(), err)
+	}
+}
+
 func sendsTheBranchToItsUpstream(t *testing.T) {
 	remote := filepath.Join(t.TempDir(), "remote.git")
 	work := t.TempDir()
-	steps := [][]string{
+	runSteps(t, work, [][]string{
 		{"init", "--bare", "--initial-branch=main", remote},
 		{"init", "--initial-branch=main", work},
 		{"-C", work, "-c", "user.name=perusal", "-c", "user.email=perusal@example.com", "-c", "commit.gpgsign=false",
@@ -29,12 +63,7 @@ func sendsTheBranchToItsUpstream(t *testing.T) {
 		{"-C", work, "remote", "add", "origin", remote},
 		{"-C", work, "config", "branch.main.remote", "origin"},
 		{"-C", work, "config", "branch.main.merge", "refs/heads/main"},
-	}
-	for _, step := range steps {
-		if _, err := runGit(context.Background(), work, step); err != nil {
-			t.Fatal(err)
-		}
-	}
+	})
 
 	err := Repository{Dir: work}.Push(context.Background())
 
@@ -96,5 +125,14 @@ func failureCarriesWhatGitPrintedOnStdout(t *testing.T) {
 
 	if err == nil || !strings.Contains(err.Error(), "+new line") {
 		t.Fatalf("got error %v, want one holding the diff git printed on stdout", err)
+	}
+}
+
+func runSteps(t *testing.T, dir string, steps [][]string) {
+	t.Helper()
+	for _, step := range steps {
+		if _, err := runGit(context.Background(), dir, step); err != nil {
+			t.Fatal(err)
+		}
 	}
 }

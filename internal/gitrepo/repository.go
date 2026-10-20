@@ -193,7 +193,8 @@ func runGitWithInput(ctx context.Context, dir string, args []string, input strin
 	command := exec.CommandContext(ctx, "git", args...)
 	command.Dir = dir
 	// A credential prompt would fight the TUI for the terminal, so git fails instead of asking.
-	command.Env = append(os.Environ(), "GIT_TERMINAL_PROMPT=0")
+	// Optional locks off: polling git status would otherwise take index.lock and fail the owner's own git add.
+	command.Env = append(os.Environ(), "GIT_TERMINAL_PROMPT=0", "GIT_OPTIONAL_LOCKS=0")
 	command.Stdin = strings.NewReader(input)
 	var stderr bytes.Buffer
 	command.Stderr = &stderr

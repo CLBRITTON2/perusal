@@ -23,6 +23,7 @@ var (
 	ErrOutsideAgentDevDir = errors.New("the path is outside the agent dev directory")
 	ErrNotWorkTree        = errors.New("no .git between the path and the owner dev directory")
 	ErrGitDirUnprotected  = errors.New("the .git directory is not write-denied to the agent account")
+	ErrWorkTreeMismatch   = errors.New("git resolved a different work tree than the one checked")
 )
 
 // AgentDevDir and OwnerDevDir are one directory, as each account reaches it.
@@ -132,7 +133,7 @@ func Resolve(ctx context.Context, rules Rules, focusFile string) (gitrepo.Reposi
 		return gitrepo.Repository{}, err
 	}
 	if !same {
-		return gitrepo.Repository{}, fmt.Errorf("git resolved %s to %s instead of the checked %s", ownerPath, repository.Dir, workTree)
+		return gitrepo.Repository{}, fmt.Errorf("%w: %s resolved to %s instead of %s", ErrWorkTreeMismatch, ownerPath, repository.Dir, workTree)
 	}
 	return repository, nil
 }

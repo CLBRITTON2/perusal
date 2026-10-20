@@ -82,11 +82,15 @@ func parseFileSection(lines []string) (FileSection, error) {
 	if err != nil {
 		return FileSection{}, err
 	}
-	return FileSection{Path: sectionPath(lines), FileDiff: fileDiff}, nil
+	path, err := sectionPath(lines)
+	if err != nil {
+		return FileSection{}, err
+	}
+	return FileSection{Path: path, FileDiff: fileDiff}, nil
 }
 
 // A binary file has no ---/+++ lines, so its path comes from the diff --git header.
-func sectionPath(lines []string) string {
+func sectionPath(lines []string) (string, error) {
 	oldPath := ""
 	for _, line := range lines {
 		if strings.HasPrefix(line, "@@") {
@@ -94,25 +98,62 @@ func sectionPath(lines []string) string {
 		}
 		switch {
 		case strings.HasPrefix(line, "rename to "):
-			return strings.TrimPrefix(line, "rename to ")
-		case strings.HasPrefix(line, "+++ b/"):
-			return strings.TrimPrefix(line, "+++ b/")
-		case strings.HasPrefix(line, "--- a/"):
-			oldPath = strings.TrimPrefix(line, "--- a/")
+			return unquotePath(strings.TrimPrefix(line, "rename to "))
+		case strings.HasPrefix(line, "+++ "):
+			path, err := unquotePath(strings.TrimPrefix(line, "+++ "))
+			if err != nil {
+				return "", err
+			}
+			if strings.HasPrefix(path, "b/") {
+				return strings.TrimPrefix(path, "b/"), nil
+			}
+		case strings.HasPrefix(line, "--- "):
+			path, err := unquotePath(strings.TrimPrefix(line, "--- "))
+			if err != nil {
+				return "", err
+			}
+			if strings.HasPrefix(path, "a/") {
+				oldPath = strings.TrimPrefix(path, "a/")
+			}
 		}
 	}
 	if oldPath != "" {
-		return oldPath
+		return oldPath, nil
 	}
 	return headerPath(strings.TrimPrefix(lines[0], fileHeaderPrefix))
 }
 
-func headerPath(paths string) string {
+// Both names are quoted alike unless the file was renamed, and a rename has its own rename to line.
+func headerPath(paths string) (string, error) {
+	if strings.HasPrefix(paths, `"`) {
+		quoted, err := strconv.QuotedPrefix(paths)
+		if err != nil {
+			return "", fmt.Errorf("find the quoted path in %q: %w", paths, err)
+		}
+		path, err := unquotePath(quoted)
+		if err != nil {
+			return "", err
+		}
+		return strings.TrimPrefix(path, "a/"), nil
+	}
 	half := (len(paths) - 1) / 2
 	if len(paths)%2 == 1 && strings.HasPrefix(paths, "a/") && paths[half:half+3] == " b/" {
-		return paths[2:half]
+		return paths[2:half], nil
 	}
-	return paths
+	return paths, nil
+}
+
+// git ends a path holding a space with a tab and C-quotes special bytes (core.quotePath) in escapes Go also reads.
+func unquotePath(field string) (string, error) {
+	path := strings.TrimSuffix(field, "\t")
+	if !strings.HasPrefix(path, `"`) {
+		return path, nil
+	}
+	unquoted, err := strconv.Unquote(path)
+	if err != nil {
+		return "", fmt.Errorf("unquote path %s: %w", path, err)
+	}
+	return unquoted, nil
 }
 
 func ParseUnified(text string) (FileDiff, error) {

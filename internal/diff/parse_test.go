@@ -15,6 +15,50 @@ func TestParseUnified(t *testing.T) {
 
 func TestParseFiles(t *testing.T) {
 	t.Run("namesEachFileOfACommitAndWhatHappenedToIt", namesEachFileOfACommitAndWhatHappenedToIt)
+	t.Run("readsPathsGitQuotedOrEndedWithATab", readsPathsGitQuotedOrEndedWithATab)
+}
+
+func readsPathsGitQuotedOrEndedWithATab(t *testing.T) {
+	text := strings.Join([]string{
+		"diff --git a/old name.txt b/old name.txt",
+		"--- a/old name.txt\t",
+		"+++ b/old name.txt\t",
+		"@@ -1 +1 @@",
+		"-a",
+		"+b",
+		"diff --git a/gone file.go b/gone file.go",
+		"deleted file mode 100644",
+		"--- a/gone file.go\t",
+		"+++ /dev/null",
+		"@@ -1 +0,0 @@",
+		"-package y",
+		`diff --git "a/caf\303\251.txt" "b/caf\303\251.txt"`,
+		`--- "a/caf\303\251.txt"`,
+		`+++ "b/caf\303\251.txt"`,
+		"@@ -1 +1 @@",
+		"-a",
+		"+b",
+		`diff --git "a/caf\303\251.txt" "b/th\303\251 \"x\".txt"`,
+		"similarity index 100%",
+		`rename from "caf\303\251.txt"`,
+		`rename to "th\303\251 \"x\".txt"`,
+		`diff --git "a/\303\251 b.png" "b/\303\251 b.png"`,
+		`Binary files "a/\303\251 b.png" and "b/\303\251 b.png" differ`,
+	}, "\n")
+
+	sections, err := ParseFiles(text)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	paths := []string{}
+	for _, section := range sections {
+		paths = append(paths, section.Path)
+	}
+	wantPaths := []string{"old name.txt", "gone file.go", "café.txt", `thé "x".txt`, "é b.png"}
+	if !reflect.DeepEqual(paths, wantPaths) {
+		t.Fatalf("got paths %q, want %q", paths, wantPaths)
+	}
 }
 
 func namesEachFileOfACommitAndWhatHappenedToIt(t *testing.T) {
