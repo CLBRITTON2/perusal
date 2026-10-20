@@ -22,6 +22,31 @@ func TestRenderSideBySide(t *testing.T) {
 	t.Run("wrapsALongLineAndPadsTheOtherSide", wrapsALongLineAndPadsTheOtherSide)
 }
 
+func TestRenderFileDiff(t *testing.T) {
+	t.Run("showsANewFileAcrossTheWholeWidth", showsANewFileAcrossTheWholeWidth)
+}
+
+func showsANewFileAcrossTheWholeWidth(t *testing.T) {
+	fileDiff := diff.FileDiff{Change: diff.FileAdded, Hunks: []diff.Hunk{{
+		Header: "@@ -0,0 +1,2 @@",
+		Rows: []diff.Row{
+			{Left: diff.Line{Kind: diff.LineBlank}, Right: diff.Line{Kind: diff.LineAdded, Number: 1, Text: "package x"}},
+			{Left: diff.Line{Kind: diff.LineBlank}, Right: diff.Line{Kind: diff.LineAdded, Number: 2, Text: ""}},
+		},
+	}}}
+
+	lines := renderFileDiff(fileDiff, 21)
+
+	got := []string{}
+	for _, line := range lines[1:] {
+		got = append(got, ansi.Strip(line))
+	}
+	want := []string{"1 package x          ", "2                    "}
+	if strings.Join(got, "\n") != strings.Join(want, "\n") {
+		t.Fatalf("got\n%q\nwant\n%q", got, want)
+	}
+}
+
 func wrapsALongLineAndPadsTheOtherSide(t *testing.T) {
 	fileDiff := diff.FileDiff{Hunks: []diff.Hunk{{
 		Header: "@@ -7 +7 @@",

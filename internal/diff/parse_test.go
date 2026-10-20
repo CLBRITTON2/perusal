@@ -16,10 +16,10 @@ func TestParseUnified(t *testing.T) {
 }
 
 func TestParseFiles(t *testing.T) {
-	t.Run("namesEachFileOfACommit", namesEachFileOfACommit)
+	t.Run("namesEachFileOfACommitAndWhatHappenedToIt", namesEachFileOfACommitAndWhatHappenedToIt)
 }
 
-func namesEachFileOfACommit(t *testing.T) {
+func namesEachFileOfACommitAndWhatHappenedToIt(t *testing.T) {
 	text := strings.Join([]string{
 		"",
 		"diff --git a/new.go b/new.go",
@@ -49,12 +49,16 @@ func namesEachFileOfACommit(t *testing.T) {
 	}
 
 	paths := []string{}
+	changes := []FileChange{}
 	for _, section := range sections {
 		paths = append(paths, section.Path)
+		changes = append(changes, section.FileDiff.Change)
 	}
-	want := []string{"new.go", "gone.go", "new name.go", "logo b.png"}
-	if !reflect.DeepEqual(paths, want) || !sections[3].FileDiff.Binary || len(sections[0].FileDiff.Hunks) != 1 {
-		t.Fatalf("got paths %q, binary %v, %d hunks in the first", paths, sections[3].FileDiff.Binary,
+	wantPaths := []string{"new.go", "gone.go", "new name.go", "logo b.png"}
+	wantChanges := []FileChange{FileAdded, FileDeleted, FileRenamed, FileModified}
+	if !reflect.DeepEqual(paths, wantPaths) || !reflect.DeepEqual(changes, wantChanges) || !sections[3].FileDiff.Binary ||
+		len(sections[0].FileDiff.Hunks) != 1 {
+		t.Fatalf("got paths %q, changes %v, binary %v, %d hunks in the first", paths, changes, sections[3].FileDiff.Binary,
 			len(sections[0].FileDiff.Hunks))
 	}
 }

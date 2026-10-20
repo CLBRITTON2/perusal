@@ -34,10 +34,21 @@ type Hunk struct {
 	Rows   []Row
 }
 
+// FileChange is what happened to a file as a whole, read from the extended header lines above its first hunk.
+type FileChange int
+
+const (
+	FileModified FileChange = iota
+	FileAdded
+	FileDeleted
+	FileRenamed
+)
+
 type FileDiff struct {
 	Hunks []Hunk
 	// Binary is set when git reports the file as binary, which has no hunks.
 	Binary bool
+	Change FileChange
 }
 
 // FileSection is one file of a diff that spans several, such as git show prints for a commit.
@@ -137,8 +148,15 @@ func ParseUnified(text string) (FileDiff, error) {
 			continue
 		}
 		if hunk == nil {
-			if strings.HasPrefix(line, "Binary files ") {
+			switch {
+			case strings.HasPrefix(line, "Binary files "):
 				fileDiff.Binary = true
+			case strings.HasPrefix(line, "new file mode "):
+				fileDiff.Change = FileAdded
+			case strings.HasPrefix(line, "deleted file mode "):
+				fileDiff.Change = FileDeleted
+			case strings.HasPrefix(line, "rename from "):
+				fileDiff.Change = FileRenamed
 			}
 			continue
 		}

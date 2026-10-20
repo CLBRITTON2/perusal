@@ -1,7 +1,9 @@
 package ui
 
 import (
+	"maps"
 	"path/filepath"
+	"regexp"
 	"strconv"
 	"strings"
 	"time"
@@ -40,6 +42,9 @@ const (
 // listFirstRowY is the screen row of the first list entry: below the header and the top border.
 const listFirstRowY = headerHeight + 1
 
+// commitRow is the selectedFile of a commit row in the log, as opposed to one of its files.
+const commitRow = -1
+
 type viewKind int
 
 const (
@@ -61,10 +66,18 @@ type Model struct {
 	// logLoadedAt is when commits was read, the reference for their ages.
 	logLoadedAt    time.Time
 	selectedCommit int
-	logOffset      int
-	// shownCommit is the hash commitSections belong to.
-	shownCommit    string
-	commitSections []diff.FileSection
+	selectedFile   int
+	// logOffset counts rows of the log tree, commit and file rows alike.
+	logOffset int
+	// commitFiles holds the parsed diff of every commit loaded so far, by hash, and expanded the commits whose files
+	// the log tree lists.
+	commitFiles map[string][]diff.FileSection
+	expanded    map[string]bool
+	// logFilter is nil while the log shows every commit.
+	logFilter      *regexp.Regexp
+	searching      bool
+	searchInput    textinput.Model
+	searchError    string
 	diffView       viewport.Model
 	help           help.Model
 	summaryInput   textinput.Model
@@ -89,6 +102,8 @@ func New() Model {
 	descriptionBox.Placeholder = "Description"
 	descriptionBox.ShowLineNumbers = false
 	descriptionBox.Prompt = ""
+	searchInput := textinput.New()
+	searchInput.Prompt = "/"
 	helpView := help.New()
 	helpView.ShortSeparator = "  "
 	helpView.Styles.ShortKey = helpKeyStyle
@@ -98,7 +113,10 @@ func New() Model {
 	return Model{
 		status:         gitrepo.Status{Files: []gitrepo.FileStatus{}},
 		commits:        []gitrepo.Commit{},
-		commitSections: []diff.FileSection{},
+		selectedFile:   commitRow,
+		commitFiles:    map[string][]diff.FileSection{},
+		expanded:       map[string]bool{},
+		searchInput:    searchInput,
 		diffView:       viewport.New(),
 		help:           helpView,
 		summaryInput:   summaryInput,
@@ -143,22 +161,14 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if msg.dir != m.repository.Dir {
 			return m, nil
 		}
-		previous := m.selectedCommitHash()
-		m.commits = msg.commits
-		m.logLoadedAt = msg.loadedAt
-		m.selectedCommit = commitIndex(m.commits, previous)
-		m = m.withLayout()
-		return m, m.loadSelectedCommitDiff()
+		return m.withCommits(msg.commits, msg.loadedAt)
 	case commitDiffLoadedMsg:
-		if msg.dir != m.repository.Dir || msg.hash != m.selectedCommitHash() {
+		if msg.dir != m.repository.Dir {
 			return m, nil
 		}
-		if msg.hash != m.shownCommit && m.view == viewLog {
-			m.diffView.SetYOffset(0)
-		}
-		m.shownCommit = msg.hash
-		m.commitSections = msg.sections
-		return m.withDiffContent(), nil
+		m.commitFiles = maps.Clone(m.commitFiles)
+		m.commitFiles[msg.hash] = msg.sections
+		return m.withDiffContent().withListScrolled(), nil
 	case indexChangedMsg:
 		if msg.dir != m.repository.Dir {
 			return m, nil
@@ -196,6 +206,9 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if m.committing {
 			return m.updateCommitBox(msg)
 		}
+		if m.searching {
+			return m.updateSearch(msg)
+		}
 		return m.updateBrowsing(msg)
 	case tea.MouseClickMsg:
 		if m.committing || msg.Button != tea.MouseLeft {
@@ -211,6 +224,11 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	if m.committing {
 		return m.updateFocusedField(msg)
 	}
+	if m.searching {
+		var cmd tea.Cmd
+		m.searchInput, cmd = m.searchInput.Update(msg)
+		return m, cmd
+	}
 	return m, nil
 }
 
@@ -220,8 +238,7 @@ func (m Model) withStatus(status gitrepo.Status) (tea.Model, tea.Cmd) {
 	m.selected = min(m.selected, max(len(m.status.Files)-1, 0))
 	if !status.HasCommits {
 		m.commits = []gitrepo.Commit{}
-		m.commitSections = []diff.FileSection{}
-		m.shownCommit = ""
+		m.selectedFile = commitRow
 		return m.withLayout(), m.loadSelectedDiff()
 	}
 	return m.withLayout(), tea.Batch(m.loadSelectedDiff(), repositoryRequest{repository: m.repository}.loadLog)
@@ -244,6 +261,15 @@ func (m Model) updateBrowsing(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		return m, nil
 	case key.Matches(msg, switchViewKey):
 		return m.switchView()
+	case key.Matches(msg, expandKey) && m.view == viewLog:
+		return m.toggleExpanded()
+	case key.Matches(msg, searchKey) && m.view == viewLog:
+		m.searching = true
+		m.searchInput.CursorEnd()
+		return m, m.searchInput.Focus()
+	case key.Matches(msg, clearSearchKey) && m.view == viewLog && m.logFilter != nil:
+		m.searchInput.Reset()
+		return m.withLogFilter(nil)
 	case key.Matches(msg, stageKey):
 		if m.view != viewChanges || len(m.status.Files) == 0 {
 			return m, nil
@@ -295,9 +321,15 @@ func (m Model) withRepository(repository gitrepo.Repository, rejection string) M
 	m.fileDiff = diff.FileDiff{}
 	m.commits = []gitrepo.Commit{}
 	m.selectedCommit = 0
+	m.selectedFile = commitRow
 	m.logOffset = 0
-	m.shownCommit = ""
-	m.commitSections = []diff.FileSection{}
+	m.commitFiles = map[string][]diff.FileSection{}
+	m.expanded = map[string]bool{}
+	m.logFilter = nil
+	m.searching = false
+	m.searchInput.Blur()
+	m.searchInput.Reset()
+	m.searchError = ""
 	m.diffView.SetYOffset(0)
 	m.footerText = ""
 	m.footerIsError = false
@@ -373,7 +405,7 @@ func (m Model) withCommitPopupClosed() Model {
 
 func (m Model) moveSelection(delta int) (tea.Model, tea.Cmd) {
 	if m.view == viewLog {
-		return m.selectCommit(m.selectedCommit + delta)
+		return m.selectLogRow(m.selectedLogRow(m.visibleLogRows()) + delta)
 	}
 	return m.selectFile(m.selected + delta)
 }
@@ -386,13 +418,145 @@ func (m Model) selectFile(index int) (tea.Model, tea.Cmd) {
 	return m.withListScrolled(), m.loadSelectedDiff()
 }
 
-func (m Model) selectCommit(index int) (tea.Model, tea.Cmd) {
-	if len(m.commits) == 0 {
+// selectLogRow selects the commit or file at index of the log tree, and loads the commit's diff unless it is loaded.
+func (m Model) selectLogRow(index int) (tea.Model, tea.Cmd) {
+	rows := m.visibleLogRows()
+	if len(rows) == 0 {
 		return m, nil
 	}
-	m.selectedCommit = min(max(index, 0), len(m.commits)-1)
-	m = m.withListScrolled()
+	row := rows[min(max(index, 0), len(rows)-1)]
+	if row.commit != m.selectedCommit || row.file != m.selectedFile {
+		m.diffView.SetYOffset(0)
+	}
+	m.selectedCommit = row.commit
+	m.selectedFile = row.file
+	m = m.withListScrolled().withDiffContent()
 	return m, m.loadSelectedCommitDiff()
+}
+
+// withCommits shows a newly read log. The selection stays on the same commit when new ones arrive above it.
+func (m Model) withCommits(commits []gitrepo.Commit, loadedAt time.Time) (tea.Model, tea.Cmd) {
+	index, found := commitIndex(commits, m.selectedCommitHash())
+	if !found {
+		m.selectedFile = commitRow
+	}
+	m.commits = commits
+	m.logLoadedAt = loadedAt
+	m.selectedCommit = index
+	m = m.withLayout()
+	return m, m.loadSelectedCommitDiff()
+}
+
+// toggleExpanded lists or hides the files of the selected commit. Collapsing from one of its files selects the commit.
+func (m Model) toggleExpanded() (tea.Model, tea.Cmd) {
+	hash := m.selectedCommitHash()
+	if hash == "" {
+		return m, nil
+	}
+	m.expanded = maps.Clone(m.expanded)
+	if m.expanded[hash] {
+		delete(m.expanded, hash)
+	} else {
+		m.expanded[hash] = true
+	}
+	if m.selectedFile != commitRow {
+		m.selectedFile = commitRow
+		m.diffView.SetYOffset(0)
+	}
+	m = m.withListScrolled().withDiffContent()
+	return m, m.loadSelectedCommitDiff()
+}
+
+// updateSearch filters the log as the pattern is typed. A pattern that does not compile leaves the last filter on.
+func (m Model) updateSearch(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
+	switch {
+	case key.Matches(msg, keepSearchKey):
+		m.searching = false
+		m.searchError = ""
+		m.searchInput.Blur()
+		return m, nil
+	case key.Matches(msg, clearSearchKey):
+		m.searching = false
+		m.searchError = ""
+		m.searchInput.Blur()
+		m.searchInput.Reset()
+		return m.withLogFilter(nil)
+	}
+	var inputCmd tea.Cmd
+	m.searchInput, inputCmd = m.searchInput.Update(msg)
+	filter, err := compileSearch(m.searchInput.Value())
+	if err != nil {
+		m.searchError = sanitizeText(singleLine(err.Error()))
+		return m, inputCmd
+	}
+	m.searchError = ""
+	next, loadCmd := m.withLogFilter(filter)
+	return next, tea.Batch(inputCmd, loadCmd)
+}
+
+// compileSearch compiles pattern as a Go regular expression, matched case-insensitively unless it holds an uppercase
+// letter, the way ripgrep --smart-case does. An empty pattern is no filter.
+func compileSearch(pattern string) (*regexp.Regexp, error) {
+	if pattern == "" {
+		return nil, nil
+	}
+	if strings.ToLower(pattern) == pattern {
+		return regexp.Compile("(?i)" + pattern)
+	}
+	return regexp.Compile(pattern)
+}
+
+// withLogFilter shows only the commits whose message filter matches, every commit when it is nil. A selection the
+// filter hides moves to the first row left.
+func (m Model) withLogFilter(filter *regexp.Regexp) (tea.Model, tea.Cmd) {
+	m.logFilter = filter
+	rows := m.visibleLogRows()
+	if m.selectedLogRow(rows) < 0 && len(rows) > 0 {
+		m.selectedCommit = rows[0].commit
+		m.selectedFile = rows[0].file
+		m.diffView.SetYOffset(0)
+	}
+	m = m.withListScrolled().withDiffContent()
+	return m, m.loadSelectedCommitDiff()
+}
+
+// logRow is one row of the log tree: a commit, or one of its files under it when it is expanded. file indexes the
+// commit's commitFiles.
+type logRow struct {
+	commit int
+	file   int
+}
+
+// visibleLogRows lists the commits the filter lets through, each followed by its files when it is expanded.
+func (m Model) visibleLogRows() []logRow {
+	rows := []logRow{}
+	for index, commit := range m.commits {
+		if !m.commitMatches(commit) {
+			continue
+		}
+		rows = append(rows, logRow{commit: index, file: commitRow})
+		if !m.expanded[commit.Hash] {
+			continue
+		}
+		for file := range m.commitFiles[commit.Hash] {
+			rows = append(rows, logRow{commit: index, file: file})
+		}
+	}
+	return rows
+}
+
+// selectedLogRow is the index of the selection in rows, -1 when the filter hides it.
+func (m Model) selectedLogRow(rows []logRow) int {
+	for index, row := range rows {
+		if row.commit == m.selectedCommit && row.file == m.selectedFile {
+			return index
+		}
+	}
+	return -1
+}
+
+func (m Model) commitMatches(commit gitrepo.Commit) bool {
+	return m.logFilter == nil || m.logFilter.MatchString(commit.Message)
 }
 
 func (m Model) clickList(mouse tea.Mouse) (tea.Model, tea.Cmd) {
@@ -401,10 +565,10 @@ func (m Model) clickList(mouse tea.Mouse) (tea.Model, tea.Cmd) {
 		return m, nil
 	}
 	if m.view == viewLog {
-		if m.logOffset+row >= len(m.commits) {
+		if m.logOffset+row >= len(m.visibleLogRows()) {
 			return m, nil
 		}
-		return m.selectCommit(m.logOffset + row)
+		return m.selectLogRow(m.logOffset + row)
 	}
 	if m.listOffset+row >= len(m.status.Files) {
 		return m, nil
@@ -435,10 +599,11 @@ func (m Model) loadSelectedDiff() tea.Cmd {
 	return fileRequest{repository: m.repository, file: m.status.Files[m.selected]}.loadDiff
 }
 
-// loadSelectedCommitDiff loads the diff of the selected commit while the log is on screen, unless it is shown already.
+// loadSelectedCommitDiff loads the diff of the selected commit while the log is on screen, unless it is loaded.
 func (m Model) loadSelectedCommitDiff() tea.Cmd {
 	hash := m.selectedCommitHash()
-	if m.view != viewLog || hash == "" || hash == m.shownCommit {
+	_, loaded := m.commitFiles[hash]
+	if m.view != viewLog || hash == "" || loaded {
 		return nil
 	}
 	return commitDiffRequest{repository: m.repository, hash: hash}.load
@@ -458,14 +623,13 @@ func (m Model) selectedCommitHash() string {
 	return m.commits[m.selectedCommit].Hash
 }
 
-// commitIndex finds hash in commits, so the selection follows a commit when new ones arrive above it.
-func commitIndex(commits []gitrepo.Commit, hash string) int {
+func commitIndex(commits []gitrepo.Commit, hash string) (int, bool) {
 	for index, commit := range commits {
 		if commit.Hash == hash {
-			return index
+			return index, true
 		}
 	}
-	return 0
+	return 0, false
 }
 
 func (m Model) withLayout() Model {
@@ -474,6 +638,7 @@ func (m Model) withLayout() Model {
 	m.help.SetWidth(m.width)
 	// textinput draws its end-of-text cursor one cell past its width
 	m.summaryInput.SetWidth(max(m.fieldInnerWidth()-1, 0))
+	m.searchInput.SetWidth(max(m.width/2, 0))
 	m.descriptionBox.SetWidth(m.fieldInnerWidth())
 	m.descriptionBox.SetHeight(descriptionHeight)
 	return m.withDiffContent().withListScrolled()
@@ -487,11 +652,14 @@ func (m Model) withDiffContent() Model {
 // diffLines is the content of the diff pane for the view on screen.
 func (m Model) diffLines() []string {
 	width := m.diffInnerWidth()
+	sections, loaded := m.commitFiles[m.selectedCommitHash()]
 	switch {
-	case m.view == viewLog && m.selectedCommitHash() != "" && m.selectedCommitHash() == m.shownCommit:
-		return renderCommit(m.commits[m.selectedCommit], m.commitSections, width)
+	case m.view == viewLog && loaded && m.selectedFile != commitRow:
+		return renderFileDiff(sections[m.selectedFile].FileDiff, width)
+	case m.view == viewLog && loaded:
+		return renderCommit(m.commits[m.selectedCommit], sections, width)
 	case m.view == viewChanges && m.diffPath != "":
-		return renderSideBySide(m.fileDiff, width)
+		return renderFileDiff(m.fileDiff, width)
 	default:
 		return []string{}
 	}
@@ -500,7 +668,7 @@ func (m Model) diffLines() []string {
 // withListScrolled moves the list window of the view on screen so its selected entry is visible.
 func (m Model) withListScrolled() Model {
 	if m.view == viewLog {
-		m.logOffset = scrolledOffset(m.logOffset, m.selectedCommit, m.paneInnerHeight())
+		m.logOffset = scrolledOffset(m.logOffset, max(m.selectedLogRow(m.visibleLogRows()), 0), m.paneInnerHeight())
 	} else {
 		m.listOffset = scrolledOffset(m.listOffset, m.selected, m.paneInnerHeight())
 	}
@@ -533,10 +701,14 @@ func (m Model) listOuterWidth() int {
 }
 
 func (m Model) listTitle() string {
-	if m.view == viewLog {
+	switch {
+	case m.view == viewLog && m.logFilter != nil:
+		return "log /" + sanitizeText(m.searchInput.Value())
+	case m.view == viewLog:
 		return "log"
+	default:
+		return "changes"
 	}
-	return "changes"
 }
 
 func (m Model) diffInnerWidth() int {
@@ -630,7 +802,7 @@ func (m Model) renderTabs() string {
 func (m Model) renderList() string {
 	innerWidth := m.listOuterWidth() - 2
 	if m.view == viewLog {
-		return renderPane(m.listTitle(), m.logLabel(), m.logRows(innerWidth), innerWidth, m.paneInnerHeight())
+		return renderPane(m.listTitle(), m.logLabel(), m.renderLogRows(innerWidth), innerWidth, m.paneInnerHeight())
 	}
 	return renderPane(m.listTitle(), m.changesLabel(), m.fileRows(innerWidth), innerWidth, m.paneInnerHeight())
 }
@@ -647,17 +819,30 @@ func (m Model) fileRows(innerWidth int) []string {
 	return rows
 }
 
-func (m Model) logRows(innerWidth int) []string {
-	if m.repository.Dir != "" && !m.status.HasCommits {
+func (m Model) renderLogRows(innerWidth int) []string {
+	rows := m.visibleLogRows()
+	switch {
+	case m.repository.Dir != "" && !m.status.HasCommits:
 		return []string{mutedStyle.Render("no commits yet")}
+	case len(rows) == 0 && m.logFilter != nil:
+		return []string{mutedStyle.Render("no commit message matches")}
 	}
-	rows := []string{}
-	end := min(m.logOffset+m.paneInnerHeight(), len(m.commits))
+	selected := m.selectedLogRow(rows)
+	rendered := []string{}
+	end := min(m.logOffset+m.paneInnerHeight(), len(rows))
 	for index := m.logOffset; index < end; index++ {
-		row := renderCommitRow(m.commits[index], m.logLoadedAt, innerWidth-1)
-		rows = append(rows, listRow(row, index == m.selectedCommit, innerWidth))
+		rendered = append(rendered, listRow(m.renderLogRow(rows[index], innerWidth-1), index == selected, innerWidth))
 	}
-	return rows
+	return rendered
+}
+
+func (m Model) renderLogRow(row logRow, width int) string {
+	commit := m.commits[row.commit]
+	if row.file == commitRow {
+		return expandMarker(m.expanded[commit.Hash]) + renderCommitRow(commit, m.logLoadedAt, width-2)
+	}
+	files := m.commitFiles[commit.Hash]
+	return renderTreeFileRow(files[row.file], row.file == len(files)-1, width)
 }
 
 // listRow fits row to width behind a one-cell gutter, which holds a bar on the selected row. The selected row drops
@@ -687,11 +872,23 @@ func (m Model) changesLabel() string {
 	return strconv.Itoa(staged) + " staged · " + strconv.Itoa(unstaged) + " unstaged"
 }
 
+// logLabel places the selected commit among the commits the filter lets through.
 func (m Model) logLabel() string {
-	if len(m.commits) == 0 {
+	matching := 0
+	position := 0
+	for index, commit := range m.commits {
+		if !m.commitMatches(commit) {
+			continue
+		}
+		matching++
+		if index == m.selectedCommit {
+			position = matching
+		}
+	}
+	if matching == 0 {
 		return ""
 	}
-	return strconv.Itoa(m.selectedCommit+1) + " of " + strconv.Itoa(len(m.commits))
+	return strconv.Itoa(position) + " of " + strconv.Itoa(matching)
 }
 
 // renderFileRow shows the index and worktree codes of git status, then the path.
@@ -720,15 +917,23 @@ func (m Model) renderDiffPane() string {
 		reason := errorStyle.Render(lipgloss.Wrap(m.rejection, width, ""))
 		return renderPane("refused", "", strings.Split(reason, "\n"), width, height)
 	case m.view == viewLog && len(m.commits) > 0:
-		commit := m.commits[m.selectedCommit]
-		title := sanitizeText(commit.ShortHash + " " + commit.Summary)
-		return renderPane(title, m.scrollLabel(), strings.Split(m.diffView.View(), "\n"), width, height)
+		return renderPane(m.commitPaneTitle(), m.scrollLabel(), strings.Split(m.diffView.View(), "\n"), width, height)
 	case m.view == viewChanges && len(m.status.Files) > 0:
 		return renderPane(sanitizeText(m.diffPath), m.scrollLabel(), strings.Split(m.diffView.View(), "\n"), width,
 			height)
 	default:
 		return renderPane("diff", "", []string{}, width, height)
 	}
+}
+
+// commitPaneTitle names the selected file of the log tree, or the selected commit when no file is.
+func (m Model) commitPaneTitle() string {
+	commit := m.commits[m.selectedCommit]
+	sections, loaded := m.commitFiles[commit.Hash]
+	if loaded && m.selectedFile != commitRow {
+		return sanitizeText(commit.ShortHash + " " + sections[m.selectedFile].Path)
+	}
+	return sanitizeText(commit.ShortHash + " " + commit.Summary)
 }
 
 // scrollLabel shows how far down the diff is scrolled, nothing when it fits.
@@ -745,6 +950,10 @@ func (m Model) renderFooter() string {
 		return fitToWidth(errorStyle.Render("✗ "+m.footerText), m.width)
 	case m.footerText != "":
 		return fitToWidth(successStyle.Render("✓ "+m.footerText), m.width)
+	case m.searching && m.searchError != "":
+		return fitToWidth(" "+m.searchInput.View()+"  "+errorStyle.Render(m.searchError), m.width)
+	case m.searching:
+		return spaceBetween(" "+m.searchInput.View(), m.help.ShortHelpView(searchHelp)+" ", m.width)
 	case m.view == viewLog:
 		return fitToWidth(" "+m.help.ShortHelpView(logHelp), m.width)
 	default:

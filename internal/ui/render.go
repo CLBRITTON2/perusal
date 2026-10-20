@@ -19,15 +19,26 @@ const tabWidth = 4
 
 const columnSeparator = "│"
 
-// renderSideBySide lays out fileDiff as rows exactly width cells wide: old file left, new file right. A line too long
-// for its side wraps onto the rows below, and the other side is padded to match.
-func renderSideBySide(fileDiff diff.FileDiff, width int) []string {
-	if fileDiff.Binary {
+// renderFileDiff lays out fileDiff as rows exactly width cells wide. Only a file that existed before and after gets
+// the side-by-side split: an added or deleted file has one side, so it takes the whole width.
+func renderFileDiff(fileDiff diff.FileDiff, width int) []string {
+	switch {
+	case fileDiff.Binary:
 		return []string{mutedStyle.Render("binary file, no text diff")}
+	case len(fileDiff.Hunks) == 0:
+		return []string{mutedStyle.Render("no text changes")}
+	case fileDiff.Change == diff.FileAdded:
+		return renderOneSide(fileDiff, newLine, width)
+	case fileDiff.Change == diff.FileDeleted:
+		return renderOneSide(fileDiff, oldLine, width)
+	default:
+		return renderSideBySide(fileDiff, width)
 	}
-	if len(fileDiff.Hunks) == 0 {
-		return []string{mutedStyle.Render("no changes against HEAD")}
-	}
+}
+
+// renderSideBySide puts the old file left and the new file right. A line too long for its side wraps onto the rows
+// below, and the other side is padded to match.
+func renderSideBySide(fileDiff diff.FileDiff, width int) []string {
 	numberWidth := len(strconv.Itoa(maxLineNumber(fileDiff)))
 	leftWidth := (width - 1) / 2
 	rightWidth := width - 1 - leftWidth
@@ -45,6 +56,29 @@ func renderSideBySide(fileDiff diff.FileDiff, width int) []string {
 		}
 	}
 	return lines
+}
+
+// renderOneSide shows the side of each row that side picks, wrapped to the whole width.
+func renderOneSide(fileDiff diff.FileDiff, side func(diff.Row) diff.Line, width int) []string {
+	numberWidth := len(strconv.Itoa(maxLineNumber(fileDiff)))
+	lines := []string{}
+	for _, hunk := range fileDiff.Hunks {
+		lines = append(lines, hunkHeaderStyle.Render(fitToWidth(sanitizeText(hunk.Header), width)))
+		for _, row := range hunk.Rows {
+			if side(row).Kind != diff.LineBlank {
+				lines = append(lines, wrapSide(side(row), numberWidth, width)...)
+			}
+		}
+	}
+	return lines
+}
+
+func oldLine(row diff.Row) diff.Line {
+	return row.Left
+}
+
+func newLine(row diff.Row) diff.Line {
+	return row.Right
 }
 
 // wrapSide renders one half of a row, width cells wide per returned line: a right-aligned line number and a space on
@@ -121,9 +155,41 @@ func renderCommit(commit gitrepo.Commit, sections []diff.FileSection, width int)
 	}
 	for _, section := range sections {
 		lines = append(lines, "", fileHeaderStyle.Render(fitToWidth(" "+sanitizeText(section.Path), width)))
-		lines = append(lines, renderSideBySide(section.FileDiff, width)...)
+		lines = append(lines, renderFileDiff(section.FileDiff, width)...)
 	}
 	return lines
+}
+
+// renderTreeFileRow shows one file of an expanded commit under it, with the letter git log --name-status uses.
+func renderTreeFileRow(section diff.FileSection, last bool, width int) string {
+	var branch string
+	if last {
+		branch = "  └ "
+	} else {
+		branch = "  ├ "
+	}
+	return fitToWidth(mutedStyle.Render(branch)+changeMark(section.FileDiff.Change)+" "+
+		textStyle.Render(sanitizeText(section.Path)), width)
+}
+
+func changeMark(change diff.FileChange) string {
+	switch change {
+	case diff.FileAdded:
+		return addedMarkStyle.Render("A")
+	case diff.FileDeleted:
+		return deletedMarkStyle.Render("D")
+	case diff.FileRenamed:
+		return renamedMarkStyle.Render("R")
+	default:
+		return modifiedMarkStyle.Render("M")
+	}
+}
+
+func expandMarker(expanded bool) string {
+	if expanded {
+		return mutedStyle.Render("▾ ")
+	}
+	return mutedStyle.Render("▸ ")
 }
 
 // compactAge shortens age to its largest whole unit, such as 5m, 3h, 2d, 6w, 4mo or 2y.

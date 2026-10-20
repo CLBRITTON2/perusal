@@ -1,11 +1,13 @@
 package ui
 
 import (
+	"reflect"
 	"strings"
 	"testing"
 
 	tea "charm.land/bubbletea/v2"
 
+	"github.com/CLBRITTON2/perusal/internal/diff"
 	"github.com/CLBRITTON2/perusal/internal/gitrepo"
 )
 
@@ -38,6 +40,70 @@ func TestFocusSwitch(t *testing.T) {
 
 func TestLog(t *testing.T) {
 	t.Run("selectionFollowsTheCommitWhenNewOnesArriveAbove", selectionFollowsTheCommitWhenNewOnesArriveAbove)
+	t.Run("expandingACommitListsItsFilesUnderIt", expandingACommitListsItsFilesUnderIt)
+	t.Run("searchKeepsOnlyMatchingMessagesIgnoringCase", searchKeepsOnlyMatchingMessagesIgnoringCase)
+	t.Run("anUppercaseLetterMakesTheSearchCaseSensitive", anUppercaseLetterMakesTheSearchCaseSensitive)
+}
+
+func expandingACommitListsItsFilesUnderIt(t *testing.T) {
+	first := gitrepo.Commit{Hash: strings.Repeat("1", 40), Message: "Add tree"}
+	second := gitrepo.Commit{Hash: strings.Repeat("2", 40), Message: "Fix wrap"}
+	m := logOf(t, []gitrepo.Commit{first, second})
+	m = update(t, m, commitDiffLoadedMsg{dir: "C:/dev/repo", hash: first.Hash, sections: []diff.FileSection{
+		{Path: "a.go", FileDiff: diff.FileDiff{Change: diff.FileAdded}},
+		{Path: "b.go", FileDiff: diff.FileDiff{Change: diff.FileModified}},
+	}})
+
+	m = update(t, m, tea.KeyPressMsg{Code: tea.KeyEnter})
+	m = update(t, m, tea.KeyPressMsg{Code: 'j', Text: "j"})
+	m = update(t, m, tea.KeyPressMsg{Code: 'j', Text: "j"})
+
+	want := []logRow{{commit: 0, file: commitRow}, {commit: 0, file: 0}, {commit: 0, file: 1}, {commit: 1, file: commitRow}}
+	if !reflect.DeepEqual(m.visibleLogRows(), want) || m.selectedFile != 1 || m.commitPaneTitle() != " b.go" {
+		t.Fatalf("got rows %v, selected file %d, title %q", m.visibleLogRows(), m.selectedFile, m.commitPaneTitle())
+	}
+}
+
+func searchKeepsOnlyMatchingMessagesIgnoringCase(t *testing.T) {
+	m := logOf(t, []gitrepo.Commit{
+		{Hash: strings.Repeat("1", 40), Message: "Add tree"},
+		{Hash: strings.Repeat("2", 40), Message: "Fix WRAP of long lines"},
+	})
+
+	m = typeSearch(t, m, "wr.p")
+
+	if !reflect.DeepEqual(m.visibleLogRows(), []logRow{{commit: 1, file: commitRow}}) || m.selectedCommit != 1 {
+		t.Fatalf("got rows %v, selected commit %d", m.visibleLogRows(), m.selectedCommit)
+	}
+}
+
+func anUppercaseLetterMakesTheSearchCaseSensitive(t *testing.T) {
+	m := logOf(t, []gitrepo.Commit{
+		{Hash: strings.Repeat("1", 40), Message: "fix tree"},
+		{Hash: strings.Repeat("2", 40), Message: "Fix wrap"},
+	})
+
+	m = typeSearch(t, m, "Fix")
+
+	if !reflect.DeepEqual(m.visibleLogRows(), []logRow{{commit: 1, file: commitRow}}) {
+		t.Fatalf("got rows %v", m.visibleLogRows())
+	}
+}
+
+func logOf(t *testing.T, commits []gitrepo.Commit) Model {
+	t.Helper()
+	m := update(t, New(), RepositoryFocused{Repository: gitrepo.Repository{Dir: "C:/dev/repo"}})
+	m = update(t, m, logLoadedMsg{dir: "C:/dev/repo", commits: commits})
+	return update(t, m, tea.KeyPressMsg{Code: tea.KeyTab})
+}
+
+func typeSearch(t *testing.T, m Model, pattern string) Model {
+	t.Helper()
+	m = update(t, m, tea.KeyPressMsg{Code: '/', Text: "/"})
+	for _, character := range pattern {
+		m = update(t, m, tea.KeyPressMsg{Code: character, Text: string(character)})
+	}
+	return update(t, m, tea.KeyPressMsg{Code: tea.KeyEnter})
 }
 
 func selectionFollowsTheCommitWhenNewOnesArriveAbove(t *testing.T) {
