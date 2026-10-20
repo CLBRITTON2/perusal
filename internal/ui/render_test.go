@@ -19,6 +19,28 @@ func TestSanitizeText(t *testing.T) {
 func TestRenderSideBySide(t *testing.T) {
 	t.Run("everyRowFillsTheWidthExactly", everyRowFillsTheWidthExactly)
 	t.Run("showsOldTextLeftAndNewTextRight", showsOldTextLeftAndNewTextRight)
+	t.Run("wrapsALongLineAndPadsTheOtherSide", wrapsALongLineAndPadsTheOtherSide)
+}
+
+func wrapsALongLineAndPadsTheOtherSide(t *testing.T) {
+	fileDiff := diff.FileDiff{Hunks: []diff.Hunk{{
+		Header: "@@ -7 +7 @@",
+		Rows: []diff.Row{
+			{Left: diff.Line{Kind: diff.LineRemoved, Number: 7, Text: "old"},
+				Right: diff.Line{Kind: diff.LineAdded, Number: 7, Text: "abcdefghijklmnopqrst"}},
+		},
+	}}}
+
+	lines := renderSideBySide(fileDiff, 21)
+
+	got := []string{}
+	for _, line := range lines[1:] {
+		got = append(got, ansi.Strip(line))
+	}
+	want := []string{"7 old     │7 abcdefgh", "          │  ijklmnop", "          │  qrst    "}
+	if strings.Join(got, "\n") != strings.Join(want, "\n") {
+		t.Fatalf("got\n%s\nwant\n%s", strings.Join(got, "\n"), strings.Join(want, "\n"))
+	}
 }
 
 func replacesEscapeSequenceStart(t *testing.T) {

@@ -3,12 +3,15 @@ package ui
 import (
 	"context"
 	"fmt"
+	"time"
 
 	tea "charm.land/bubbletea/v2"
 
 	"github.com/CLBRITTON2/perusal/internal/diff"
 	"github.com/CLBRITTON2/perusal/internal/gitrepo"
 )
+
+const maximumLogCommits = 500
 
 // RepositoryFocused switches the review to Repository, unless it is already on screen.
 type RepositoryFocused struct {
@@ -22,16 +25,27 @@ type FocusRejected struct {
 
 // The messages below carry dir, the repository they came from, so a result that lands after a switch is dropped.
 
-type filesLoadedMsg struct {
+type statusLoadedMsg struct {
 	dir    string
-	branch string
-	files  []gitrepo.FileStatus
+	status gitrepo.Status
 }
 
 type diffLoadedMsg struct {
 	dir      string
 	path     string
 	fileDiff diff.FileDiff
+}
+
+type logLoadedMsg struct {
+	dir      string
+	commits  []gitrepo.Commit
+	loadedAt time.Time
+}
+
+type commitDiffLoadedMsg struct {
+	dir      string
+	hash     string
+	sections []diff.FileSection
 }
 
 type indexChangedMsg struct {
@@ -52,21 +66,24 @@ type gitFailedMsg struct {
 	err error
 }
 
-type filesRequest struct {
+type repositoryRequest struct {
 	repository gitrepo.Repository
 }
 
-func (r filesRequest) load() tea.Msg {
-	ctx := context.Background()
-	branch, err := r.repository.CurrentBranch(ctx)
+func (r repositoryRequest) loadStatus() tea.Msg {
+	status, err := r.repository.Status(context.Background())
 	if err != nil {
 		return gitFailedMsg{err: err}
 	}
-	files, err := r.repository.ChangedFiles(ctx)
+	return statusLoadedMsg{dir: r.repository.Dir, status: status}
+}
+
+func (r repositoryRequest) loadLog() tea.Msg {
+	commits, err := r.repository.Log(context.Background(), maximumLogCommits)
 	if err != nil {
 		return gitFailedMsg{err: err}
 	}
-	return filesLoadedMsg{dir: r.repository.Dir, branch: branch, files: files}
+	return logLoadedMsg{dir: r.repository.Dir, commits: commits, loadedAt: time.Now()}
 }
 
 type fileRequest struct {
@@ -98,6 +115,23 @@ func (r fileRequest) unstage() tea.Msg {
 		return gitFailedMsg{err: err}
 	}
 	return indexChangedMsg{dir: r.repository.Dir}
+}
+
+type commitDiffRequest struct {
+	repository gitrepo.Repository
+	hash       string
+}
+
+func (r commitDiffRequest) load() tea.Msg {
+	text, err := r.repository.CommitDiff(context.Background(), r.hash)
+	if err != nil {
+		return gitFailedMsg{err: err}
+	}
+	sections, err := diff.ParseFiles(text)
+	if err != nil {
+		return gitFailedMsg{err: fmt.Errorf("parse diff of commit %s: %w", r.hash, err)}
+	}
+	return commitDiffLoadedMsg{dir: r.repository.Dir, hash: r.hash, sections: sections}
 }
 
 type commitRequest struct {

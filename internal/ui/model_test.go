@@ -1,6 +1,7 @@
 package ui
 
 import (
+	"strings"
 	"testing"
 
 	tea "charm.land/bubbletea/v2"
@@ -35,39 +36,59 @@ func TestFocusSwitch(t *testing.T) {
 	t.Run("refocusingTheSameRepositoryKeepsTheSelection", refocusingTheSameRepositoryKeepsTheSelection)
 }
 
+func TestLog(t *testing.T) {
+	t.Run("selectionFollowsTheCommitWhenNewOnesArriveAbove", selectionFollowsTheCommitWhenNewOnesArriveAbove)
+}
+
+func selectionFollowsTheCommitWhenNewOnesArriveAbove(t *testing.T) {
+	first := gitrepo.Commit{Hash: strings.Repeat("1", 40)}
+	second := gitrepo.Commit{Hash: strings.Repeat("2", 40)}
+	added := gitrepo.Commit{Hash: strings.Repeat("3", 40)}
+	m := update(t, New(), RepositoryFocused{Repository: gitrepo.Repository{Dir: "C:/dev/repo"}})
+	m = update(t, m, logLoadedMsg{dir: "C:/dev/repo", commits: []gitrepo.Commit{first, second}})
+	m = update(t, m, tea.KeyPressMsg{Code: tea.KeyTab})
+	m = update(t, m, tea.KeyPressMsg{Code: 'j', Text: "j"})
+
+	m = update(t, m, logLoadedMsg{dir: "C:/dev/repo", commits: []gitrepo.Commit{added, first, second}})
+
+	if m.selectedCommitHash() != second.Hash {
+		t.Fatalf("got selected commit %q, want %q", m.selectedCommitHash(), second.Hash)
+	}
+}
+
 func dropsFilesLoadedForThePreviousRepository(t *testing.T) {
 	m := update(t, New(), RepositoryFocused{Repository: gitrepo.Repository{Dir: "C:/dev/old"}})
 	m = update(t, m, RepositoryFocused{Repository: gitrepo.Repository{Dir: "C:/dev/new"}})
 
-	m = update(t, m, filesLoadedMsg{dir: "C:/dev/old", branch: "master", files: twoFiles()})
+	m = update(t, m, statusLoadedMsg{dir: "C:/dev/old", status: gitrepo.Status{Branch: "master", Files: twoFiles()}})
 
-	if len(m.files) != 0 || m.branch != "" {
-		t.Fatalf("got files %v on branch %q from the previous repository", m.files, m.branch)
+	if len(m.status.Files) != 0 || m.status.Branch != "" {
+		t.Fatalf("got files %v on branch %q from the previous repository", m.status.Files, m.status.Branch)
 	}
 }
 
 func rejectionClearsTheReviewAndThePopup(t *testing.T) {
 	m := update(t, New(), RepositoryFocused{Repository: gitrepo.Repository{Dir: "C:/dev/repo"}})
-	m = update(t, m, filesLoadedMsg{dir: "C:/dev/repo", branch: "master", files: twoFiles()})
+	m = update(t, m, statusLoadedMsg{dir: "C:/dev/repo", status: gitrepo.Status{Branch: "master", Files: twoFiles()}})
 	m = update(t, m, tea.KeyPressMsg{Code: 'c', Text: "c"})
 
 	m = update(t, m, FocusRejected{Reason: "outside\nthe dev directory"})
 
-	if m.repository.Dir != "" || len(m.files) != 0 || m.committing || m.rejection != "outside | the dev directory" {
-		t.Fatalf("got repository %q, %d files, committing %v, rejection %q", m.repository.Dir, len(m.files), m.committing,
+	if m.repository.Dir != "" || len(m.status.Files) != 0 || m.committing || m.rejection != "outside | the dev directory" {
+		t.Fatalf("got repository %q, %d files, committing %v, rejection %q", m.repository.Dir, len(m.status.Files), m.committing,
 			m.rejection)
 	}
 }
 
 func refocusingTheSameRepositoryKeepsTheSelection(t *testing.T) {
 	m := update(t, New(), RepositoryFocused{Repository: gitrepo.Repository{Dir: "C:/dev/repo"}})
-	m = update(t, m, filesLoadedMsg{dir: "C:/dev/repo", branch: "master", files: twoFiles()})
+	m = update(t, m, statusLoadedMsg{dir: "C:/dev/repo", status: gitrepo.Status{Branch: "master", Files: twoFiles()}})
 	m = update(t, m, tea.KeyPressMsg{Code: 'j', Text: "j"})
 
 	m = update(t, m, RepositoryFocused{Repository: gitrepo.Repository{Dir: "C:/dev/repo"}})
 
-	if m.selected != 1 || len(m.files) != 2 {
-		t.Fatalf("got selection %d of %d files, want 1 of 2", m.selected, len(m.files))
+	if m.selected != 1 || len(m.status.Files) != 2 {
+		t.Fatalf("got selection %d of %d files, want 1 of 2", m.selected, len(m.status.Files))
 	}
 }
 

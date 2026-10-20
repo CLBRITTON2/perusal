@@ -6,10 +6,10 @@ import (
 )
 
 func TestParseStatus(t *testing.T) {
-	t.Run("readsRenameOriginalPathFromTheNextField", readsRenameOriginalPathFromTheNextField)
-	t.Run("returnsNoFilesForACleanTree", returnsNoFilesForACleanTree)
-	t.Run("rejectsAnEntryWithNoPath", rejectsAnEntryWithNoPath)
+	t.Run("readsBranchHeadersAndEveryEntryKind", readsBranchHeadersAndEveryEntryKind)
+	t.Run("readsDetachedUnbornHeadWithNoUpstream", readsDetachedUnbornHeadWithNoUpstream)
 	t.Run("rejectsARenameWithNoOriginalPath", rejectsARenameWithNoOriginalPath)
+	t.Run("rejectsAnUnknownEntryKind", rejectsAnUnknownEntryKind)
 }
 
 func TestFileStatus(t *testing.T) {
@@ -17,48 +17,62 @@ func TestFileStatus(t *testing.T) {
 	t.Run("untrackedFileIsUnstagedOnly", untrackedFileIsUnstagedOnly)
 }
 
-func readsRenameOriginalPathFromTheNextField(t *testing.T) {
-	output := []byte(" M a.go\x00R  new name.go\x00old name.go\x00?? dir/new.txt\x00")
+func readsBranchHeadersAndEveryEntryKind(t *testing.T) {
+	output := []byte("# branch.oid 72164ac5a6f1bcbca714a97261c5bf3627aeadd7\x00# branch.head master\x00" +
+		"# branch.upstream origin/master\x00# branch.ab +2 -1\x00" +
+		"1 .M N... 100644 100644 100644 63dff5c 63dff5c a.go\x00" +
+		"2 R. N... 100644 100644 100644 1a2b3c4 1a2b3c4 R100 new name.go\x00old name.go\x00" +
+		"u UU N... 100644 100644 100644 100644 1a2b3c4 5d6e7f8 9a0b1c2 conflict.go\x00" +
+		"? dir/new.txt\x00")
 
-	files, err := ParseStatus(output)
+	status, err := ParseStatus(output)
 	if err != nil {
 		t.Fatal(err)
 	}
 
-	want := []FileStatus{
-		{Path: "a.go", IndexStatus: ' ', WorktreeStatus: 'M'},
-		{Path: "new name.go", OriginalPath: "old name.go", IndexStatus: 'R', WorktreeStatus: ' '},
-		{Path: "dir/new.txt", IndexStatus: '?', WorktreeStatus: '?'},
+	want := Status{
+		Branch:     "master",
+		Upstream:   "origin/master",
+		Ahead:      2,
+		Behind:     1,
+		HasCommits: true,
+		Files: []FileStatus{
+			{Path: "a.go", IndexStatus: ' ', WorktreeStatus: 'M'},
+			{Path: "new name.go", OriginalPath: "old name.go", IndexStatus: 'R', WorktreeStatus: ' '},
+			{Path: "conflict.go", IndexStatus: 'U', WorktreeStatus: 'U'},
+			{Path: "dir/new.txt", IndexStatus: '?', WorktreeStatus: '?'},
+		},
 	}
-	if !reflect.DeepEqual(files, want) {
-		t.Fatalf("files:\n%+v\nwant:\n%+v", files, want)
+	if !reflect.DeepEqual(status, want) {
+		t.Fatalf("status:\n%+v\nwant:\n%+v", status, want)
 	}
 }
 
-func returnsNoFilesForACleanTree(t *testing.T) {
-	files, err := ParseStatus([]byte{})
+func readsDetachedUnbornHeadWithNoUpstream(t *testing.T) {
+	status, err := ParseStatus([]byte("# branch.oid (initial)\x00# branch.head (detached)\x00"))
 	if err != nil {
 		t.Fatal(err)
 	}
 
-	if len(files) != 0 {
-		t.Fatalf("got %+v, want no files", files)
-	}
-}
-
-func rejectsAnEntryWithNoPath(t *testing.T) {
-	_, err := ParseStatus([]byte(" M\x00"))
-
-	if err == nil {
-		t.Fatal("got no error for an entry with no path")
+	want := Status{Files: []FileStatus{}}
+	if !reflect.DeepEqual(status, want) {
+		t.Fatalf("status:\n%+v\nwant:\n%+v", status, want)
 	}
 }
 
 func rejectsARenameWithNoOriginalPath(t *testing.T) {
-	_, err := ParseStatus([]byte("R  new.go\x00"))
+	_, err := ParseStatus([]byte("2 R. N... 100644 100644 100644 1a2b3c4 1a2b3c4 R100 new.go\x00"))
 
 	if err == nil {
 		t.Fatal("got no error for a rename with no original path")
+	}
+}
+
+func rejectsAnUnknownEntryKind(t *testing.T) {
+	_, err := ParseStatus([]byte(" M a.go\x00"))
+
+	if err == nil {
+		t.Fatal("got no error for a porcelain v1 entry")
 	}
 }
 

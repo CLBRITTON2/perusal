@@ -40,7 +40,76 @@ type FileDiff struct {
 	Binary bool
 }
 
+// FileSection is one file of a diff that spans several, such as git show prints for a commit.
+type FileSection struct {
+	Path     string
+	FileDiff FileDiff
+}
+
 var hunkHeader = regexp.MustCompile(`^@@ -(\d+)(?:,\d+)? \+(\d+)(?:,\d+)? @@`)
+
+const fileHeaderPrefix = "diff --git "
+
+// ParseFiles splits a diff of several files at each "diff --git" line and parses every file.
+func ParseFiles(text string) ([]FileSection, error) {
+	sections := []FileSection{}
+	lines := strings.Split(text, "\n")
+	start := -1
+	for index := 0; index <= len(lines); index++ {
+		if index < len(lines) && !strings.HasPrefix(lines[index], fileHeaderPrefix) {
+			continue
+		}
+		if start >= 0 {
+			section, err := parseFileSection(lines[start:index])
+			if err != nil {
+				return nil, fmt.Errorf("parse diff of the file starting at line %d: %w", start+1, err)
+			}
+			sections = append(sections, section)
+		}
+		start = index
+	}
+	return sections, nil
+}
+
+func parseFileSection(lines []string) (FileSection, error) {
+	fileDiff, err := ParseUnified(strings.Join(lines, "\n"))
+	if err != nil {
+		return FileSection{}, err
+	}
+	return FileSection{Path: sectionPath(lines), FileDiff: fileDiff}, nil
+}
+
+// sectionPath finds the new path of a file section, or the old one for a deletion. A binary file has no ---/+++
+// lines, so its path comes from the "diff --git a/<path> b/<path>" header, which is ambiguous only for a rename.
+func sectionPath(lines []string) string {
+	oldPath := ""
+	for _, line := range lines {
+		if strings.HasPrefix(line, "@@") {
+			break
+		}
+		switch {
+		case strings.HasPrefix(line, "rename to "):
+			return strings.TrimPrefix(line, "rename to ")
+		case strings.HasPrefix(line, "+++ b/"):
+			return strings.TrimPrefix(line, "+++ b/")
+		case strings.HasPrefix(line, "--- a/"):
+			oldPath = strings.TrimPrefix(line, "--- a/")
+		}
+	}
+	if oldPath != "" {
+		return oldPath
+	}
+	return headerPath(strings.TrimPrefix(lines[0], fileHeaderPrefix))
+}
+
+// headerPath reads "a/<path> b/<path>", where both halves name the same path.
+func headerPath(paths string) string {
+	half := (len(paths) - 1) / 2
+	if len(paths)%2 == 1 && strings.HasPrefix(paths, "a/") && paths[half:half+3] == " b/" {
+		return paths[2:half]
+	}
+	return paths
+}
 
 // ParseUnified pairs the lines of a git unified diff for side-by-side display. Within a change, the nth removed line
 // sits beside the nth added line, and the longer side's extra lines sit beside blanks.

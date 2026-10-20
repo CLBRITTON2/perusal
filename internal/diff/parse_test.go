@@ -15,6 +15,50 @@ func TestParseUnified(t *testing.T) {
 	t.Run("rejectsUnknownLinePrefix", rejectsUnknownLinePrefix)
 }
 
+func TestParseFiles(t *testing.T) {
+	t.Run("namesEachFileOfACommit", namesEachFileOfACommit)
+}
+
+func namesEachFileOfACommit(t *testing.T) {
+	text := strings.Join([]string{
+		"",
+		"diff --git a/new.go b/new.go",
+		"new file mode 100644",
+		"--- /dev/null",
+		"+++ b/new.go",
+		"@@ -0,0 +1 @@",
+		"+package x",
+		"diff --git a/gone.go b/gone.go",
+		"deleted file mode 100644",
+		"--- a/gone.go",
+		"+++ /dev/null",
+		"@@ -1 +0,0 @@",
+		"-package y",
+		"diff --git a/old name.go b/new name.go",
+		"similarity index 100%",
+		"rename from old name.go",
+		"rename to new name.go",
+		"diff --git a/logo b.png b/logo b.png",
+		"Binary files a/logo b.png and b/logo b.png differ",
+		"",
+	}, "\n")
+
+	sections, err := ParseFiles(text)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	paths := []string{}
+	for _, section := range sections {
+		paths = append(paths, section.Path)
+	}
+	want := []string{"new.go", "gone.go", "new name.go", "logo b.png"}
+	if !reflect.DeepEqual(paths, want) || !sections[3].FileDiff.Binary || len(sections[0].FileDiff.Hunks) != 1 {
+		t.Fatalf("got paths %q, binary %v, %d hunks in the first", paths, sections[3].FileDiff.Binary,
+			len(sections[0].FileDiff.Hunks))
+	}
+}
+
 func pairsRemovedWithAddedAndPadsTheShorterSide(t *testing.T) {
 	text := strings.Join([]string{
 		"diff --git a/f.go b/f.go",

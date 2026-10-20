@@ -6,13 +6,31 @@ import (
 	"errors"
 	"fmt"
 	"os/exec"
+	"regexp"
+	"strconv"
 	"strings"
+	"time"
 )
 
 // Repository runs git in one working tree. Dir is the tree's top level.
 type Repository struct {
 	Dir string
 }
+
+// Commit is one entry of git log.
+type Commit struct {
+	Hash       string
+	ShortHash  string
+	Author     string
+	AuthoredAt time.Time
+	Summary    string
+	// Message is the full commit message, summary included.
+	Message string
+}
+
+const logFieldSeparator = "\x1f"
+
+var commitHash = regexp.MustCompile(`^(?:[0-9a-f]{40}|[0-9a-f]{64})$`)
 
 // Open resolves dir, which may be any directory inside a working tree, to its repository.
 func Open(ctx context.Context, dir string) (Repository, error) {
@@ -23,22 +41,68 @@ func Open(ctx context.Context, dir string) (Repository, error) {
 	return Repository{Dir: strings.TrimSpace(string(output))}, nil
 }
 
-// CurrentBranch returns the checked out branch, or "" when HEAD is detached.
-func (r Repository) CurrentBranch(ctx context.Context) (string, error) {
-	output, err := runGit(ctx, r.Dir, []string{"branch", "--show-current"})
+// Status returns the branch and every staged, unstaged and untracked file, with untracked directories expanded to
+// their files.
+func (r Repository) Status(ctx context.Context) (Status, error) {
+	output, err := runGit(ctx, r.Dir, []string{"status", "--porcelain=v2", "--branch", "-z", "--untracked-files=all"})
 	if err != nil {
-		return "", err
+		return Status{}, err
 	}
-	return strings.TrimSpace(string(output)), nil
+	return ParseStatus(output)
 }
 
-// ChangedFiles lists every staged, unstaged and untracked file, with untracked directories expanded to their files.
-func (r Repository) ChangedFiles(ctx context.Context) ([]FileStatus, error) {
-	output, err := runGit(ctx, r.Dir, []string{"status", "--porcelain=v1", "-z", "--untracked-files=all"})
+// Log returns up to maximumCount commits reachable from HEAD, newest first. HEAD must have a commit.
+func (r Repository) Log(ctx context.Context, maximumCount int) ([]Commit, error) {
+	format := strings.Join([]string{"%H", "%h", "%an", "%at", "%B"}, "%x1f")
+	output, err := runGit(ctx, r.Dir, []string{"log", "-z", "--max-count=" + strconv.Itoa(maximumCount),
+		"--format=" + format})
 	if err != nil {
 		return nil, err
 	}
-	return ParseStatus(output)
+	return ParseLog(output)
+}
+
+// ParseLog reads git log -z output whose format is hash, short hash, author, author Unix time and message, separated
+// by U+001F. The message comes last, so a separator inside it stays part of it.
+func ParseLog(output []byte) ([]Commit, error) {
+	commits := []Commit{}
+	for _, record := range bytes.Split(bytes.TrimSuffix(output, []byte{0}), []byte{0}) {
+		if len(record) == 0 {
+			continue
+		}
+		fields := strings.SplitN(string(record), logFieldSeparator, 5)
+		if len(fields) != 5 || !commitHash.MatchString(fields[0]) {
+			return nil, fmt.Errorf("parse git log record %q: want a full hash and 4 more fields", record)
+		}
+		authoredUnix, err := strconv.ParseInt(fields[3], 10, 64)
+		if err != nil {
+			return nil, fmt.Errorf("parse git log record %q: author time: %w", record, err)
+		}
+		message := strings.TrimSpace(fields[4])
+		summary, _, _ := strings.Cut(message, "\n")
+		commits = append(commits, Commit{
+			Hash:       fields[0],
+			ShortHash:  fields[1],
+			Author:     fields[2],
+			AuthoredAt: time.Unix(authoredUnix, 0),
+			Summary:    summary,
+			Message:    message,
+		})
+	}
+	return commits, nil
+}
+
+// CommitDiff returns the unified diff of every file the commit changed. A merge is diffed against its first parent.
+func (r Repository) CommitDiff(ctx context.Context, hash string) (string, error) {
+	if !commitHash.MatchString(hash) {
+		return "", fmt.Errorf("show commit %q in %s: not a full commit hash", hash, r.Dir)
+	}
+	output, err := runGit(ctx, r.Dir, []string{"show", "--format=", "--no-color", "--no-ext-diff", "--find-renames",
+		"--diff-merges=first-parent", hash, "--"})
+	if err != nil {
+		return "", err
+	}
+	return string(output), nil
 }
 
 // FileDiff returns the unified diff of file against HEAD, staged and unstaged changes together.
