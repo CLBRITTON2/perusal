@@ -47,6 +47,14 @@ var (
 	unstagedMarkStyle = lipgloss.NewStyle().Foreground(colorLove).Bold(true)
 	untrackedStyle    = lipgloss.NewStyle().Foreground(colorGold).Bold(true)
 	hashStyle         = lipgloss.NewStyle().Foreground(colorGold)
+	refStyle          = lipgloss.NewStyle().Foreground(colorFoam).Bold(true)
+	laneStyles        = []lipgloss.Style{
+		lipgloss.NewStyle().Foreground(colorIris),
+		lipgloss.NewStyle().Foreground(colorFoam),
+		lipgloss.NewStyle().Foreground(colorGold),
+		lipgloss.NewStyle().Foreground(colorRose),
+		lipgloss.NewStyle().Foreground(colorLove),
+	}
 	authorStyle       = lipgloss.NewStyle().Foreground(colorFoam)
 	fileHeaderStyle   = lipgloss.NewStyle().Foreground(colorRose).Background(colorOverlay).Bold(true)
 	hunkHeaderStyle   = lipgloss.NewStyle().Foreground(colorIris).Background(colorOverlay)

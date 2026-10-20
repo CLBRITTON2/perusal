@@ -162,9 +162,9 @@ func renderCommit(commit gitrepo.Commit, sections []diff.FileSection, width int)
 func renderTreeFileRow(section diff.FileSection, last bool, width int) string {
 	var branch string
 	if last {
-		branch = "  └ "
+		branch = "└ "
 	} else {
-		branch = "  ├ "
+		branch = "├ "
 	}
 	return fitToWidth(mutedStyle.Render(branch)+changeMark(section.FileDiff.Change)+" "+
 		textStyle.Render(sanitizeText(section.Path)), width)

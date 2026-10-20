@@ -834,21 +834,33 @@ func (m Model) renderLogRows(innerWidth int) []string {
 		return []string{mutedStyle.Render("no commit message matches")}
 	}
 	selected := m.selectedLogRow(rows)
+	graph := m.logGraph()
 	rendered := []string{}
 	end := min(m.logOffset+m.paneInnerHeight(), len(rows))
 	for index := m.logOffset; index < end; index++ {
-		rendered = append(rendered, listRow(m.renderLogRow(rows[index], innerWidth-1), index == selected, innerWidth))
+		rendered = append(rendered, listRow(m.renderLogRow(rows[index], graph[rows[index].commit], innerWidth-1),
+			index == selected, innerWidth))
 	}
 	return rendered
 }
 
-func (m Model) renderLogRow(row logRow, width int) string {
+// logGraph draws the branch lines of every commit, or blank ones while a search filters the log, since the lines
+// between commits it hides would be wrong.
+func (m Model) logGraph() []graphRow {
+	if m.logFilter != nil {
+		return make([]graphRow, len(m.commits))
+	}
+	return commitGraph(m.commits)
+}
+
+func (m Model) renderLogRow(row logRow, graph graphRow, width int) string {
 	commit := m.commits[row.commit]
 	if row.file == commitRow {
-		return expandMarker(m.expanded[commit.Hash]) + renderCommitRow(commit, m.logLoadedAt, width-2)
+		prefix := graph.commit + expandMarker(m.expanded[commit.Hash])
+		return prefix + renderCommitRow(commit, m.logLoadedAt, width-ansi.StringWidth(prefix))
 	}
 	files := m.commitFiles[commit.Hash]
-	return renderTreeFileRow(files[row.file], row.file == len(files)-1, width)
+	return graph.below + renderTreeFileRow(files[row.file], row.file == len(files)-1, width-ansi.StringWidth(graph.below))
 }
 
 // listRow fits row to width behind a one-cell gutter, which holds a bar on the selected row. The selected row drops
@@ -909,7 +921,11 @@ func renderFileRow(file gitrepo.FileStatus) string {
 func renderCommitRow(commit gitrepo.Commit, now time.Time, width int) string {
 	age := compactAge(now.Sub(commit.AuthoredAt))
 	summaryWidth := max(width-len(age)-1, 0)
-	summary := hashStyle.Render(sanitizeText(commit.ShortHash)) + " " + textStyle.Render(sanitizeText(commit.Summary))
+	summary := hashStyle.Render(sanitizeText(commit.ShortHash)) + " "
+	if len(commit.Refs) > 0 {
+		summary += refStyle.Render("("+sanitizeText(strings.Join(commit.Refs, ", "))+")") + " "
+	}
+	summary += textStyle.Render(sanitizeText(commit.Summary))
 	return fitToWidth(fitToWidth(summary, summaryWidth)+" "+mutedStyle.Render(age), width)
 }
 

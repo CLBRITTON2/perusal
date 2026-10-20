@@ -18,8 +18,12 @@ type Repository struct {
 }
 
 type Commit struct {
-	Hash       string
-	ShortHash  string
+	Hash      string
+	ShortHash string
+	// Parents is empty for a root commit, and holds the first parent first for a merge.
+	Parents []string
+	// Refs are the branch and tag names git log decorates the commit with, such as "HEAD -> master" or "tag: v1".
+	Refs       []string
 	Author     string
 	AuthoredAt time.Time
 	Summary    string
@@ -50,10 +54,11 @@ func (r Repository) Status(ctx context.Context) (Status, error) {
 	return ParseStatus(output)
 }
 
-// Log returns up to maximumCount commits reachable from HEAD, newest first. HEAD must have a commit.
+// Log returns up to maximumCount commits reachable from HEAD, newest first, and never a parent above its children.
+// HEAD must have a commit.
 func (r Repository) Log(ctx context.Context, maximumCount int) ([]Commit, error) {
-	format := strings.Join([]string{"%H", "%h", "%an", "%at", "%B"}, "%x1f")
-	output, err := runGit(ctx, r.Dir, []string{"log", "-z", "--max-count=" + strconv.Itoa(maximumCount),
+	format := strings.Join([]string{"%H", "%h", "%P", "%D", "%an", "%at", "%B"}, "%x1f")
+	output, err := runGit(ctx, r.Dir, []string{"log", "-z", "--topo-order", "--max-count=" + strconv.Itoa(maximumCount),
 		"--format=" + format})
 	if err != nil {
 		return nil, err
@@ -61,28 +66,40 @@ func (r Repository) Log(ctx context.Context, maximumCount int) ([]Commit, error)
 	return ParseLog(output)
 }
 
-// ParseLog reads git log -z output whose format is hash, short hash, author, author Unix time and message, separated
-// by U+001F. The message comes last, so a separator inside it stays part of it.
+// ParseLog reads git log -z output whose format is hash, short hash, parent hashes, decorations, author, author Unix
+// time and message, separated by U+001F. The message comes last, so a separator inside it stays part of it.
 func ParseLog(output []byte) ([]Commit, error) {
 	commits := []Commit{}
 	for _, record := range bytes.Split(bytes.TrimSuffix(output, []byte{0}), []byte{0}) {
 		if len(record) == 0 {
 			continue
 		}
-		fields := strings.SplitN(string(record), logFieldSeparator, 5)
-		if len(fields) != 5 || !commitHash.MatchString(fields[0]) {
-			return nil, fmt.Errorf("parse git log record %q: want a full hash and 4 more fields", record)
+		fields := strings.SplitN(string(record), logFieldSeparator, 7)
+		if len(fields) != 7 || !commitHash.MatchString(fields[0]) {
+			return nil, fmt.Errorf("parse git log record %q: want a full hash and 6 more fields", record)
 		}
-		authoredUnix, err := strconv.ParseInt(fields[3], 10, 64)
+		parents := strings.Fields(fields[2])
+		for _, parent := range parents {
+			if !commitHash.MatchString(parent) {
+				return nil, fmt.Errorf("parse git log record %q: parent %q is not a full commit hash", record, parent)
+			}
+		}
+		refs := []string{}
+		if fields[3] != "" {
+			refs = strings.Split(fields[3], ", ")
+		}
+		authoredUnix, err := strconv.ParseInt(fields[5], 10, 64)
 		if err != nil {
 			return nil, fmt.Errorf("parse git log record %q: author time: %w", record, err)
 		}
-		message := strings.TrimSpace(fields[4])
+		message := strings.TrimSpace(fields[6])
 		summary, _, _ := strings.Cut(message, "\n")
 		commits = append(commits, Commit{
 			Hash:       fields[0],
 			ShortHash:  fields[1],
-			Author:     fields[2],
+			Parents:    parents,
+			Refs:       refs,
+			Author:     fields[4],
 			AuthoredAt: time.Unix(authoredUnix, 0),
 			Summary:    summary,
 			Message:    message,
