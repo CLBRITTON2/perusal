@@ -22,11 +22,11 @@ func TestMapPath(t *testing.T) {
 		{"mapsANestedDirectory", `C:\Users\claude\dev\openziti\ziti\cmd`, `C:\Users\Chris\dev\openziti\ziti\cmd`, nil},
 		{"mapsTheDevDirectoryItself", `C:\Users\claude\dev\`, `C:\Users\Chris\dev`, nil},
 		{"ignoresCase", `c:\users\CLAUDE\Dev\perusal`, `C:\Users\Chris\dev\perusal`, nil},
-		{"refusesASiblingWithTheSamePrefix", `C:\Users\claude\devtools\x`, "", ErrOutsideAgentDevDir},
-		{"refusesDotDotOutOfTheDevDirectory", `C:\Users\claude\dev\..\..\Chris\.ssh`, "", ErrOutsideAgentDevDir},
-		{"refusesARelativePath", `dev\perusal`, "", ErrOutsideAgentDevDir},
-		{"refusesADriveRelativePath", `C:dev\perusal`, "", ErrOutsideAgentDevDir},
-		{"refusesAVerbatimPrefix", `\\?\C:\Users\claude\dev\perusal`, "", ErrOutsideAgentDevDir},
+		{"refusesASiblingWithTheSamePrefix", `C:\Users\claude\devtools\x`, "", ErrOutsideAgentDir},
+		{"refusesDotDotOutOfTheAgentDirectory", `C:\Users\claude\dev\..\..\Chris\.ssh`, "", ErrOutsideAgentDir},
+		{"refusesARelativePath", `dev\perusal`, "", ErrOutsideAgentDir},
+		{"refusesADriveRelativePath", `C:dev\perusal`, "", ErrOutsideAgentDir},
+		{"refusesAVerbatimPrefix", `\\?\C:\Users\claude\dev\perusal`, "", ErrOutsideAgentDir},
 	}
 	for _, testCase := range cases {
 		t.Run(testCase.name, func(t *testing.T) {
@@ -62,7 +62,7 @@ func refusesTwoLines(t *testing.T) {
 
 func TestFindWorkTree(t *testing.T) {
 	t.Run("findsTheNearestGitAbove", findsTheNearestGitAbove)
-	t.Run("stopsAtTheOwnerDevDirectory", stopsAtTheOwnerDevDirectory)
+	t.Run("stopsAtTheOwnerDirectory", stopsAtTheOwnerDirectory)
 }
 
 func findsTheNearestGitAbove(t *testing.T) {
@@ -78,7 +78,7 @@ func findsTheNearestGitAbove(t *testing.T) {
 	}
 }
 
-func stopsAtTheOwnerDevDirectory(t *testing.T) {
+func stopsAtTheOwnerDirectory(t *testing.T) {
 	outer := t.TempDir()
 	mustMkdir(t, filepath.Join(outer, ".git"))
 	devDir := filepath.Join(outer, "dev")
@@ -103,7 +103,7 @@ func opensTheCheckedWorkTree(t *testing.T) {
 	repository := filepath.Join(devDir, "repo")
 	gitInit(t, repository)
 	denyGuests(t, filepath.Join(repository, ".git"), deniedWriteMask)
-	rules := Rules{AgentDevDir: agentDevDir, OwnerDevDir: devDir, AgentSID: guestsSID}
+	rules := Rules{AgentDir: agentDevDir, OwnerDir: devDir, AgentSID: guestsSID}
 
 	got, err := Resolve(context.Background(), rules, focusFileHolding(t, agentDevDir+`\repo`))
 
@@ -123,7 +123,7 @@ func refusesAWorkTreeGitSkipsPast(t *testing.T) {
 	emptyGitDir := filepath.Join(devDir, "repo", ".git")
 	mustMkdir(t, emptyGitDir)
 	denyGuests(t, emptyGitDir, deniedWriteMask)
-	rules := Rules{AgentDevDir: agentDevDir, OwnerDevDir: devDir, AgentSID: guestsSID}
+	rules := Rules{AgentDir: agentDevDir, OwnerDir: devDir, AgentSID: guestsSID}
 
 	_, err := Resolve(context.Background(), rules, focusFileHolding(t, agentDevDir+`\repo`))
 

@@ -13,41 +13,43 @@ import (
 	"github.com/CLBRITTON2/perusal/internal/ui"
 )
 
-// Published by windows-dev's herdr/focus-file plugin.
-const focusFileName = ".herdr-focus"
+const followUsage = "  perusal follow                  review whichever working tree the agent's focused herdr pane is in\n"
 
-const followUsage = "  perusal follow <agent account>  review whichever working tree the agent's focused herdr pane is in\n"
-
-// Relies on the dev directory layout windows-dev's setup-agent-account.ps1 creates.
 func runFollow(args []string) error {
+	path, err := followConfigPath()
+	if err != nil {
+		return err
+	}
 	flags := flag.NewFlagSet("perusal follow", flag.ContinueOnError)
 	flags.Usage = func() {
-		fmt.Fprint(flags.Output(), "usage: perusal follow <agent account>\n\n"+
-			"Reviews whichever working tree the agent's focused herdr pane is in, read from <agent profile>\\dev\\"+
-			focusFileName+".\n")
+		fmt.Fprint(flags.Output(), "usage: perusal follow\n\n"+
+			"Reviews whichever working tree the agent's focused herdr pane is in, as set up in "+path+".\n")
 	}
 	if err := flags.Parse(args); err != nil {
 		return fmt.Errorf("parse flags: %w", err)
 	}
-	if flags.NArg() != 1 {
-		return fmt.Errorf("perusal follow takes one agent account, as in perusal follow claude, got %q", flags.Args())
+	if flags.NArg() != 0 {
+		return fmt.Errorf("perusal follow takes no arguments, it reads %s, got %q", path, flags.Args())
 	}
-	agentAccount := flags.Arg(0)
-	agentSID, err := focus.LookupAccountSID(agentAccount)
+	config, err := focus.LoadConfig(path)
 	if err != nil {
 		return err
 	}
-	agentProfileDir, err := focus.ProfileDirectory(agentSID)
+	agentSID, err := focus.LookupAccountSID(config.AgentAccount)
 	if err != nil {
 		return err
 	}
-	ownerHome, err := os.UserHomeDir()
+	rules := focus.Rules{AgentDir: config.AgentDir, OwnerDir: config.OwnerDir, AgentSID: agentSID}
+	return follow(rules, config.FocusFile)
+}
+
+// The config names the account whose .git access is checked, so it must sit where the agent cannot write.
+func followConfigPath() (string, error) {
+	configDir, err := os.UserConfigDir()
 	if err != nil {
-		return fmt.Errorf("find this account's home directory: %w", err)
+		return "", fmt.Errorf("find the config directory: %w", err)
 	}
-	agentDevDir := filepath.Join(agentProfileDir, "dev")
-	rules := focus.Rules{AgentDevDir: agentDevDir, OwnerDevDir: filepath.Join(ownerHome, "dev"), AgentSID: agentSID}
-	return follow(rules, filepath.Join(agentDevDir, focusFileName))
+	return filepath.Join(configDir, "perusal", "config.json"), nil
 }
 
 func follow(rules focus.Rules, focusFile string) error {

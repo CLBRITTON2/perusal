@@ -22,17 +22,17 @@ const maximumFocusFileBytes = 4096
 
 var (
 	ErrMalformedFocusFile = errors.New("the focus file must hold one absolute path")
-	ErrOutsideAgentDevDir = errors.New("the path is outside the agent dev directory")
-	ErrNotWorkTree        = errors.New("no .git between the path and the owner dev directory")
+	ErrOutsideAgentDir    = errors.New("the path is outside the agent directory")
+	ErrNotWorkTree        = errors.New("no .git between the path and the owner directory")
 	ErrGitDirUnprotected  = errors.New("the .git directory is not write-denied to the agent account")
 	ErrWorkTreeMismatch   = errors.New("git resolved a different work tree than the one checked")
 )
 
-// AgentDevDir and OwnerDevDir are one directory, as each account reaches it.
+// AgentDir and OwnerDir are one directory, as each account reaches it.
 type Rules struct {
-	AgentDevDir string
-	OwnerDevDir string
-	AgentSID    string
+	AgentDir string
+	OwnerDir string
+	AgentSID string
 }
 
 type Result struct {
@@ -114,11 +114,11 @@ func Resolve(ctx context.Context, rules Rules, focusFile string) (gitrepo.Reposi
 	if err != nil {
 		return gitrepo.Repository{}, fmt.Errorf("parse focus file %s: %w", focusFile, err)
 	}
-	ownerPath, err := MapPath(agentPath, rules.AgentDevDir, rules.OwnerDevDir)
+	ownerPath, err := MapPath(agentPath, rules.AgentDir, rules.OwnerDir)
 	if err != nil {
 		return gitrepo.Repository{}, err
 	}
-	workTree, err := FindWorkTree(ownerPath, rules.OwnerDevDir)
+	workTree, err := FindWorkTree(ownerPath, rules.OwnerDir)
 	if err != nil {
 		return gitrepo.Repository{}, err
 	}
@@ -178,24 +178,24 @@ func ParseFocusFile(content string) (string, error) {
 	return path, nil
 }
 
-func MapPath(agentPath string, agentDevDir string, ownerDevDir string) (string, error) {
+func MapPath(agentPath string, agentDir string, ownerDir string) (string, error) {
 	cleaned := filepath.Clean(agentPath)
-	root := filepath.Clean(agentDevDir)
+	root := filepath.Clean(agentDir)
 	if !filepath.IsAbs(cleaned) {
-		return "", fmt.Errorf("%w: %s is not absolute", ErrOutsideAgentDevDir, agentPath)
+		return "", fmt.Errorf("%w: %s is not absolute", ErrOutsideAgentDir, agentPath)
 	}
 	if strings.EqualFold(cleaned, root) {
-		return filepath.Clean(ownerDevDir), nil
+		return filepath.Clean(ownerDir), nil
 	}
 	prefix := root + string(filepath.Separator)
 	if len(cleaned) <= len(prefix) || !strings.EqualFold(cleaned[:len(prefix)], prefix) {
-		return "", fmt.Errorf("%w: %s is not under %s", ErrOutsideAgentDevDir, agentPath, agentDevDir)
+		return "", fmt.Errorf("%w: %s is not under %s", ErrOutsideAgentDir, agentPath, agentDir)
 	}
-	return filepath.Join(ownerDevDir, cleaned[len(prefix):]), nil
+	return filepath.Join(ownerDir, cleaned[len(prefix):]), nil
 }
 
-func FindWorkTree(dir string, ownerDevDir string) (string, error) {
-	root := filepath.Clean(ownerDevDir)
+func FindWorkTree(dir string, ownerDir string) (string, error) {
+	root := filepath.Clean(ownerDir)
 	current := filepath.Clean(dir)
 	for {
 		_, err := os.Lstat(filepath.Join(current, ".git"))

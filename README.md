@@ -50,19 +50,29 @@ folded pane to open it. The wheel moves the selection over a list and scrolls th
 
 ## Follow mode (Windows)
 
-`perusal follow <agent account>` is for an agent that runs as its own Windows account. It reviews whichever
-repository the agent's focused herdr pane is in, and switches as the agent
-moves between repositories.
+`perusal follow` is for an agent that runs as its own Windows account. It reviews whichever repository the
+agent is working in, and switches as the agent moves between repositories. It reads
+`%APPDATA%\perusal\config.json`, where every key is required:
 
-It expects this setup, which this repository does not create:
+```json
+{
+  "agentAccount": "claude",
+  "focusFile": "C:\\Users\\claude\\dev\\.herdr-focus",
+  "agentDir": "C:\\Users\\claude\\dev",
+  "ownerDir": "C:\\Users\\you\\dev"
+}
+```
 
-- The agent's `dev` directory and yours are one directory, reached as `<agent profile>\dev` and
-  `%USERPROFILE%\dev`.
-- `<agent profile>\dev\.herdr-focus` holds one absolute path, rewritten whenever the agent's focus changes.
-- Every `.git` the agent works in carries an inherited deny of `(OI)(CI)(WD,AD,WEA,WA,DE,DC)` for the agent account.
+- `agentAccount` is the Windows account the agent runs as.
+- `focusFile` holds one absolute path, the directory the agent is working in, and is rewritten whenever that
+  changes. Something on the agent side has to write it, such as a herdr plugin.
+- `agentDir` and `ownerDir` are one directory as the agent and you reach it. perusal maps a path under `agentDir`
+  to the same path under `ownerDir`, and refuses anything outside it.
 
-perusal runs git as you in a repository the agent chose, and git runs that repository's hooks and config. So it
-refuses any `.git` the agent account owns or lacks that deny for, since a planted hook would otherwise run as you.
+perusal runs git as you in a repository the agent chose, and git runs that repository's hooks and config. So every
+`.git` under `ownerDir` needs an inherited deny of `(OI)(CI)(WD,AD,WEA,WA,DE,DC)` for the agent account, and perusal
+refuses any `.git` the agent owns or that lacks the deny, since a planted hook would otherwise run as you. For the
+same reason the agent account must not be able to write your `%APPDATA%`.
 
 ## License
 
