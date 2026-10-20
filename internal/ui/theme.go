@@ -52,6 +52,14 @@ var (
 		lipgloss.NewStyle().Foreground(colorRose),
 		lipgloss.NewStyle().Foreground(colorLove),
 	}
+	// laneStyles' colors, each blended 45% over base, for lines off the selected commit's line
+	dimLaneStyles = []lipgloss.Style{
+		lipgloss.NewStyle().Foreground(lipgloss.Color("#66587c")),
+		lipgloss.NewStyle().Foreground(lipgloss.Color("#546a75")),
+		lipgloss.NewStyle().Foreground(lipgloss.Color("#7c6449")),
+		lipgloss.NewStyle().Foreground(lipgloss.Color("#786168")),
+		lipgloss.NewStyle().Foreground(lipgloss.Color("#783f56")),
+	}
 	authorStyle       = lipgloss.NewStyle().Foreground(colorFoam)
 	fileHeaderStyle   = lipgloss.NewStyle().Foreground(colorRose).Background(colorOverlay).Bold(true)
 	hunkHeaderStyle   = lipgloss.NewStyle().Foreground(colorIris).Background(colorOverlay)

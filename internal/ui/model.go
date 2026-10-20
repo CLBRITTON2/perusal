@@ -906,10 +906,11 @@ func (m Model) renderLogRows(innerWidth int) []string {
 	}
 	selected := m.selectedLogRow(rows)
 	graph := m.logGraph()
+	line := lineThrough(m.graph, m.selectedCommit)
 	rendered := []string{}
 	end := min(m.logOffset+m.listInnerHeight(), len(rows))
 	for index := m.logOffset; index < end; index++ {
-		rendered = append(rendered, listRow(m.renderLogRow(rows[index], graph[rows[index].commit], innerWidth-1),
+		rendered = append(rendered, listRow(m.renderLogRow(rows[index], graph[rows[index].commit], line, innerWidth-1),
 			index == selected, innerWidth))
 	}
 	return rendered
@@ -930,14 +931,15 @@ func sameTopology(first []gitrepo.Commit, second []gitrepo.Commit) bool {
 	})
 }
 
-func (m Model) renderLogRow(row logRow, graph graphRow, width int) string {
+func (m Model) renderLogRow(row logRow, graph graphRow, line []bool, width int) string {
 	commit := m.commits[row.commit]
 	if row.file == commitRow {
-		prefix := graph.commit + expandMarker(m.expanded[commit.Hash])
+		prefix := renderGraphCells(graph.commit, line) + expandMarker(m.expanded[commit.Hash])
 		return prefix + renderCommitRow(commit, m.logFilter, m.logLoadedAt, width-ansi.StringWidth(prefix))
 	}
 	files := m.commitFiles[commit.Hash]
-	return graph.below + renderTreeFileRow(files[row.file], row.file == len(files)-1, width-ansi.StringWidth(graph.below))
+	below := renderGraphCells(graph.below, line)
+	return below + renderTreeFileRow(files[row.file], row.file == len(files)-1, width-ansi.StringWidth(below))
 }
 
 // The selected row drops its own colors, since each styled part would end the row's background early.
