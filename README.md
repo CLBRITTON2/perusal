@@ -37,7 +37,7 @@ perusal -repo <dir>  # review the repository <dir> is in
 | `ctrl+d` `ctrl+u`, page keys | anywhere | scroll the diff |
 | `space` | changes | stage or unstage the file |
 | `a` | changes | stage or unstage everything |
-| `d` | anywhere | zoom the diff to the whole width, `d` again brings the lists back |
+| `d` | anywhere | show the diff fullscreen, `d` again brings the lists back |
 | `c` | anywhere | open the commit popup |
 | `P` | anywhere | open the push popup |
 | `enter` | log | expand the commit into its files |

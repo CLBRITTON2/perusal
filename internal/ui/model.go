@@ -56,7 +56,7 @@ type Model struct {
 	repository     gitrepo.Repository
 	rejection      string
 	view           viewKind
-	diffZoomed     bool
+	diffFullscreen bool
 	status         gitrepo.Status
 	selected       int
 	listOffset     int
@@ -264,8 +264,8 @@ func (m Model) updateBrowsing(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		return m, nil
 	case key.Matches(msg, switchViewKey):
 		return m.switchView()
-	case key.Matches(msg, zoomKey):
-		m.diffZoomed = !m.diffZoomed
+	case key.Matches(msg, fullscreenKey):
+		m.diffFullscreen = !m.diffFullscreen
 		return m.withLayout(), nil
 	case key.Matches(msg, expandKey) && m.view == viewLog:
 		return m.toggleExpanded()
@@ -322,7 +322,7 @@ func (m Model) withRepository(repository gitrepo.Repository, rejection string) M
 	next.repository = repository
 	next.rejection = rejection
 	next.view = m.view
-	next.diffZoomed = m.diffZoomed
+	next.diffFullscreen = m.diffFullscreen
 	next.width = m.width
 	next.height = m.height
 	return next.withLayout()
@@ -705,7 +705,7 @@ func scrolledOffset(offset int, selected int, visibleRows int) int {
 }
 
 func (m Model) listOuterWidth() int {
-	if m.diffZoomed {
+	if m.diffFullscreen {
 		return 0
 	}
 	return max(m.width*listPercent/100, minimumListWidth)
@@ -788,7 +788,7 @@ func (m Model) renderScreen() string {
 }
 
 func (m Model) renderColumns() string {
-	if m.diffZoomed {
+	if m.diffFullscreen {
 		return m.renderDiffPane()
 	}
 	return lipgloss.JoinHorizontal(lipgloss.Top, m.renderLists(), m.renderDiffPane())

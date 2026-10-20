@@ -18,7 +18,7 @@ func TestFocusSwitch(t *testing.T) {
 	t.Run("refocusingTheSameRepositoryKeepsTheSelection", refocusingTheSameRepositoryKeepsTheSelection)
 }
 
-func TestZoomedDiffCoversTheListsSoAClickThereSelectsNothing(t *testing.T) {
+func TestFullscreenDiffCoversTheListsSoAClickThereSelectsNothing(t *testing.T) {
 	m := update(t, New(), tea.WindowSizeMsg{Width: 120, Height: 30})
 	m = update(t, m, RepositoryFocused{Repository: gitrepo.Repository{Dir: "C:/dev/repo"}})
 	m = update(t, m, statusLoadedMsg{dir: "C:/dev/repo", status: gitrepo.Status{Files: twoFiles()}})

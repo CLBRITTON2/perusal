@@ -16,7 +16,7 @@ var (
 	switchViewKey  = key.NewBinding(key.WithKeys("tab"), key.WithHelp("tab", "changes/log"))
 	scrollDownKey  = key.NewBinding(key.WithKeys("ctrl+d", "pgdown"), key.WithHelp("^d/^u", "scroll"))
 	scrollUpKey    = key.NewBinding(key.WithKeys("ctrl+u", "pgup"))
-	zoomKey        = key.NewBinding(key.WithKeys("d"), key.WithHelp("d", "zoom diff"))
+	fullscreenKey  = key.NewBinding(key.WithKeys("d"), key.WithHelp("d", "fullscreen"))
 	quitKey        = key.NewBinding(key.WithKeys("q"), key.WithHelp("q", "quit"))
 	forceQuitKey   = key.NewBinding(key.WithKeys("ctrl+c"))
 	nextFieldKey   = key.NewBinding(key.WithKeys("tab", "shift+tab"), key.WithHelp("tab", "next field"))
@@ -30,8 +30,8 @@ var (
 )
 
 var (
-	changesHelp = []key.Binding{downKey, stageKey, stageAllKey, commitKey, pushKey, switchViewKey, scrollDownKey, zoomKey, quitKey}
-	logHelp     = []key.Binding{downKey, expandKey, searchKey, commitKey, pushKey, switchViewKey, scrollDownKey, zoomKey, quitKey}
+	changesHelp = []key.Binding{downKey, stageKey, stageAllKey, commitKey, pushKey, switchViewKey, scrollDownKey, fullscreenKey, quitKey}
+	logHelp     = []key.Binding{downKey, expandKey, searchKey, commitKey, pushKey, switchViewKey, scrollDownKey, fullscreenKey, quitKey}
 	searchHelp  = []key.Binding{keepSearchKey, clearSearchKey}
 	commitHelp  = []key.Binding{nextFieldKey, submitKey, cancelKey}
 	pushHelp    = []key.Binding{confirmPushKey, cancelKey}
