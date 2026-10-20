@@ -11,7 +11,10 @@ import (
 	"github.com/CLBRITTON2/perusal/internal/gitrepo"
 )
 
-const maximumLogCommits = 500
+const (
+	maximumLogCommits = 500
+	pollInterval      = 2 * time.Second
+)
 
 // RepositoryFocused switches the review to Repository, unless it is already on screen.
 type RepositoryFocused struct {
@@ -21,6 +24,13 @@ type RepositoryFocused struct {
 // FocusRejected clears the review and shows Reason, so nothing of the previous repository stays on screen.
 type FocusRejected struct {
 	Reason string
+}
+
+// pollTickMsg reloads the status, which reloads the selected diff and the log, so edits made outside perusal show up.
+type pollTickMsg struct{}
+
+func nextPoll() tea.Cmd {
+	return tea.Tick(pollInterval, func(time.Time) tea.Msg { return pollTickMsg{} })
 }
 
 // The messages below carry dir, the repository they came from, so a result that lands after a switch is dropped.

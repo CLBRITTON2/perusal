@@ -131,7 +131,7 @@ func New() Model {
 }
 
 func (m Model) Init() tea.Cmd {
-	return nil
+	return nextPoll()
 }
 
 func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
@@ -148,6 +148,12 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, repositoryRequest{repository: m.repository}.loadStatus
 	case FocusRejected:
 		return m.withRepository(gitrepo.Repository{}, sanitizeText(singleLine(msg.Reason))), nil
+	case pollTickMsg:
+		if m.repository.Dir == "" {
+			return m, nextPoll()
+		}
+		// The next tick waits for this status, so a slow git never stacks up polls.
+		return m, tea.Sequence(repositoryRequest{repository: m.repository}.loadStatus, nextPoll())
 	case statusLoadedMsg:
 		if msg.dir != m.repository.Dir {
 			return m, nil
@@ -325,11 +331,6 @@ func (m Model) updateBrowsing(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		return m, m.summaryInput.Focus()
 	case key.Matches(msg, pushKey):
 		return m.openPushPopup()
-	case key.Matches(msg, refreshKey):
-		if m.repository.Dir == "" {
-			return m, nil
-		}
-		return m, repositoryRequest{repository: m.repository}.loadStatus
 	}
 	return m, nil
 }
