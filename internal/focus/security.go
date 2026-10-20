@@ -1,0 +1,107 @@
+package focus
+
+import (
+	"fmt"
+	"os"
+	"unsafe"
+
+	"golang.org/x/sys/windows"
+)
+
+const fileDeleteChild = 0x40
+
+// The bits setup-claude.ps1 in windows-dev denies on every .git: icacls (OI)(CI)(WD,AD,WEA,WA,DE,DC).
+const (
+	deniedWriteMask = windows.FILE_WRITE_DATA | windows.FILE_APPEND_DATA | windows.FILE_WRITE_EA |
+		windows.FILE_WRITE_ATTRIBUTES | windows.DELETE | fileDeleteChild
+	deniedInheritFlags = windows.OBJECT_INHERIT_ACE | windows.CONTAINER_INHERIT_ACE
+)
+
+// LookupAccountSID returns the SID string of the user account named account.
+func LookupAccountSID(account string) (string, error) {
+	sid, _, accountType, err := windows.LookupSID("", account)
+	if err != nil {
+		return "", fmt.Errorf("look up account %s: %w", account, err)
+	}
+	if accountType != windows.SidTypeUser {
+		return "", fmt.Errorf("account %s is not a user account (SID type %d)", account, accountType)
+	}
+	return sid.String(), nil
+}
+
+// VerifyGitDir succeeds when gitDir is a plain directory that the agent does not own and that carries the agent
+// write deny on itself and everything below it.
+func VerifyGitDir(gitDir string, agentSID string) error {
+	info, err := os.Lstat(gitDir)
+	if err != nil {
+		return fmt.Errorf("inspect %s: %w", gitDir, err)
+	}
+	if !info.IsDir() {
+		return fmt.Errorf("%w: %s is not a plain directory (mode %s)", ErrGitDirUnprotected, gitDir, info.Mode())
+	}
+	agent, err := windows.StringToSid(agentSID)
+	if err != nil {
+		return fmt.Errorf("parse agent SID %s: %w", agentSID, err)
+	}
+	descriptor, err := windows.GetNamedSecurityInfo(gitDir, windows.SE_FILE_OBJECT,
+		windows.OWNER_SECURITY_INFORMATION|windows.DACL_SECURITY_INFORMATION)
+	if err != nil {
+		return fmt.Errorf("read the security descriptor of %s: %w", gitDir, err)
+	}
+	owner, _, err := descriptor.Owner()
+	if err != nil {
+		return fmt.Errorf("read the owner of %s: %w", gitDir, err)
+	}
+	// An owner can rewrite the DACL, so a deny the agent set on its own directory proves nothing.
+	if owner.Equals(agent) {
+		return fmt.Errorf("%w: the agent account %s owns %s", ErrGitDirUnprotected, agentSID, gitDir)
+	}
+	dacl, _, err := descriptor.DACL()
+	if err != nil {
+		return fmt.Errorf("read the DACL of %s: %w", gitDir, err)
+	}
+	if dacl == nil {
+		return fmt.Errorf("%w: %s has a null DACL, which grants everyone full access", ErrGitDirUnprotected, gitDir)
+	}
+	for index := uint16(0); index < dacl.AceCount; index++ {
+		var ace *windows.ACCESS_ALLOWED_ACE
+		if err := windows.GetAce(dacl, uint32(index), &ace); err != nil {
+			return fmt.Errorf("read ACE %d of %s: %w", index, gitDir, err)
+		}
+		if deniesAgentWrites(ace, agent) {
+			return nil
+		}
+	}
+	return fmt.Errorf("%w: %s has no (OI)(CI)(WD,AD,WEA,WA,DE,DC) deny for %s, rerun setup-claude.ps1",
+		ErrGitDirUnprotected, gitDir, agentSID)
+}
+
+func deniesAgentWrites(ace *windows.ACCESS_ALLOWED_ACE, agent *windows.SID) bool {
+	if ace.Header.AceType != windows.ACCESS_DENIED_ACE_TYPE {
+		return false
+	}
+	if ace.Header.AceFlags&windows.INHERIT_ONLY_ACE != 0 || ace.Header.AceFlags&deniedInheritFlags != deniedInheritFlags {
+		return false
+	}
+	if uint32(ace.Mask)&deniedWriteMask != deniedWriteMask {
+		return false
+	}
+	// The SID starts at SidStart and runs past the end of the Go struct, as in the Win32 ACCESS_DENIED_ACE.
+	return (*windows.SID)(unsafe.Pointer(&ace.SidStart)).Equals(agent)
+}
+
+// openSharingDelete opens path for reading while letting another process replace it. os.Open does not share delete
+// access, which makes the publisher's replace fail while perusal has the file open.
+func openSharingDelete(path string) (*os.File, error) {
+	name, err := windows.UTF16PtrFromString(path)
+	if err != nil {
+		return nil, fmt.Errorf("encode path %s: %w", path, err)
+	}
+	handle, err := windows.CreateFile(name, windows.GENERIC_READ,
+		windows.FILE_SHARE_READ|windows.FILE_SHARE_WRITE|windows.FILE_SHARE_DELETE, nil, windows.OPEN_EXISTING,
+		windows.FILE_ATTRIBUTE_NORMAL, 0)
+	if err != nil {
+		return nil, err
+	}
+	return os.NewFile(uintptr(handle), path), nil
+}

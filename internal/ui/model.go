@@ -30,13 +30,17 @@ const (
 	detachedBranchLabel  = "detached HEAD"
 	emptySummaryMessage  = "the summary is required"
 	commitRunningMessage = "committing..."
+	waitingMessage       = "waiting for a repository"
+	refusedMessage       = "refused the focused pane's directory"
 )
 
 // listFirstRowY is the screen row of the first file in the list: below the header, the top border and the title.
 const listFirstRowY = headerHeight + 2
 
 type Model struct {
-	repository     gitrepo.Repository
+	repository gitrepo.Repository
+	// rejection says why no repository is on screen, empty while one is or before the first arrives.
+	rejection      string
 	branch         string
 	files          []gitrepo.FileStatus
 	selected       int
@@ -57,7 +61,8 @@ type Model struct {
 	height             int
 }
 
-func New(repository gitrepo.Repository) Model {
+// New starts with no repository. A RepositoryFocused message picks the one to review.
+func New() Model {
 	summaryInput := textinput.New()
 	summaryInput.Placeholder = "Summary (required)"
 	summaryInput.Prompt = ""
@@ -66,7 +71,6 @@ func New(repository gitrepo.Repository) Model {
 	descriptionBox.ShowLineNumbers = false
 	descriptionBox.Prompt = ""
 	return Model{
-		repository:     repository,
 		files:          []gitrepo.FileStatus{},
 		diffView:       viewport.New(),
 		summaryInput:   summaryInput,
@@ -75,7 +79,7 @@ func New(repository gitrepo.Repository) Model {
 }
 
 func (m Model) Init() tea.Cmd {
-	return filesRequest{repository: m.repository}.load
+	return nil
 }
 
 func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
@@ -84,13 +88,24 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.width = msg.Width
 		m.height = msg.Height
 		return m.withLayout(), nil
+	case RepositoryFocused:
+		if msg.Repository.Dir == m.repository.Dir && m.rejection == "" {
+			return m, nil
+		}
+		m = m.withRepository(msg.Repository, "")
+		return m, filesRequest{repository: m.repository}.load
+	case FocusRejected:
+		return m.withRepository(gitrepo.Repository{}, sanitizeText(singleLine(msg.Reason))), nil
 	case filesLoadedMsg:
+		if msg.dir != m.repository.Dir {
+			return m, nil
+		}
 		m.branch = msg.branch
 		m.files = msg.files
 		m.selected = min(m.selected, max(len(m.files)-1, 0))
 		return m.withLayout(), m.loadSelectedDiff()
 	case diffLoadedMsg:
-		if msg.path != m.selectedPath() {
+		if msg.dir != m.repository.Dir || msg.path != m.selectedPath() {
 			return m, nil
 		}
 		if msg.path != m.diffPath {
@@ -101,8 +116,16 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.diffView.SetContentLines(renderSideBySide(m.fileDiff, m.diffView.Width()))
 		return m, nil
 	case indexChangedMsg:
+		if msg.dir != m.repository.Dir {
+			return m, nil
+		}
 		return m, filesRequest{repository: m.repository}.load
 	case committedMsg:
+		if msg.dir != m.repository.Dir {
+			m.footerText = sanitizeText("committed in " + msg.dir + ": " + msg.summary)
+			m.footerIsError = false
+			return m, nil
+		}
 		m = m.withCommitPopupClosed()
 		m.summaryInput.Reset()
 		m.descriptionBox.Reset()
@@ -110,6 +133,11 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.footerIsError = false
 		return m, filesRequest{repository: m.repository}.load
 	case commitFailedMsg:
+		if msg.dir != m.repository.Dir {
+			m.footerText = sanitizeText(singleLine(msg.err.Error()))
+			m.footerIsError = true
+			return m, nil
+		}
 		m.commitRunning = false
 		m.commitError = sanitizeLines(strings.TrimSpace(msg.err.Error()))
 		return m, nil
@@ -167,13 +195,39 @@ func (m Model) updateBrowsing(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		}
 		return m, request.unstage
 	case "c":
+		if m.repository.Dir == "" {
+			return m, nil
+		}
 		m.committing = true
 		m.descriptionFocused = false
 		return m, m.summaryInput.Focus()
 	case "r":
+		if m.repository.Dir == "" {
+			return m, nil
+		}
 		return m, filesRequest{repository: m.repository}.load
 	}
 	return m, nil
+}
+
+// withRepository shows repository, or rejection when no repository is allowed, and drops everything shown for the
+// previous one, including a commit message being written for it.
+func (m Model) withRepository(repository gitrepo.Repository, rejection string) Model {
+	m = m.withCommitPopupClosed()
+	m.summaryInput.Reset()
+	m.descriptionBox.Reset()
+	m.repository = repository
+	m.rejection = rejection
+	m.branch = ""
+	m.files = []gitrepo.FileStatus{}
+	m.selected = 0
+	m.listOffset = 0
+	m.diffPath = ""
+	m.fileDiff = diff.FileDiff{}
+	m.diffView.SetYOffset(0)
+	m.footerText = ""
+	m.footerIsError = false
+	return m.withLayout()
 }
 
 func (m Model) updateCommitBox(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
@@ -360,8 +414,15 @@ func (m Model) View() tea.View {
 	}
 	view.AltScreen = true
 	view.MouseMode = tea.MouseModeCellMotion
-	view.WindowTitle = "perusal: " + filepath.Base(m.repository.Dir)
+	view.WindowTitle = m.windowTitle()
 	return view
+}
+
+func (m Model) windowTitle() string {
+	if m.repository.Dir == "" {
+		return "perusal"
+	}
+	return "perusal: " + sanitizeText(filepath.Base(m.repository.Dir))
 }
 
 func (m Model) renderScreen() string {
@@ -380,7 +441,14 @@ func (m Model) branchLabel() string {
 }
 
 func (m Model) renderHeader() string {
-	header := appNameStyle.Render("perusal") + " " + repositoryStyle.Render(sanitizeText(filepath.Base(m.repository.Dir))) +
+	appName := appNameStyle.Render("perusal") + " "
+	switch {
+	case m.rejection != "":
+		return fitToWidth(appName+errorStyle.Render(refusedMessage), m.width)
+	case m.repository.Dir == "":
+		return fitToWidth(appName+mutedStyle.Render(waitingMessage), m.width)
+	}
+	header := appName + repositoryStyle.Render(sanitizeText(filepath.Base(m.repository.Dir))) +
 		"  " + branchStyle.Render(" "+m.branchLabel())
 	return fitToWidth(header, m.width)
 }
@@ -397,7 +465,7 @@ func (m Model) renderFileList() string {
 			rows = append(rows, row)
 		}
 	}
-	if len(m.files) == 0 {
+	if len(m.files) == 0 && m.repository.Dir != "" {
 		rows = append(rows, mutedStyle.Render("working tree clean"))
 	}
 	return renderPane(m.listTitle(), rows, innerWidth, m.paneInnerHeight())
@@ -414,6 +482,10 @@ func renderFileRow(file gitrepo.FileStatus) string {
 }
 
 func (m Model) renderDiffPane() string {
+	if m.rejection != "" {
+		reason := errorStyle.Render(lipgloss.Wrap(m.rejection, m.diffInnerWidth(), ""))
+		return renderPane("refused", strings.Split(reason, "\n"), m.diffInnerWidth(), m.paneInnerHeight())
+	}
 	if len(m.files) == 0 {
 		return renderPane("diff", []string{}, m.diffInnerWidth(), m.paneInnerHeight())
 	}

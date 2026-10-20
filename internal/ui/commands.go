@@ -10,23 +10,41 @@ import (
 	"github.com/CLBRITTON2/perusal/internal/gitrepo"
 )
 
+// RepositoryFocused switches the review to Repository, unless it is already on screen.
+type RepositoryFocused struct {
+	Repository gitrepo.Repository
+}
+
+// FocusRejected clears the review and shows Reason, so nothing of the previous repository stays on screen.
+type FocusRejected struct {
+	Reason string
+}
+
+// The messages below carry dir, the repository they came from, so a result that lands after a switch is dropped.
+
 type filesLoadedMsg struct {
+	dir    string
 	branch string
 	files  []gitrepo.FileStatus
 }
 
 type diffLoadedMsg struct {
+	dir      string
 	path     string
 	fileDiff diff.FileDiff
 }
 
-type indexChangedMsg struct{}
+type indexChangedMsg struct {
+	dir string
+}
 
 type committedMsg struct {
+	dir     string
 	summary string
 }
 
 type commitFailedMsg struct {
+	dir string
 	err error
 }
 
@@ -48,7 +66,7 @@ func (r filesRequest) load() tea.Msg {
 	if err != nil {
 		return gitFailedMsg{err: err}
 	}
-	return filesLoadedMsg{branch: branch, files: files}
+	return filesLoadedMsg{dir: r.repository.Dir, branch: branch, files: files}
 }
 
 type fileRequest struct {
@@ -65,21 +83,21 @@ func (r fileRequest) loadDiff() tea.Msg {
 	if err != nil {
 		return gitFailedMsg{err: fmt.Errorf("parse diff of %s: %w", r.file.Path, err)}
 	}
-	return diffLoadedMsg{path: r.file.Path, fileDiff: fileDiff}
+	return diffLoadedMsg{dir: r.repository.Dir, path: r.file.Path, fileDiff: fileDiff}
 }
 
 func (r fileRequest) stage() tea.Msg {
 	if err := r.repository.Stage(context.Background(), r.file); err != nil {
 		return gitFailedMsg{err: err}
 	}
-	return indexChangedMsg{}
+	return indexChangedMsg{dir: r.repository.Dir}
 }
 
 func (r fileRequest) unstage() tea.Msg {
 	if err := r.repository.Unstage(context.Background(), r.file); err != nil {
 		return gitFailedMsg{err: err}
 	}
-	return indexChangedMsg{}
+	return indexChangedMsg{dir: r.repository.Dir}
 }
 
 type commitRequest struct {
@@ -90,7 +108,7 @@ type commitRequest struct {
 func (r commitRequest) commit() tea.Msg {
 	summary, err := r.repository.Commit(context.Background(), r.message)
 	if err != nil {
-		return commitFailedMsg{err: err}
+		return commitFailedMsg{dir: r.repository.Dir, err: err}
 	}
-	return committedMsg{summary: summary}
+	return committedMsg{dir: r.repository.Dir, summary: summary}
 }
