@@ -23,6 +23,25 @@ func TestRenderFileDiff(t *testing.T) {
 	t.Run("showsANewFileAcrossTheWholeWidth", showsANewFileAcrossTheWholeWidth)
 }
 
+func TestBorderLine(t *testing.T) {
+	t.Run("cutsALongTitleToKeepTheLineCounts", cutsALongTitleToKeepTheLineCounts)
+}
+
+func cutsALongTitleToKeepTheLineCounts(t *testing.T) {
+	counts := renderLineCounts(diff.LineCounts{Added: 12, Removed: 3})
+
+	got := []string{
+		ansi.Strip(borderLine("╭", titleStyle, "internal/ui/model.go", counts, "╮", 22)),
+		ansi.Strip(borderLine("╭", titleStyle, "a.go", counts, "╮", 22)),
+		ansi.Strip(borderLine("╭", titleStyle, "a.go", counts, "╮", 13)),
+	}
+
+	want := []string{"╭─ internal… ─ +12 -3 ─╮", "╭─ a.go ────── +12 -3 ─╮", "╭─ a.go ──────╮"}
+	if strings.Join(got, "\n") != strings.Join(want, "\n") {
+		t.Fatalf("got\n%s\nwant\n%s", strings.Join(got, "\n"), strings.Join(want, "\n"))
+	}
+}
+
 func showsANewFileAcrossTheWholeWidth(t *testing.T) {
 	fileDiff := diff.FileDiff{Change: diff.FileAdded, Hunks: []diff.Hunk{{
 		Header: "@@ -0,0 +1,2 @@",

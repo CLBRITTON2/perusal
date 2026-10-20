@@ -877,10 +877,10 @@ func (m Model) renderLists() string {
 	if m.view == viewLog {
 		return lipgloss.JoinVertical(lipgloss.Left,
 			renderFoldedPane("changes", m.changesLabel(), innerWidth),
-			renderPane(m.logTitle(), m.logLabel(), m.renderLogRows(innerWidth), innerWidth, m.listInnerHeight()))
+			renderPane(m.logTitle(), "", m.logLabel(), m.renderLogRows(innerWidth), innerWidth, m.listInnerHeight()))
 	}
 	return lipgloss.JoinVertical(lipgloss.Left,
-		renderPane("changes", m.changesLabel(), m.fileRows(innerWidth), innerWidth, m.listInnerHeight()),
+		renderPane("changes", "", m.changesLabel(), m.fileRows(innerWidth), innerWidth, m.listInnerHeight()),
 		renderFoldedPane(m.logTitle(), m.logLabel(), innerWidth))
 }
 
@@ -1013,14 +1013,15 @@ func (m Model) renderDiffPane() string {
 	switch {
 	case m.rejection != "":
 		reason := errorStyle.Render(lipgloss.Wrap(m.rejection, width, ""))
-		return renderPane("refused", "", strings.Split(reason, "\n"), width, height)
+		return renderPane("refused", "", "", strings.Split(reason, "\n"), width, height)
 	case m.view == viewLog && len(m.commits) > 0:
-		return renderPane(m.commitPaneTitle(), m.scrollLabel(), strings.Split(m.diffView.View(), "\n"), width, height)
+		return renderPane(m.commitPaneTitle(), m.commitLineCounts(), m.scrollLabel(),
+			strings.Split(m.diffView.View(), "\n"), width, height)
 	case m.view == viewChanges && len(m.status.Files) > 0:
-		return renderPane(sanitizeText(m.diffPath), m.scrollLabel(), strings.Split(m.diffView.View(), "\n"), width,
-			height)
+		return renderPane(sanitizeText(m.diffPath), m.fileLineCounts(), m.scrollLabel(),
+			strings.Split(m.diffView.View(), "\n"), width, height)
 	default:
-		return renderPane("diff", "", []string{}, width, height)
+		return renderPane("diff", "", "", []string{}, width, height)
 	}
 }
 
@@ -1031,6 +1032,31 @@ func (m Model) commitPaneTitle() string {
 		return sanitizeText(commit.ShortHash + " " + sections[m.selectedFile].Path)
 	}
 	return sanitizeText(commit.ShortHash + " " + commit.Summary)
+}
+
+func (m Model) fileLineCounts() string {
+	if m.diffPath == "" {
+		return ""
+	}
+	return renderLineCounts(diff.CountLines(m.fileDiff))
+}
+
+// The selected file's counts, or the whole commit's on its own row.
+func (m Model) commitLineCounts() string {
+	sections, loaded := m.commitFiles[m.commits[m.selectedCommit].Hash]
+	if !loaded {
+		return ""
+	}
+	if m.selectedFile != commitRow {
+		return renderLineCounts(diff.CountLines(sections[m.selectedFile].FileDiff))
+	}
+	total := diff.LineCounts{}
+	for _, section := range sections {
+		counts := diff.CountLines(section.FileDiff)
+		total.Added += counts.Added
+		total.Removed += counts.Removed
+	}
+	return renderLineCounts(total)
 }
 
 func (m Model) scrollLabel() string {

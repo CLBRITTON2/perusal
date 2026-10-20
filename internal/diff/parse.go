@@ -53,6 +53,26 @@ type FileSection struct {
 	FileDiff FileDiff
 }
 
+type LineCounts struct {
+	Added   int
+	Removed int
+}
+
+func CountLines(fileDiff FileDiff) LineCounts {
+	counts := LineCounts{}
+	for _, hunk := range fileDiff.Hunks {
+		for _, row := range hunk.Rows {
+			if row.Left.Kind == LineRemoved {
+				counts.Removed++
+			}
+			if row.Right.Kind == LineAdded {
+				counts.Added++
+			}
+		}
+	}
+	return counts
+}
+
 var hunkHeader = regexp.MustCompile(`^@@ -(\d+)(?:,\d+)? \+(\d+)(?:,\d+)? @@`)
 
 const fileHeaderPrefix = "diff --git "

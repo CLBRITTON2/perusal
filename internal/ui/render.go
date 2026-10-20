@@ -227,13 +227,14 @@ func spaceBetween(left string, right string, width int) string {
 	return left + strings.Repeat(" ", gap) + right
 }
 
-func renderPane(title string, label string, body []string, innerWidth int, innerHeight int) string {
-	lines := []string{borderLine("╭", titleStyle, title, "╮", innerWidth)}
+// topRight is pre-styled and sits at the right end of the top border, kept whole while the title is cut.
+func renderPane(title string, topRight string, label string, body []string, innerWidth int, innerHeight int) string {
+	lines := []string{borderLine("╭", titleStyle, title, topRight, "╮", innerWidth)}
 	side := borderStyle.Render("│")
 	for _, line := range fitLines(body, innerWidth, innerHeight) {
 		lines = append(lines, side+line+side)
 	}
-	lines = append(lines, borderLine("╰", paneLabelStyle, label, "╯", innerWidth))
+	lines = append(lines, borderLine("╰", paneLabelStyle, label, "", "╯", innerWidth))
 	return strings.Join(lines, "\n")
 }
 
@@ -252,14 +253,29 @@ func renderFoldedPane(title string, label string, innerWidth int) string {
 	return left + borderStyle.Render(strings.Repeat("─", fill)) + right
 }
 
-func borderLine(leftCorner string, style lipgloss.Style, text string, rightCorner string, innerWidth int) string {
+func borderLine(leftCorner string, style lipgloss.Style, text string, rightText string, rightCorner string,
+	innerWidth int) string {
 	if text == "" || innerWidth < 4 {
 		return borderStyle.Render(leftCorner + strings.Repeat("─", max(innerWidth, 0)) + rightCorner)
 	}
-	fitted := ansi.Truncate(text, innerWidth-4, "…")
-	fill := innerWidth - 3 - ansi.StringWidth(fitted)
+	var right string
+	var reserved int
+	if rightText != "" && ansi.StringWidth(rightText)+8 <= innerWidth {
+		right = " " + rightText + borderStyle.Render(" ─"+rightCorner)
+		reserved = ansi.StringWidth(rightText) + 3
+	} else {
+		right = borderStyle.Render(rightCorner)
+		reserved = 0
+	}
+	fitted := ansi.Truncate(text, innerWidth-4-reserved, "…")
+	fill := innerWidth - 3 - reserved - ansi.StringWidth(fitted)
 	return borderStyle.Render(leftCorner+"─ ") + style.Render(fitted) + borderStyle.Render(" "+
-		strings.Repeat("─", fill)+rightCorner)
+		strings.Repeat("─", fill)) + right
+}
+
+func renderLineCounts(counts diff.LineCounts) string {
+	return addedMarkStyle.Render("+"+strconv.Itoa(counts.Added)) + " " +
+		deletedMarkStyle.Render("-"+strconv.Itoa(counts.Removed))
 }
 
 // Text can come from the agent: a control character could start an escape, a bidi control could disguise code.
