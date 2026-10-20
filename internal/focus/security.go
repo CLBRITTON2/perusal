@@ -6,9 +6,12 @@ import (
 	"unsafe"
 
 	"golang.org/x/sys/windows"
+	"golang.org/x/sys/windows/registry"
 )
 
 const fileDeleteChild = 0x40
+
+const profileListKey = `SOFTWARE\Microsoft\Windows NT\CurrentVersion\ProfileList`
 
 // The bits setup-claude.ps1 in windows-dev denies on every .git: icacls (OI)(CI)(WD,AD,WEA,WA,DE,DC).
 const (
@@ -27,6 +30,24 @@ func LookupAccountSID(account string) (string, error) {
 		return "", fmt.Errorf("account %s is not a user account (SID type %d)", account, accountType)
 	}
 	return sid.String(), nil
+}
+
+// ProfileDirectory returns the profile folder Windows records for the account with SID sid.
+func ProfileDirectory(sid string) (string, error) {
+	key, err := registry.OpenKey(registry.LOCAL_MACHINE, profileListKey+`\`+sid, registry.QUERY_VALUE)
+	if err != nil {
+		return "", fmt.Errorf("open the profile list entry of %s: %w", sid, err)
+	}
+	defer key.Close()
+	recorded, _, err := key.GetStringValue("ProfileImagePath")
+	if err != nil {
+		return "", fmt.Errorf("read the profile path of %s: %w", sid, err)
+	}
+	expanded, err := registry.ExpandString(recorded)
+	if err != nil {
+		return "", fmt.Errorf("expand the profile path %s of %s: %w", recorded, sid, err)
+	}
+	return expanded, nil
 }
 
 // VerifyGitDir succeeds when gitDir is a plain directory that the agent does not own and that carries the agent

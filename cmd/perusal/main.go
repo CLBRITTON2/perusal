@@ -6,6 +6,7 @@ import (
 	"flag"
 	"fmt"
 	"os"
+	"path/filepath"
 
 	tea "charm.land/bubbletea/v2"
 
@@ -14,12 +15,8 @@ import (
 	"github.com/CLBRITTON2/perusal/internal/ui"
 )
 
-type followSettings struct {
-	focusFile    string
-	agentDevDir  string
-	ownerDevDir  string
-	agentAccount string
-}
+// focusFileName is where windows-dev's herdr/focus-file plugin publishes the focused pane, in the agent's dev directory.
+const focusFileName = ".herdr-focus"
 
 func main() {
 	err := run(os.Args[1:])
@@ -32,44 +29,71 @@ func main() {
 	}
 }
 
-// run reviews and commits the changes of one working tree, or of whichever one the agent's focused herdr pane works
-// in, until the user quits.
+// run reviews and commits the changes of one working tree, or with follow, of whichever one the agent's focused herdr
+// pane works in, until the user quits.
 func run(args []string) error {
+	if len(args) > 0 && args[0] == "follow" {
+		return runFollow(args[1:])
+	}
+	return runReview(args)
+}
+
+func runReview(args []string) error {
 	flags := flag.NewFlagSet("perusal", flag.ContinueOnError)
+	flags.Usage = func() {
+		fmt.Fprint(flags.Output(), "usage:\n"+
+			"  perusal [-repo <dir>]           review the working tree of the current directory, or of <dir>\n"+
+			"  perusal follow <agent account>  review whichever working tree the agent's focused herdr pane is in\n\n")
+		flags.PrintDefaults()
+	}
 	repositoryPath := flags.String("repo", "", "any directory inside the git working tree to review")
-	focusFile := flags.String("follow", "", "file holding the directory of the agent's focused herdr pane, to review "+
-		"whichever working tree that pane is in")
-	agentDevDir := flags.String("agent-dev-dir", "", "with -follow: the dev directory as the agent account's paths in "+
-		"the focus file name it")
-	ownerDevDir := flags.String("owner-dev-dir", "", "with -follow: the same dev directory as this account reaches it")
-	agentAccount := flags.String("agent-account", "", "with -follow: the agent account, whose write deny every "+
-		"followed .git must carry")
 	if err := flags.Parse(args); err != nil {
 		return fmt.Errorf("parse flags: %w", err)
 	}
 	if flags.NArg() > 0 {
-		return fmt.Errorf("perusal takes no arguments, got %q", flags.Args())
+		return fmt.Errorf("unexpected arguments %q, see perusal -h", flags.Args())
 	}
-	followFlagSet := *agentDevDir != "" || *ownerDevDir != "" || *agentAccount != ""
-	switch {
-	case *repositoryPath != "" && *focusFile != "":
-		return errors.New("pass -repo or -follow, not both")
-	case *repositoryPath != "" && followFlagSet:
-		return errors.New("-agent-dev-dir, -owner-dev-dir and -agent-account go with -follow, not -repo")
-	case *repositoryPath != "":
+	if *repositoryPath != "" {
 		return review(*repositoryPath)
-	case *focusFile != "" && (*agentDevDir == "" || *ownerDevDir == "" || *agentAccount == ""):
-		return errors.New("-follow needs -agent-dev-dir, -owner-dev-dir and -agent-account")
-	case *focusFile != "":
-		return follow(followSettings{
-			focusFile:    *focusFile,
-			agentDevDir:  *agentDevDir,
-			ownerDevDir:  *ownerDevDir,
-			agentAccount: *agentAccount,
-		})
-	default:
-		return errors.New("pass -repo <dir> or -follow <focus file>")
 	}
+	workingDir, err := os.Getwd()
+	if err != nil {
+		return fmt.Errorf("get the current directory: %w", err)
+	}
+	return review(workingDir)
+}
+
+// runFollow finds the agent's dev directory and focus file from the agent account alone, and maps them to the owner's
+// dev directory, the layout windows-dev's setup-agent-account.ps1 creates.
+func runFollow(args []string) error {
+	flags := flag.NewFlagSet("perusal follow", flag.ContinueOnError)
+	flags.Usage = func() {
+		fmt.Fprint(flags.Output(), "usage: perusal follow <agent account>\n\n"+
+			"Reviews whichever working tree the agent's focused herdr pane is in, read from <agent profile>\\dev\\"+
+			focusFileName+".\n")
+	}
+	if err := flags.Parse(args); err != nil {
+		return fmt.Errorf("parse flags: %w", err)
+	}
+	if flags.NArg() != 1 {
+		return fmt.Errorf("perusal follow takes one agent account, as in perusal follow claude, got %q", flags.Args())
+	}
+	agentAccount := flags.Arg(0)
+	agentSID, err := focus.LookupAccountSID(agentAccount)
+	if err != nil {
+		return err
+	}
+	agentProfileDir, err := focus.ProfileDirectory(agentSID)
+	if err != nil {
+		return err
+	}
+	ownerHome, err := os.UserHomeDir()
+	if err != nil {
+		return fmt.Errorf("find this account's home directory: %w", err)
+	}
+	agentDevDir := filepath.Join(agentProfileDir, "dev")
+	rules := focus.Rules{AgentDevDir: agentDevDir, OwnerDevDir: filepath.Join(ownerHome, "dev"), AgentSID: agentSID}
+	return follow(rules, filepath.Join(agentDevDir, focusFileName))
 }
 
 func review(repositoryPath string) error {
@@ -85,22 +109,17 @@ func review(repositoryPath string) error {
 	return nil
 }
 
-func follow(settings followSettings) error {
-	agentSID, err := focus.LookupAccountSID(settings.agentAccount)
-	if err != nil {
-		return err
-	}
+func follow(rules focus.Rules, focusFile string) error {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
-	rules := focus.Rules{AgentDevDir: settings.agentDevDir, OwnerDevDir: settings.ownerDevDir, AgentSID: agentSID}
-	results, err := focus.Follow(ctx, rules, settings.focusFile)
+	results, err := focus.Follow(ctx, rules, focusFile)
 	if err != nil {
 		return err
 	}
 	program := tea.NewProgram(ui.New())
-	go forwardResults(program, results, settings.focusFile)
+	go forwardResults(program, results, focusFile)
 	if _, err := program.Run(); err != nil {
-		return fmt.Errorf("run perusal following %s: %w", settings.focusFile, err)
+		return fmt.Errorf("run perusal following %s: %w", focusFile, err)
 	}
 	return nil
 }
