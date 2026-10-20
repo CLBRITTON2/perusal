@@ -1,6 +1,7 @@
 package ui
 
 import (
+	"fmt"
 	"reflect"
 	"strings"
 	"testing"
@@ -23,13 +24,17 @@ func TestLog(t *testing.T) {
 	t.Run("searchKeepsOnlyMatchingMessagesIgnoringCase", searchKeepsOnlyMatchingMessagesIgnoringCase)
 	t.Run("anUppercaseLetterMakesTheSearchCaseSensitive", anUppercaseLetterMakesTheSearchCaseSensitive)
 	t.Run("clickingTheFoldedLogOpensIt", clickingTheFoldedLogOpensIt)
+	t.Run("nearingTheEndOfAFullPageLoadsTheNextOne", nearingTheEndOfAFullPageLoadsTheNextOne)
+	t.Run("aShortLogIsTheWholeHistory", aShortLogIsTheWholeHistory)
+	t.Run("aReloadReadWithTheOldLimitIsDropped", aReloadReadWithTheOldLimitIsDropped)
+	t.Run("searchLoadsTheWholeHistory", searchLoadsTheWholeHistory)
 }
 
 func clickingTheFoldedLogOpensIt(t *testing.T) {
 	m := update(t, New(), tea.WindowSizeMsg{Width: 120, Height: 30})
 	m = update(t, m, RepositoryFocused{Repository: gitrepo.Repository{Dir: "C:/dev/repo"}})
 	m = update(t, m, statusLoadedMsg{dir: "C:/dev/repo", status: gitrepo.Status{Files: twoFiles(), HasCommits: true}})
-	m = update(t, m, logLoadedMsg{dir: "C:/dev/repo", commits: []gitrepo.Commit{
+	m = update(t, m, logLoadedMsg{dir: "C:/dev/repo", limit: logPageSize, commits: []gitrepo.Commit{
 		{Hash: strings.Repeat("1", 40)}, {Hash: strings.Repeat("2", 40)},
 	}})
 
@@ -89,7 +94,7 @@ func anUppercaseLetterMakesTheSearchCaseSensitive(t *testing.T) {
 func logOf(t *testing.T, commits []gitrepo.Commit) Model {
 	t.Helper()
 	m := update(t, New(), RepositoryFocused{Repository: gitrepo.Repository{Dir: "C:/dev/repo"}})
-	m = update(t, m, logLoadedMsg{dir: "C:/dev/repo", commits: commits})
+	m = update(t, m, logLoadedMsg{dir: "C:/dev/repo", limit: logPageSize, commits: commits})
 	return update(t, m, tea.KeyPressMsg{Code: tea.KeyTab})
 }
 
@@ -107,11 +112,11 @@ func selectionFollowsTheCommitWhenNewOnesArriveAbove(t *testing.T) {
 	second := gitrepo.Commit{Hash: strings.Repeat("2", 40)}
 	added := gitrepo.Commit{Hash: strings.Repeat("3", 40)}
 	m := update(t, New(), RepositoryFocused{Repository: gitrepo.Repository{Dir: "C:/dev/repo"}})
-	m = update(t, m, logLoadedMsg{dir: "C:/dev/repo", commits: []gitrepo.Commit{first, second}})
+	m = update(t, m, logLoadedMsg{dir: "C:/dev/repo", limit: logPageSize, commits: []gitrepo.Commit{first, second}})
 	m = update(t, m, tea.KeyPressMsg{Code: tea.KeyTab})
 	m = update(t, m, tea.KeyPressMsg{Code: 'j', Text: "j"})
 
-	m = update(t, m, logLoadedMsg{dir: "C:/dev/repo", commits: []gitrepo.Commit{added, first, second}})
+	m = update(t, m, logLoadedMsg{dir: "C:/dev/repo", limit: logPageSize, commits: []gitrepo.Commit{added, first, second}})
 
 	if m.selectedCommitHash() != second.Hash {
 		t.Fatalf("got selected commit %q, want %q", m.selectedCommitHash(), second.Hash)
@@ -169,4 +174,63 @@ func twoFiles() []gitrepo.FileStatus {
 		{Path: "a.go", IndexStatus: ' ', WorktreeStatus: 'M'},
 		{Path: "b.go", IndexStatus: 'M', WorktreeStatus: ' '},
 	}
+}
+
+func nearingTheEndOfAFullPageLoadsTheNextOne(t *testing.T) {
+	m := update(t, logOf(t, numberedCommits(logPageSize)), tea.WindowSizeMsg{Width: 120, Height: 30})
+
+	next, cmd := selectLogRow(t, m, logPageSize-1)
+
+	if next.logLimit != 2*logPageSize || cmd == nil {
+		t.Fatalf("got limit %d, command %v, want limit %d and a load", next.logLimit, cmd, 2*logPageSize)
+	}
+}
+
+func aShortLogIsTheWholeHistory(t *testing.T) {
+	m := update(t, logOf(t, numberedCommits(3)), tea.WindowSizeMsg{Width: 120, Height: 30})
+
+	next, _ := selectLogRow(t, m, 2)
+
+	if next.logLimit != logPageSize {
+		t.Fatalf("got limit %d, want %d", next.logLimit, logPageSize)
+	}
+}
+
+func aReloadReadWithTheOldLimitIsDropped(t *testing.T) {
+	m := update(t, logOf(t, numberedCommits(logPageSize)), tea.WindowSizeMsg{Width: 120, Height: 30})
+	m, _ = selectLogRow(t, m, logPageSize-1)
+
+	m = update(t, m, logLoadedMsg{dir: "C:/dev/repo", limit: logPageSize, commits: numberedCommits(2)})
+
+	if len(m.commits) != logPageSize || m.selectedCommit != logPageSize-1 {
+		t.Fatalf("got %d commits, selected %d, want the page kept", len(m.commits), m.selectedCommit)
+	}
+}
+
+func searchLoadsTheWholeHistory(t *testing.T) {
+	m := logOf(t, numberedCommits(logPageSize))
+
+	m = typeSearch(t, m, "commit")
+
+	if m.logLimit != wholeHistory {
+		t.Fatalf("got limit %d, want %d", m.logLimit, wholeHistory)
+	}
+}
+
+func numberedCommits(count int) []gitrepo.Commit {
+	commits := []gitrepo.Commit{}
+	for index := range count {
+		commits = append(commits, gitrepo.Commit{Hash: fmt.Sprintf("%040d", index), Message: fmt.Sprintf("commit %d", index)})
+	}
+	return commits
+}
+
+func selectLogRow(t *testing.T, m Model, index int) (Model, tea.Cmd) {
+	t.Helper()
+	next, cmd := m.selectLogRow(index)
+	model, isModel := next.(Model)
+	if !isModel {
+		t.Fatalf("selectLogRow returned %T, want Model", next)
+	}
+	return model, cmd
 }

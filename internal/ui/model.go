@@ -65,6 +65,10 @@ type Model struct {
 	diffPath   string
 	fileDiff   diff.FileDiff
 	commits    []gitrepo.Commit
+	// graph is the branch lines of commits, laid out again only when their hashes or parents change.
+	graph []graphRow
+	// logLimit is how many commits the log asks git for. Fewer come back once the whole history is loaded.
+	logLimit int
 	// logLoadedAt is when commits was read, the reference for their ages.
 	logLoadedAt    time.Time
 	selectedCommit int
@@ -119,6 +123,8 @@ func New() Model {
 	return Model{
 		status:         gitrepo.Status{Files: []gitrepo.FileStatus{}},
 		commits:        []gitrepo.Commit{},
+		graph:          []graphRow{},
+		logLimit:       logPageSize,
 		selectedFile:   commitRow,
 		commitFiles:    map[string][]diff.FileSection{},
 		expanded:       map[string]bool{},
@@ -170,7 +176,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.fileDiff = msg.fileDiff
 		return m.withDiffContent(), nil
 	case logLoadedMsg:
-		if msg.dir != m.repository.Dir {
+		if msg.dir != m.repository.Dir || msg.limit != m.logLimit {
 			return m, nil
 		}
 		return m.withCommits(msg.commits, msg.loadedAt)
@@ -272,10 +278,11 @@ func (m Model) withStatus(status gitrepo.Status) (tea.Model, tea.Cmd) {
 	m.selected = min(m.selected, max(len(m.status.Files)-1, 0))
 	if !status.HasCommits {
 		m.commits = []gitrepo.Commit{}
+		m.graph = []graphRow{}
 		m.selectedFile = commitRow
 		return m.withLayout(), m.loadSelectedDiff()
 	}
-	return m.withLayout(), tea.Batch(m.loadSelectedDiff(), repositoryRequest{repository: m.repository}.loadLog)
+	return m.withLayout(), tea.Batch(m.loadSelectedDiff(), logRequest{repository: m.repository, limit: m.logLimit}.load)
 }
 
 func (m Model) updateBrowsing(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
@@ -367,7 +374,9 @@ func (m Model) withRepository(repository gitrepo.Repository, rejection string) M
 	m.diffPath = ""
 	m.fileDiff = diff.FileDiff{}
 	m.commits = []gitrepo.Commit{}
+	m.graph = []graphRow{}
 	m.selectedCommit = 0
+	m.logLimit = logPageSize
 	m.selectedFile = commitRow
 	m.logOffset = 0
 	m.commitFiles = map[string][]diff.FileSection{}
@@ -517,8 +526,18 @@ func (m Model) selectLogRow(index int) (tea.Model, tea.Cmd) {
 	}
 	m.selectedCommit = row.commit
 	m.selectedFile = row.file
-	m = m.withListScrolled().withDiffContent()
-	return m, m.loadSelectedCommitDiff()
+	m, loadMore := m.withListScrolled().withDiffContent().withMoreLogNearEnd()
+	return m, tea.Batch(m.loadSelectedCommitDiff(), loadMore)
+}
+
+// withMoreLogNearEnd asks for the next page of the log once the selection is within a screen of the last loaded
+// commit, unless the whole history is loaded or a page is already on its way.
+func (m Model) withMoreLogNearEnd() (Model, tea.Cmd) {
+	if len(m.commits) < m.logLimit || m.selectedCommit < len(m.commits)-m.listInnerHeight() {
+		return m, nil
+	}
+	m.logLimit = len(m.commits) + logPageSize
+	return m, logRequest{repository: m.repository, limit: m.logLimit}.load
 }
 
 // withCommits shows a newly read log. The selection stays on the same commit when new ones arrive above it.
@@ -526,6 +545,9 @@ func (m Model) withCommits(commits []gitrepo.Commit, loadedAt time.Time) (tea.Mo
 	index, found := commitIndex(commits, m.selectedCommitHash())
 	if !found {
 		m.selectedFile = commitRow
+	}
+	if !sameTopology(commits, m.commits) {
+		m.graph = commitGraph(commits)
 	}
 	m.commits = commits
 	m.logLoadedAt = loadedAt
@@ -594,7 +616,7 @@ func compileSearch(pattern string) (*regexp.Regexp, error) {
 }
 
 // withLogFilter shows only the commits whose message filter matches, every commit when it is nil. A selection the
-// filter hides moves to the first row left.
+// filter hides moves to the first row left. A filter loads the whole history, so it searches every commit.
 func (m Model) withLogFilter(filter *regexp.Regexp) (tea.Model, tea.Cmd) {
 	m.logFilter = filter
 	rows := m.visibleLogRows()
@@ -604,7 +626,11 @@ func (m Model) withLogFilter(filter *regexp.Regexp) (tea.Model, tea.Cmd) {
 		m.diffView.SetYOffset(0)
 	}
 	m = m.withListScrolled().withDiffContent()
-	return m, m.loadSelectedCommitDiff()
+	if filter == nil || len(m.commits) < m.logLimit {
+		return m, m.loadSelectedCommitDiff()
+	}
+	m.logLimit = wholeHistory
+	return m, tea.Batch(m.loadSelectedCommitDiff(), logRequest{repository: m.repository, limit: m.logLimit}.load)
 }
 
 // logRow is one row of the log tree: a commit, or one of its files under it when it is expanded. file indexes the
@@ -941,7 +967,14 @@ func (m Model) logGraph() []graphRow {
 	if m.logFilter != nil {
 		return make([]graphRow, len(m.commits))
 	}
-	return commitGraph(m.commits)
+	return m.graph
+}
+
+// sameTopology reports whether both logs hold the same commits with the same parents, all that commitGraph reads.
+func sameTopology(first []gitrepo.Commit, second []gitrepo.Commit) bool {
+	return slices.EqualFunc(first, second, func(a gitrepo.Commit, b gitrepo.Commit) bool {
+		return a.Hash == b.Hash && slices.Equal(a.Parents, b.Parents)
+	})
 }
 
 func (m Model) renderLogRow(row logRow, graph graphRow, width int) string {

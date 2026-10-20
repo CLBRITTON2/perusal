@@ -3,6 +3,7 @@ package ui
 import (
 	"context"
 	"fmt"
+	"math"
 	"time"
 
 	tea "charm.land/bubbletea/v2"
@@ -12,8 +13,10 @@ import (
 )
 
 const (
-	maximumLogCommits = 500
-	pollInterval      = 2 * time.Second
+	logPageSize  = 500
+	pollInterval = 2 * time.Second
+	// wholeHistory is a log limit no repository reaches. git parses --max-count into a 32-bit int.
+	wholeHistory = math.MaxInt32
 )
 
 // RepositoryFocused switches the review to Repository, unless it is already on screen.
@@ -46,8 +49,10 @@ type diffLoadedMsg struct {
 	fileDiff diff.FileDiff
 }
 
+// logLoadedMsg carries the limit it was read with, so a reload still in flight when the limit grows is dropped.
 type logLoadedMsg struct {
 	dir      string
+	limit    int
 	commits  []gitrepo.Commit
 	loadedAt time.Time
 }
@@ -112,12 +117,17 @@ func (r repositoryRequest) unstageAll() tea.Msg {
 	return indexChangedMsg{dir: r.repository.Dir}
 }
 
-func (r repositoryRequest) loadLog() tea.Msg {
-	commits, err := r.repository.Log(context.Background(), maximumLogCommits)
+type logRequest struct {
+	repository gitrepo.Repository
+	limit      int
+}
+
+func (r logRequest) load() tea.Msg {
+	commits, err := r.repository.Log(context.Background(), r.limit)
 	if err != nil {
 		return gitFailedMsg{err: err}
 	}
-	return logLoadedMsg{dir: r.repository.Dir, commits: commits, loadedAt: time.Now()}
+	return logLoadedMsg{dir: r.repository.Dir, limit: r.limit, commits: commits, loadedAt: time.Now()}
 }
 
 type pushRequest struct {
