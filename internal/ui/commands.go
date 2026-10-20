@@ -19,8 +19,10 @@ const (
 	wholeHistory = math.MaxInt32
 )
 
-type RepositoryFocused struct {
-	Repository gitrepo.Repository
+// Refusals are the focused paths that failed a check, shown so a refused repository is never silently skipped.
+type RepositoriesFocused struct {
+	Repositories []gitrepo.Repository
+	Refusals     []string
 }
 
 type FocusRejected struct {
@@ -58,6 +60,13 @@ type commitDiffLoadedMsg struct {
 	dir      string
 	hash     string
 	sections []diff.FileSection
+}
+
+// uncommittedLoadedMsg carries the focused repositories it checked instead of a dir, and maps each Dir to whether it
+// has uncommitted changes.
+type uncommittedLoadedMsg struct {
+	focused     []gitrepo.Repository
+	uncommitted map[string]bool
 }
 
 type indexChangedMsg struct {
@@ -114,6 +123,22 @@ func indexChanged(dir string, err error) tea.Msg {
 		return gitFailedMsg{err: err}
 	}
 	return indexChangedMsg{dir: dir}
+}
+
+type focusedRequest struct {
+	repositories []gitrepo.Repository
+}
+
+func (r focusedRequest) loadUncommitted() tea.Msg {
+	uncommitted := map[string]bool{}
+	for _, repository := range r.repositories {
+		status, err := repository.Status(context.Background())
+		if err != nil {
+			return gitFailedMsg{err: err}
+		}
+		uncommitted[repository.Dir] = len(status.Files) > 0
+	}
+	return uncommittedLoadedMsg{focused: r.repositories, uncommitted: uncommitted}
 }
 
 type logRequest struct {

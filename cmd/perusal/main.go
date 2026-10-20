@@ -62,7 +62,7 @@ func review(repositoryPath string) error {
 		return err
 	}
 	program := tea.NewProgram(ui.New())
-	go program.Send(ui.RepositoryFocused{Repository: repository})
+	go program.Send(ui.RepositoriesFocused{Repositories: []gitrepo.Repository{repository}, Refusals: []string{}})
 	if _, err := program.Run(); err != nil {
 		return fmt.Errorf("run perusal on %s: %w", repository.Dir, err)
 	}

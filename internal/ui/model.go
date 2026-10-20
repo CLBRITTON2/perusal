@@ -58,7 +58,10 @@ const (
 var protectedBranches = []string{"main", "master"}
 
 type Model struct {
-	repository     gitrepo.Repository
+	repository gitrepo.Repository
+	// focused lists the repositories the focus named, and uncommitted maps each Dir to whether it has changes.
+	focused        []gitrepo.Repository
+	uncommitted    map[string]bool
 	rejection      string
 	view           viewKind
 	diffFullscreen bool
@@ -114,6 +117,8 @@ func New() Model {
 	helpView.Styles.ShortSeparator = helpSepStyle
 	helpView.Styles.Ellipsis = helpSepStyle
 	return Model{
+		focused:        []gitrepo.Repository{},
+		uncommitted:    map[string]bool{},
 		status:         gitrepo.Status{Files: []gitrepo.FileStatus{}},
 		commits:        []gitrepo.Commit{},
 		graph:          []graphRow{},
@@ -139,20 +144,25 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.width = msg.Width
 		m.height = msg.Height
 		return m.withLayout(), nil
-	case RepositoryFocused:
-		if msg.Repository.Dir == m.repository.Dir && m.rejection == "" {
-			return m, nil
-		}
-		m = m.withRepository(msg.Repository, "")
-		return m, repositoryRequest{repository: m.repository}.loadStatus
+	case RepositoriesFocused:
+		return m.withFocus(msg)
 	case FocusRejected:
 		return m.withRepository(gitrepo.Repository{}, sanitizeSingleLine(msg.Reason)), nil
 	case pollTickMsg:
 		if m.repository.Dir == "" {
-			return m, nextPoll()
+			return m, tea.Sequence(m.loadUncommitted(), nextPoll())
 		}
-		// The next tick waits for this status, so a slow git never stacks up polls.
-		return m, tea.Sequence(repositoryRequest{repository: m.repository}.loadStatus, nextPoll())
+		// The next tick waits for these, so a slow git never stacks up polls.
+		return m, tea.Sequence(repositoryRequest{repository: m.repository}.loadStatus, m.loadUncommitted(), nextPoll())
+	case uncommittedLoadedMsg:
+		if !slices.Equal(msg.focused, m.focused) {
+			return m, nil
+		}
+		m.uncommitted = msg.uncommitted
+		if m.repository.Dir != "" {
+			return m, nil
+		}
+		return m.withFocusedRepository(m.firstToReview())
 	case statusLoadedMsg:
 		if msg.dir != m.repository.Dir {
 			return m, nil
@@ -326,6 +336,8 @@ func (m Model) updateBrowsing(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		return m.openPushPopup()
 	case key.Matches(msg, amendKey) && m.view == viewLog:
 		return m.openAmendPopup(), nil
+	case key.Matches(msg, nextRepositoryKey):
+		return m.cycleRepository()
 	}
 	return m, nil
 }
@@ -350,6 +362,68 @@ func (m Model) withRepository(repository gitrepo.Repository, rejection string) M
 	next.width = m.width
 	next.height = m.height
 	return next.withLayout()
+}
+
+// A focus that still names the repository under review keeps it, so a new edit elsewhere never pulls the review away.
+func (m Model) withFocus(msg RepositoriesFocused) (tea.Model, tea.Cmd) {
+	if m.rejection == "" && slices.Contains(msg.Repositories, m.repository) {
+		m.focused = msg.Repositories
+		return m.withRefusals(msg.Refusals), m.loadUncommitted()
+	}
+	next := m.withRepository(gitrepo.Repository{}, "")
+	next.focused = msg.Repositories
+	if len(next.focused) == 1 {
+		return next.withRefusals(msg.Refusals).withFocusedRepository(next.focused[0])
+	}
+	return next.withRefusals(msg.Refusals), next.loadUncommitted()
+}
+
+func (m Model) withRefusals(refusals []string) Model {
+	if len(refusals) == 0 {
+		return m
+	}
+	return m.withFooterError("refused " + strings.Join(refusals, ", "))
+}
+
+// Keeps the focus and the footer, which may hold refusals of the focus that is still current.
+func (m Model) withFocusedRepository(repository gitrepo.Repository) (tea.Model, tea.Cmd) {
+	next := m.withRepository(repository, "")
+	next.focused = m.focused
+	next.uncommitted = m.uncommitted
+	next.footerText = m.footerText
+	next.footerIsError = m.footerIsError
+	return next, repositoryRequest{repository: repository}.loadStatus
+}
+
+func (m Model) loadUncommitted() tea.Cmd {
+	if len(m.focused) < 2 {
+		return nil
+	}
+	return focusedRequest{repositories: m.focused}.loadUncommitted
+}
+
+func (m Model) firstToReview() gitrepo.Repository {
+	for _, repository := range m.focused {
+		if m.uncommitted[repository.Dir] {
+			return repository
+		}
+	}
+	return m.focused[0]
+}
+
+// The cycle is the focused repositories with uncommitted changes, plus the one under review.
+func (m Model) repositoryCycle() []gitrepo.Repository {
+	return slices.DeleteFunc(slices.Clone(m.focused), func(repository gitrepo.Repository) bool {
+		return repository != m.repository && !m.uncommitted[repository.Dir]
+	})
+}
+
+func (m Model) cycleRepository() (tea.Model, tea.Cmd) {
+	cycle := m.repositoryCycle()
+	if len(cycle) < 2 {
+		return m.withFooterError("no other focused repository has uncommitted changes"), nil
+	}
+	return m.withFocusedRepository(cycle[(slices.Index(cycle, m.repository)+1)%len(cycle)])
 }
 
 func (m Model) withFooterNotice(text string) Model {
@@ -877,9 +951,17 @@ func (m Model) renderHeader() string {
 	case m.repository.Dir == "":
 		return fitToWidth(" "+mutedStyle.Render("waiting for a repository"), m.width)
 	}
-	left := " " + repositoryStyle.Render(folderGlyph+" "+sanitizeText(filepath.Base(m.repository.Dir))) + "  " +
-		branchStyle.Render(branchGlyph+" "+m.branchLabel()) + m.renderAheadBehind()
+	left := " " + repositoryStyle.Render(folderGlyph+" "+sanitizeText(filepath.Base(m.repository.Dir))) +
+		m.renderCyclePosition() + "  " + branchStyle.Render(branchGlyph+" "+m.branchLabel()) + m.renderAheadBehind()
 	return fitToWidth(left, m.width)
+}
+
+func (m Model) renderCyclePosition() string {
+	cycle := m.repositoryCycle()
+	if len(cycle) < 2 {
+		return ""
+	}
+	return mutedStyle.Render(" (" + strconv.Itoa(slices.Index(cycle, m.repository)+1) + " of " + strconv.Itoa(len(cycle)) + ")")
 }
 
 func (m Model) renderAheadBehind() string {
@@ -1111,7 +1193,15 @@ func (m Model) renderFooter() string {
 }
 
 func (m Model) renderHelpLine(bindings []key.Binding) string {
-	return spaceBetween(" "+m.help.ShortHelpView(bindings), mutedStyle.Render(appName)+" ", m.width)
+	return spaceBetween(" "+m.help.ShortHelpView(m.withCycleHelp(bindings)), mutedStyle.Render(appName)+" ", m.width)
+}
+
+// The cycle key goes before quit, the last binding of every help line.
+func (m Model) withCycleHelp(bindings []key.Binding) []key.Binding {
+	if len(m.repositoryCycle()) < 2 {
+		return bindings
+	}
+	return slices.Insert(slices.Clone(bindings), len(bindings)-1, nextRepositoryKey)
 }
 
 func (m Model) overlayPopup(screen string, popup string) string {

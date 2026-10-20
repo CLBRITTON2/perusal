@@ -72,8 +72,16 @@ func forwardResults(program *tea.Program, results <-chan focus.Result, focusFile
 		if result.Err != nil {
 			program.Send(ui.FocusRejected{Reason: result.Err.Error()})
 		} else {
-			program.Send(ui.RepositoryFocused{Repository: result.Repository})
+			program.Send(ui.RepositoriesFocused{Repositories: result.Focus.Repositories, Refusals: refusalReasons(result.Focus.Refusals)})
 		}
 	}
 	program.Send(ui.FocusRejected{Reason: "stopped watching focus file " + focusFile})
+}
+
+func refusalReasons(refusals []error) []string {
+	reasons := []string{}
+	for _, refusal := range refusals {
+		reasons = append(reasons, refusal.Error())
+	}
+	return reasons
 }

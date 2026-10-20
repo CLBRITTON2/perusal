@@ -1,6 +1,6 @@
 //go:build windows
 
-// Package focus maps the agent's focused herdr pane to a repository the owner can safely run git in.
+// Package focus maps the agent's focused herdr pane to the repositories the owner can safely run git in.
 package focus
 
 import (
@@ -11,6 +11,7 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 
 	"github.com/fsnotify/fsnotify"
@@ -21,7 +22,7 @@ import (
 const maximumFocusFileBytes = 4096
 
 var (
-	ErrMalformedFocusFile = errors.New("the focus file must hold one absolute path")
+	ErrMalformedFocusFile = errors.New("the focus file must hold one absolute path per line")
 	ErrOutsideAgentDir    = errors.New("the path is outside the agent directory")
 	ErrNotWorkTree        = errors.New("no .git between the path and the owner directory")
 	ErrGitDirUnprotected  = errors.New("the .git directory is not write-denied to the agent account")
@@ -35,9 +36,15 @@ type Rules struct {
 	AgentSID string
 }
 
+// Repositories are in focus file order, each once. Refusals are the paths that failed a check.
+type Focus struct {
+	Repositories []gitrepo.Repository
+	Refusals     []error
+}
+
 type Result struct {
-	Repository gitrepo.Repository
-	Err        error
+	Focus Focus
+	Err   error
 }
 
 func Follow(ctx context.Context, rules Rules, focusFile string) (<-chan Result, error) {
@@ -100,20 +107,39 @@ func sendResult(ctx context.Context, results chan<- Result, result Result) bool 
 }
 
 func resolveResult(ctx context.Context, rules Rules, focusFile string) Result {
-	repository, err := Resolve(ctx, rules, focusFile)
-	return Result{Repository: repository, Err: err}
+	focus, err := Resolve(ctx, rules, focusFile)
+	return Result{Focus: focus, Err: err}
+}
+
+// Resolve fails only when the focus file is unreadable or none of its paths passes the checks.
+func Resolve(ctx context.Context, rules Rules, focusFile string) (Focus, error) {
+	content, err := readFocusFile(focusFile)
+	if err != nil {
+		return Focus{}, err
+	}
+	agentPaths, err := ParseFocusFile(content)
+	if err != nil {
+		return Focus{}, fmt.Errorf("parse focus file %s: %w", focusFile, err)
+	}
+	repositories := []gitrepo.Repository{}
+	refusals := []error{}
+	for _, agentPath := range agentPaths {
+		repository, err := resolvePath(ctx, rules, agentPath)
+		switch {
+		case err != nil:
+			refusals = append(refusals, err)
+		case !slices.Contains(repositories, repository):
+			repositories = append(repositories, repository)
+		}
+	}
+	if len(repositories) == 0 {
+		return Focus{}, errors.Join(refusals...)
+	}
+	return Focus{Repositories: repositories, Refusals: refusals}, nil
 }
 
 // The owner's git runs the config and hooks of a .git, so one the agent could write is refused.
-func Resolve(ctx context.Context, rules Rules, focusFile string) (gitrepo.Repository, error) {
-	content, err := readFocusFile(focusFile)
-	if err != nil {
-		return gitrepo.Repository{}, err
-	}
-	agentPath, err := ParseFocusFile(content)
-	if err != nil {
-		return gitrepo.Repository{}, fmt.Errorf("parse focus file %s: %w", focusFile, err)
-	}
+func resolvePath(ctx context.Context, rules Rules, agentPath string) (gitrepo.Repository, error) {
 	ownerPath, err := MapPath(agentPath, rules.AgentDir, rules.OwnerDir)
 	if err != nil {
 		return gitrepo.Repository{}, err
@@ -170,12 +196,20 @@ func readFocusFile(focusFile string) (string, error) {
 }
 
 // A trailing line break is allowed so a hand-written file works.
-func ParseFocusFile(content string) (string, error) {
-	path := strings.TrimRight(content, "\r\n")
-	if path == "" || strings.ContainsAny(path, "\r\n") {
-		return "", fmt.Errorf("%w, got %q", ErrMalformedFocusFile, content)
+func ParseFocusFile(content string) ([]string, error) {
+	trimmed := strings.TrimRight(content, "\r\n")
+	if trimmed == "" {
+		return nil, fmt.Errorf("%w, got %q", ErrMalformedFocusFile, content)
 	}
-	return path, nil
+	paths := []string{}
+	for line := range strings.SplitSeq(trimmed, "\n") {
+		path := strings.TrimSuffix(line, "\r")
+		if path == "" {
+			return nil, fmt.Errorf("%w, got an empty line in %q", ErrMalformedFocusFile, content)
+		}
+		paths = append(paths, path)
+	}
+	return paths, nil
 }
 
 func MapPath(agentPath string, agentDir string, ownerDir string) (string, error) {

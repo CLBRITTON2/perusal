@@ -8,6 +8,8 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"slices"
+	"strings"
 	"testing"
 )
 
@@ -40,20 +42,21 @@ func TestMapPath(t *testing.T) {
 }
 
 func TestParseFocusFile(t *testing.T) {
-	t.Run("allowsATrailingLineBreak", allowsATrailingLineBreak)
-	t.Run("refusesTwoLines", refusesTwoLines)
+	t.Run("readsOnePathPerLineWithAnyLineBreak", readsOnePathPerLineWithAnyLineBreak)
+	t.Run("refusesAnEmptyLine", refusesAnEmptyLine)
 }
 
-func allowsATrailingLineBreak(t *testing.T) {
-	got, err := ParseFocusFile("C:\\Users\\claude\\dev\\perusal\r\n")
+func readsOnePathPerLineWithAnyLineBreak(t *testing.T) {
+	got, err := ParseFocusFile("C:\\Users\\claude\\dev\\a\r\nC:\\Users\\claude\\dev\\b\nC:\\Users\\claude\\dev\\c\r\n")
 
-	if err != nil || got != `C:\Users\claude\dev\perusal` {
-		t.Fatalf("got %q, %v", got, err)
+	want := []string{`C:\Users\claude\dev\a`, `C:\Users\claude\dev\b`, `C:\Users\claude\dev\c`}
+	if err != nil || !slices.Equal(got, want) {
+		t.Fatalf("got %q, %v, want %q", got, err, want)
 	}
 }
 
-func refusesTwoLines(t *testing.T) {
-	_, err := ParseFocusFile("C:\\Users\\claude\\dev\\a\nC:\\Users\\claude\\dev\\b")
+func refusesAnEmptyLine(t *testing.T) {
+	_, err := ParseFocusFile("C:\\Users\\claude\\dev\\a\n\nC:\\Users\\claude\\dev\\b")
 
 	if !errors.Is(err, ErrMalformedFocusFile) {
 		t.Fatalf("got %v, want %v", err, ErrMalformedFocusFile)
@@ -94,6 +97,7 @@ func stopsAtTheOwnerDirectory(t *testing.T) {
 func TestResolve(t *testing.T) {
 	t.Run("opensTheCheckedWorkTree", opensTheCheckedWorkTree)
 	t.Run("refusesAWorkTreeGitSkipsPast", refusesAWorkTreeGitSkipsPast)
+	t.Run("keepsEachRepositoryOnceAndReportsTheRefusedPaths", keepsEachRepositoryOnceAndReportsTheRefusedPaths)
 }
 
 const agentDevDir = `C:\agent\dev`
@@ -107,12 +111,36 @@ func opensTheCheckedWorkTree(t *testing.T) {
 
 	got, err := Resolve(context.Background(), rules, focusFileHolding(t, agentDevDir+`\repo`))
 
-	if err != nil {
-		t.Fatal(err)
+	if err != nil || len(got.Repositories) != 1 {
+		t.Fatalf("got %v, %v, want one repository", got, err)
 	}
-	same, err := isSameDirectory(got.Dir, repository)
+	same, err := isSameDirectory(got.Repositories[0].Dir, repository)
 	if err != nil || !same {
-		t.Fatalf("got %q, %v, want %q", got.Dir, err, repository)
+		t.Fatalf("got %q, %v, want %q", got.Repositories[0].Dir, err, repository)
+	}
+}
+
+func keepsEachRepositoryOnceAndReportsTheRefusedPaths(t *testing.T) {
+	devDir := t.TempDir()
+	for _, name := range []string{"first", "second"} {
+		gitInit(t, filepath.Join(devDir, name))
+		denyGuests(t, filepath.Join(devDir, name, ".git"), deniedWriteMask)
+	}
+	mustMkdir(t, filepath.Join(devDir, "first", "cmd"))
+	mustMkdir(t, filepath.Join(devDir, "notes"))
+	rules := Rules{AgentDir: agentDevDir, OwnerDir: devDir, AgentSID: guestsSID}
+	lines := []string{agentDevDir + `\second`, agentDevDir + `\notes`, agentDevDir + `\first\cmd`, agentDevDir + `\first`}
+
+	got, err := Resolve(context.Background(), rules, focusFileHolding(t, strings.Join(lines, "\n")))
+
+	if err != nil || len(got.Repositories) != 2 || len(got.Refusals) != 1 || !errors.Is(got.Refusals[0], ErrNotWorkTree) {
+		t.Fatalf("got %v, %v, want second and first, and notes refused", got, err)
+	}
+	for index, name := range []string{"second", "first"} {
+		same, err := isSameDirectory(got.Repositories[index].Dir, filepath.Join(devDir, name))
+		if err != nil || !same {
+			t.Fatalf("got repository %d %q, %v, want %s", index, got.Repositories[index].Dir, err, name)
+		}
 	}
 }
 

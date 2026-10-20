@@ -41,6 +41,7 @@ perusal -repo <dir>  # review the repository <dir> is in
 | `c` | anywhere | open the commit popup |
 | `P` | anywhere | open the push popup |
 | `A` | log | amend the selected commit with the staged changes |
+| `r` | anywhere | in follow mode, switch to the next focused repository with uncommitted changes |
 | `enter` | log | expand the commit into its files |
 | `/` | log | search, `enter` keeps it, `esc` clears it |
 | `q` | anywhere | quit |
@@ -60,8 +61,8 @@ fetch. perusal never force pushes `main` or `master`.
 
 ## Follow mode (Windows)
 
-`perusal follow` is for an agent that runs as its own Windows account. It reviews whichever repository the
-agent is working in, and switches as the agent moves between repositories. It reads
+`perusal follow` is for an agent that runs as its own Windows account. It reviews the repositories the agent is
+working in, and switches as the agent moves between them. It reads
 `%APPDATA%\perusal\config.json`, where every key is required:
 
 ```json
@@ -74,8 +75,11 @@ agent is working in, and switches as the agent moves between repositories. It re
 ```
 
 - `agentAccount` is the Windows account the agent runs as.
-- `focusFile` holds one absolute path, the directory the agent is working in, and is rewritten whenever that
-  changes. Something on the agent side has to write it, such as a herdr plugin.
+- `focusFile` holds one absolute path per line, the directories the agent is working in, and is rewritten whenever
+  they change. Something on the agent side has to write it, such as a herdr plugin. perusal opens the first
+  repository with uncommitted changes, or the first one when all are clean, and `r` cycles through the ones with
+  changes. The header shows the position, such as `(2 of 3)`. A new list that still names the repository under
+  review keeps it open, and a path that fails a check below is shown in the footer.
 - `agentDir` and `ownerDir` are one directory as the agent and you reach it. perusal maps a path under `agentDir`
   to the same path under `ownerDir`, and refuses anything outside it.
 
