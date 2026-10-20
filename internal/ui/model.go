@@ -27,7 +27,6 @@ const (
 	footerHeight         = 1
 	minimumListWidth     = 20
 	listPercent          = 25
-	changesPercent       = 40
 	wheelScrollLines     = 3
 	maximumPopupWidth    = 72
 	descriptionHeight    = 5
@@ -37,13 +36,13 @@ const (
 	detachedBranchLabel  = "detached HEAD"
 	emptySummaryMessage  = "the summary is required"
 	commitRunningMessage = "committing..."
+	pushRunningMessage   = "pushing..."
+	noUpstreamMessage    = "the branch tracks no upstream, so there is nowhere to push"
+	nothingToPushMessage = "nothing to push"
 	waitingMessage       = "waiting for a repository"
 	refusedMessage       = "refused the focused pane's directory"
 	appName              = "perusal"
 )
-
-// changesFirstRowY is the screen row of the first changes entry: below the header and the top border.
-const changesFirstRowY = headerHeight + 1
 
 // commitRow is the selectedFile of a commit row in the log, as opposed to one of its files.
 const commitRow = -1
@@ -90,10 +89,14 @@ type Model struct {
 	descriptionFocused bool
 	commitRunning      bool
 	commitError        string
-	footerText         string
-	footerIsError      bool
-	width              int
-	height             int
+	// pushing is true while the push popup is open, pushRunning while git push runs.
+	pushing       bool
+	pushRunning   bool
+	pushError     string
+	footerText    string
+	footerIsError bool
+	width         int
+	height        int
 }
 
 // New starts with no repository. A RepositoryFocused message picks the one to review.
@@ -198,6 +201,25 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.commitRunning = false
 		m.commitError = sanitizeLines(strings.TrimSpace(msg.err.Error()))
 		return m, nil
+	case pushedMsg:
+		if msg.dir != m.repository.Dir {
+			m.footerText = sanitizeText("pushed " + msg.dir + " to " + msg.upstream)
+			m.footerIsError = false
+			return m, nil
+		}
+		m = m.withPushPopupClosed()
+		m.footerText = sanitizeText("pushed to " + msg.upstream)
+		m.footerIsError = false
+		return m, repositoryRequest{repository: m.repository}.loadStatus
+	case pushFailedMsg:
+		if msg.dir != m.repository.Dir {
+			m.footerText = sanitizeText(singleLine(msg.err.Error()))
+			m.footerIsError = true
+			return m, nil
+		}
+		m.pushRunning = false
+		m.pushError = sanitizeLines(strings.TrimSpace(msg.err.Error()))
+		return m, nil
 	case gitFailedMsg:
 		m.footerText = sanitizeText(singleLine(msg.err.Error()))
 		m.footerIsError = true
@@ -209,17 +231,20 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if m.committing {
 			return m.updateCommitBox(msg)
 		}
+		if m.pushing {
+			return m.updatePushPopup(msg)
+		}
 		if m.searching {
 			return m.updateSearch(msg)
 		}
 		return m.updateBrowsing(msg)
 	case tea.MouseClickMsg:
-		if m.committing || msg.Button != tea.MouseLeft {
+		if m.committing || m.pushing || msg.Button != tea.MouseLeft {
 			return m, nil
 		}
 		return m.clickList(msg.Mouse())
 	case tea.MouseWheelMsg:
-		if m.committing {
+		if m.committing || m.pushing {
 			return m, nil
 		}
 		return m.scrollWheel(msg.Mouse())
@@ -298,6 +323,8 @@ func (m Model) updateBrowsing(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		m.committing = true
 		m.descriptionFocused = false
 		return m, m.summaryInput.Focus()
+	case key.Matches(msg, pushKey):
+		return m.openPushPopup()
 	case key.Matches(msg, refreshKey):
 		if m.repository.Dir == "" {
 			return m, nil
@@ -316,7 +343,7 @@ func (m Model) switchView() (tea.Model, tea.Cmd) {
 	return m, m.loadSelectedCommitDiff()
 }
 
-// withFocus gives view the keys, the selection bar and the diff pane.
+// withFocus opens view's pane, folds the other one and gives view the keys and the diff pane.
 func (m Model) withFocus(view viewKind) Model {
 	if view != m.view {
 		m.diffView.SetYOffset(0)
@@ -328,7 +355,7 @@ func (m Model) withFocus(view viewKind) Model {
 // withRepository shows repository, or rejection when no repository is allowed, and drops everything shown for the
 // previous one, including a commit message being written for it.
 func (m Model) withRepository(repository gitrepo.Repository, rejection string) Model {
-	m = m.withCommitPopupClosed()
+	m = m.withCommitPopupClosed().withPushPopupClosed()
 	m.summaryInput.Reset()
 	m.descriptionBox.Reset()
 	m.repository = repository
@@ -419,6 +446,46 @@ func (m Model) withCommitPopupClosed() Model {
 	m.commitError = ""
 	m.summaryInput.Blur()
 	m.descriptionBox.Blur()
+	return m
+}
+
+// openPushPopup asks before pushing, unless there is nowhere to push or nothing to push.
+func (m Model) openPushPopup() (tea.Model, tea.Cmd) {
+	switch {
+	case m.repository.Dir == "":
+		return m, nil
+	case m.status.Upstream == "":
+		m.footerText = noUpstreamMessage
+		m.footerIsError = true
+		return m, nil
+	case m.status.Ahead == 0:
+		m.footerText = nothingToPushMessage
+		m.footerIsError = true
+		return m, nil
+	}
+	m.pushing = true
+	return m, nil
+}
+
+func (m Model) updatePushPopup(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
+	if m.pushRunning {
+		return m, nil
+	}
+	switch {
+	case key.Matches(msg, cancelKey):
+		return m.withPushPopupClosed(), nil
+	case key.Matches(msg, confirmPushKey):
+		m.pushRunning = true
+		m.pushError = ""
+		return m, pushRequest{repository: m.repository, upstream: m.status.Upstream}.push
+	}
+	return m, nil
+}
+
+func (m Model) withPushPopupClosed() Model {
+	m.pushing = false
+	m.pushRunning = false
+	m.pushError = ""
 	return m
 }
 
@@ -582,31 +649,33 @@ func (m Model) clickList(mouse tea.Mouse) (tea.Model, tea.Cmd) {
 	if mouse.X >= m.listOuterWidth() {
 		return m, nil
 	}
-	changesRow := mouse.Y - changesFirstRowY
-	logListRow := mouse.Y - m.logFirstRowY()
-	switch {
-	case changesRow >= 0 && changesRow < m.changesInnerHeight() && m.listOffset+changesRow < len(m.status.Files):
-		return m.withFocus(viewChanges).selectFile(m.listOffset + changesRow)
-	case logListRow >= 0 && logListRow < m.logInnerHeight() && m.logOffset+logListRow < len(m.visibleLogRows()):
-		return m.withFocus(viewLog).selectLogRow(m.logOffset + logListRow)
+	if mouse.Y == m.foldedPaneY() {
+		return m.switchView()
 	}
-	return m, nil
+	row := mouse.Y - m.listFirstRowY()
+	if row < 0 || row >= m.listInnerHeight() {
+		return m, nil
+	}
+	if m.view == viewLog {
+		if m.logOffset+row >= len(m.visibleLogRows()) {
+			return m, nil
+		}
+		return m.selectLogRow(m.logOffset + row)
+	}
+	if m.listOffset+row >= len(m.status.Files) {
+		return m, nil
+	}
+	return m.selectFile(m.listOffset + row)
 }
 
-// scrollWheel moves the selection of the list under the pointer, which takes the focus, and scrolls the diff over the
-// diff pane.
+// scrollWheel moves the selection over the list and scrolls the diff over the diff pane.
 func (m Model) scrollWheel(mouse tea.Mouse) (tea.Model, tea.Cmd) {
 	overList := mouse.X < m.listOuterWidth()
-	overChanges := overList && mouse.Y < m.logFirstRowY()-1
 	switch {
-	case overChanges && mouse.Button == tea.MouseWheelDown:
-		return m.withFocus(viewChanges).moveSelection(1)
-	case overChanges && mouse.Button == tea.MouseWheelUp:
-		return m.withFocus(viewChanges).moveSelection(-1)
 	case overList && mouse.Button == tea.MouseWheelDown:
-		return m.withFocus(viewLog).moveSelection(1)
+		return m.moveSelection(1)
 	case overList && mouse.Button == tea.MouseWheelUp:
-		return m.withFocus(viewLog).moveSelection(-1)
+		return m.moveSelection(-1)
 	case mouse.Button == tea.MouseWheelDown:
 		m.diffView.ScrollDown(wheelScrollLines)
 	case mouse.Button == tea.MouseWheelUp:
@@ -688,8 +757,8 @@ func (m Model) diffLines() []string {
 }
 
 func (m Model) withListScrolled() Model {
-	m.logOffset = scrolledOffset(m.logOffset, max(m.selectedLogRow(m.visibleLogRows()), 0), m.logInnerHeight())
-	m.listOffset = scrolledOffset(m.listOffset, m.selected, m.changesInnerHeight())
+	m.logOffset = scrolledOffset(m.logOffset, max(m.selectedLogRow(m.visibleLogRows()), 0), m.listInnerHeight())
+	m.listOffset = scrolledOffset(m.listOffset, m.selected, m.listInnerHeight())
 	return m
 }
 
@@ -729,17 +798,25 @@ func (m Model) paneInnerHeight() int {
 	return max(m.columnHeight()-2, 0)
 }
 
-// changesInnerHeight fits the changes pane to its files, up to a share of the column, and the log pane gets the rest.
-func (m Model) changesInnerHeight() int {
-	return min(max(len(m.status.Files), 1), max(m.columnHeight()*changesPercent/100-2, 1))
+// listInnerHeight is the open pane's share of the column, all of it but its borders and the folded pane's line.
+func (m Model) listInnerHeight() int {
+	return max(m.columnHeight()-3, 0)
 }
 
-func (m Model) logInnerHeight() int {
-	return max(m.columnHeight()-m.changesInnerHeight()-4, 0)
+// listFirstRowY is the screen row of the open pane's first entry. The changes pane stays above the log, so a folded
+// changes pane pushes the log down a line.
+func (m Model) listFirstRowY() int {
+	if m.view == viewLog {
+		return headerHeight + 2
+	}
+	return headerHeight + 1
 }
 
-func (m Model) logFirstRowY() int {
-	return changesFirstRowY + m.changesInnerHeight() + 2
+func (m Model) foldedPaneY() int {
+	if m.view == viewLog {
+		return headerHeight
+	}
+	return headerHeight + m.columnHeight() - 1
 }
 
 func (m Model) popupInnerWidth() int {
@@ -756,7 +833,9 @@ func (m Model) View() tea.View {
 	case m.width == 0:
 		view = tea.NewView("")
 	case m.committing:
-		view = tea.NewView(m.overlayCommitPopup(m.renderScreen()))
+		view = tea.NewView(m.overlayPopup(m.renderScreen(), m.renderCommitPopup()))
+	case m.pushing:
+		view = tea.NewView(m.overlayPopup(m.renderScreen(), m.renderPushPopup()))
 	default:
 		view = tea.NewView(m.renderScreen())
 	}
@@ -814,18 +893,14 @@ func (m Model) renderAheadBehind() string {
 
 func (m Model) renderLists() string {
 	innerWidth := m.listOuterWidth() - 2
-	changes := renderPane("changes", m.listTitleStyle(viewChanges), m.changesLabel(), m.fileRows(innerWidth), innerWidth,
-		m.changesInnerHeight())
-	log := renderPane(m.logTitle(), m.listTitleStyle(viewLog), m.logLabel(), m.renderLogRows(innerWidth), innerWidth,
-		m.logInnerHeight())
-	return lipgloss.JoinVertical(lipgloss.Left, changes, log)
-}
-
-func (m Model) listTitleStyle(view viewKind) lipgloss.Style {
-	if view == m.view {
-		return titleStyle
+	if m.view == viewLog {
+		return lipgloss.JoinVertical(lipgloss.Left,
+			renderFoldedPane("changes", m.changesLabel(), innerWidth),
+			renderPane(m.logTitle(), m.logLabel(), m.renderLogRows(innerWidth), innerWidth, m.listInnerHeight()))
 	}
-	return unfocusedTitleStyle
+	return lipgloss.JoinVertical(lipgloss.Left,
+		renderPane("changes", m.changesLabel(), m.fileRows(innerWidth), innerWidth, m.listInnerHeight()),
+		renderFoldedPane(m.logTitle(), m.logLabel(), innerWidth))
 }
 
 func (m Model) fileRows(innerWidth int) []string {
@@ -833,10 +908,9 @@ func (m Model) fileRows(innerWidth int) []string {
 		return []string{mutedStyle.Render("working tree clean")}
 	}
 	rows := []string{}
-	end := min(m.listOffset+m.changesInnerHeight(), len(m.status.Files))
+	end := min(m.listOffset+m.listInnerHeight(), len(m.status.Files))
 	for index := m.listOffset; index < end; index++ {
-		rows = append(rows, listRow(renderFileRow(m.status.Files[index]), index == m.selected && m.view == viewChanges,
-			innerWidth))
+		rows = append(rows, listRow(renderFileRow(m.status.Files[index]), index == m.selected, innerWidth))
 	}
 	return rows
 }
@@ -852,10 +926,10 @@ func (m Model) renderLogRows(innerWidth int) []string {
 	selected := m.selectedLogRow(rows)
 	graph := m.logGraph()
 	rendered := []string{}
-	end := min(m.logOffset+m.logInnerHeight(), len(rows))
+	end := min(m.logOffset+m.listInnerHeight(), len(rows))
 	for index := m.logOffset; index < end; index++ {
 		rendered = append(rendered, listRow(m.renderLogRow(rows[index], graph[rows[index].commit], innerWidth-1),
-			index == selected && m.view == viewLog, innerWidth))
+			index == selected, innerWidth))
 	}
 	return rendered
 }
@@ -951,14 +1025,14 @@ func (m Model) renderDiffPane() string {
 	switch {
 	case m.rejection != "":
 		reason := errorStyle.Render(lipgloss.Wrap(m.rejection, width, ""))
-		return renderPane("refused", titleStyle, "", strings.Split(reason, "\n"), width, height)
+		return renderPane("refused", "", strings.Split(reason, "\n"), width, height)
 	case m.view == viewLog && len(m.commits) > 0:
-		return renderPane(m.commitPaneTitle(), titleStyle, m.scrollLabel(), strings.Split(m.diffView.View(), "\n"), width, height)
+		return renderPane(m.commitPaneTitle(), m.scrollLabel(), strings.Split(m.diffView.View(), "\n"), width, height)
 	case m.view == viewChanges && len(m.status.Files) > 0:
-		return renderPane(sanitizeText(m.diffPath), titleStyle, m.scrollLabel(), strings.Split(m.diffView.View(), "\n"), width,
+		return renderPane(sanitizeText(m.diffPath), m.scrollLabel(), strings.Split(m.diffView.View(), "\n"), width,
 			height)
 	default:
-		return renderPane("diff", titleStyle, "", []string{}, width, height)
+		return renderPane("diff", "", []string{}, width, height)
 	}
 }
 
@@ -1002,8 +1076,7 @@ func (m Model) renderHelpLine(bindings []key.Binding) string {
 	return spaceBetween(" "+m.help.ShortHelpView(bindings), mutedStyle.Render(appName)+" ", m.width)
 }
 
-func (m Model) overlayCommitPopup(screen string) string {
-	popup := m.renderCommitPopup()
+func (m Model) overlayPopup(screen string, popup string) string {
 	x := max((m.width-lipgloss.Width(popup))/2, 0)
 	y := max((m.height-lipgloss.Height(popup))/2, 0)
 	return lipgloss.NewCompositor(lipgloss.NewLayer(screen), lipgloss.NewLayer(popup).X(x).Y(y).Z(1)).Render()
@@ -1021,12 +1094,42 @@ func (m Model) renderCommitPopup() string {
 	case m.commitRunning:
 		lines = append(lines, mutedStyle.Render(commitRunningMessage))
 	case m.commitError != "":
-		wrapped := strings.Split(lipgloss.Wrap(m.commitError, width, ""), "\n")
-		lines = append(lines, errorStyle.Render(strings.Join(wrapped[:min(len(wrapped), maximumErrorLines)], "\n")))
+		lines = append(lines, renderPopupError(m.commitError, width))
 	default:
 		lines = append(lines, m.help.ShortHelpView(commitHelp))
 	}
 	return popupStyle.Width(width + 4).Render(strings.Join(lines, "\n"))
+}
+
+func (m Model) renderPushPopup() string {
+	width := m.popupInnerWidth()
+	lines := []string{
+		titleStyle.Render("push " + m.branchLabel() + " to " + sanitizeText(m.status.Upstream)),
+		textStyle.Render(commitCount(m.status.Ahead)),
+		"",
+	}
+	switch {
+	case m.pushRunning:
+		lines = append(lines, mutedStyle.Render(pushRunningMessage))
+	case m.pushError != "":
+		lines = append(lines, renderPopupError(m.pushError, width))
+	default:
+		lines = append(lines, m.help.ShortHelpView(pushHelp))
+	}
+	return popupStyle.Width(width + 4).Render(strings.Join(lines, "\n"))
+}
+
+func commitCount(count int) string {
+	if count == 1 {
+		return "1 commit"
+	}
+	return strconv.Itoa(count) + " commits"
+}
+
+// renderPopupError wraps text to the popup and keeps its first maximumErrorLines lines.
+func renderPopupError(text string, width int) string {
+	wrapped := strings.Split(lipgloss.Wrap(text, width, ""), "\n")
+	return errorStyle.Render(strings.Join(wrapped[:min(len(wrapped), maximumErrorLines)], "\n"))
 }
 
 func renderField(view string, focused bool, innerWidth int, innerHeight int) string {

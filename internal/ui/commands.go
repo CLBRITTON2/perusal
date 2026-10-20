@@ -62,6 +62,16 @@ type commitFailedMsg struct {
 	err error
 }
 
+type pushedMsg struct {
+	dir      string
+	upstream string
+}
+
+type pushFailedMsg struct {
+	dir string
+	err error
+}
+
 type gitFailedMsg struct {
 	err error
 }
@@ -98,6 +108,18 @@ func (r repositoryRequest) loadLog() tea.Msg {
 		return gitFailedMsg{err: err}
 	}
 	return logLoadedMsg{dir: r.repository.Dir, commits: commits, loadedAt: time.Now()}
+}
+
+type pushRequest struct {
+	repository gitrepo.Repository
+	upstream   string
+}
+
+func (r pushRequest) push() tea.Msg {
+	if err := r.repository.Push(context.Background()); err != nil {
+		return pushFailedMsg{dir: r.repository.Dir, err: err}
+	}
+	return pushedMsg{dir: r.repository.Dir, upstream: r.upstream}
 }
 
 type fileRequest struct {

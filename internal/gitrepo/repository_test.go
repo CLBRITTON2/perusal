@@ -14,6 +14,37 @@ func TestRunGit(t *testing.T) {
 	t.Run("failureCarriesWhatGitPrintedOnStdout", failureCarriesWhatGitPrintedOnStdout)
 }
 
+func TestPush(t *testing.T) {
+	t.Run("sendsTheBranchToItsUpstream", sendsTheBranchToItsUpstream)
+}
+
+func sendsTheBranchToItsUpstream(t *testing.T) {
+	remote := filepath.Join(t.TempDir(), "remote.git")
+	work := t.TempDir()
+	steps := [][]string{
+		{"init", "--bare", "--initial-branch=main", remote},
+		{"init", "--initial-branch=main", work},
+		{"-C", work, "-c", "user.name=perusal", "-c", "user.email=perusal@example.com", "-c", "commit.gpgsign=false",
+			"commit", "--allow-empty", "--no-verify", "--message", "Start"},
+		{"-C", work, "remote", "add", "origin", remote},
+		{"-C", work, "config", "branch.main.remote", "origin"},
+		{"-C", work, "config", "branch.main.merge", "refs/heads/main"},
+	}
+	for _, step := range steps {
+		if _, err := runGit(context.Background(), work, step); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	err := Repository{Dir: work}.Push(context.Background())
+
+	pushed, revParseErr := runGit(context.Background(), remote, []string{"rev-parse", "main"})
+	head, headErr := runGit(context.Background(), work, []string{"rev-parse", "HEAD"})
+	if err != nil || revParseErr != nil || headErr != nil || string(pushed) != string(head) {
+		t.Fatalf("got push error %v, remote main %q (%v), want local HEAD %q (%v)", err, pushed, revParseErr, head, headErr)
+	}
+}
+
 func TestParseLog(t *testing.T) {
 	t.Run("keepsASeparatorInsideTheMessage", keepsASeparatorInsideTheMessage)
 	t.Run("rejectsARecordWithoutAFullHash", rejectsARecordWithoutAFullHash)

@@ -5,6 +5,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"os"
 	"os/exec"
 	"regexp"
 	"strconv"
@@ -191,6 +192,13 @@ func (r Repository) Commit(ctx context.Context, message string) (string, error) 
 	return summary, nil
 }
 
+// Push runs a plain git push, so push.default and the user's git config pick the remote and the refspec. It never
+// forces.
+func (r Repository) Push(ctx context.Context) error {
+	_, err := runGit(ctx, r.Dir, []string{"push"})
+	return err
+}
+
 // runGit returns git's stdout. A failure carries the arguments, the directory and git's stderr and stdout, since
 // some failures, such as git commit with nothing staged, explain themselves only on stdout.
 func runGit(ctx context.Context, dir string, args []string) ([]byte, error) {
@@ -200,6 +208,8 @@ func runGit(ctx context.Context, dir string, args []string) ([]byte, error) {
 func runGitWithInput(ctx context.Context, dir string, args []string, input string) ([]byte, error) {
 	command := exec.CommandContext(ctx, "git", args...)
 	command.Dir = dir
+	// A credential prompt would fight the TUI for the terminal, so git fails instead of asking.
+	command.Env = append(os.Environ(), "GIT_TERMINAL_PROMPT=0")
 	command.Stdin = strings.NewReader(input)
 	var stderr bytes.Buffer
 	command.Stderr = &stderr

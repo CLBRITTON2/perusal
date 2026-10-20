@@ -239,8 +239,7 @@ func spaceBetween(left string, right string, width int) string {
 }
 
 // renderPane draws a rounded box with title set into its top border and label into its bottom border.
-func renderPane(title string, titleStyle lipgloss.Style, label string, body []string, innerWidth int,
-	innerHeight int) string {
+func renderPane(title string, label string, body []string, innerWidth int, innerHeight int) string {
 	lines := []string{borderLine("╭", titleStyle, title, "╮", innerWidth)}
 	side := borderStyle.Render("│")
 	for _, line := range fitLines(body, innerWidth, innerHeight) {
@@ -248,6 +247,23 @@ func renderPane(title string, titleStyle lipgloss.Style, label string, body []st
 	}
 	lines = append(lines, borderLine("╰", paneLabelStyle, label, "╯", innerWidth))
 	return strings.Join(lines, "\n")
+}
+
+// renderFoldedPane draws a pane folded to one line as wide as the open box, title at the left and label at the
+// right. The label is the first to go when both do not fit.
+func renderFoldedPane(title string, label string, innerWidth int) string {
+	outerWidth := innerWidth + 2
+	fittedTitle := ansi.Truncate(title, max(outerWidth-6, 0), "…")
+	left := borderStyle.Render("╶─ ") + unfocusedTitleStyle.Render(fittedTitle) + " "
+	labelled := " " + paneLabelStyle.Render(label) + borderStyle.Render(" ─╴")
+	var right string
+	if label != "" && lipgloss.Width(left)+lipgloss.Width(labelled) < outerWidth {
+		right = labelled
+	} else {
+		right = borderStyle.Render("─╴")
+	}
+	fill := max(outerWidth-lipgloss.Width(left)-lipgloss.Width(right), 0)
+	return left + borderStyle.Render(strings.Repeat("─", fill)) + right
 }
 
 // borderLine draws one horizontal border with text after a short lead, such as "╭─ changes ──╮".

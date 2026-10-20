@@ -23,7 +23,7 @@ var (
 )
 
 var (
-	borderStyle         = lipgloss.NewStyle().Foreground(colorHighlightMed)
+	borderStyle         = lipgloss.NewStyle().Foreground(colorMuted)
 	popupStyle          = lipgloss.NewStyle().Border(lipgloss.RoundedBorder()).BorderForeground(colorRose).Padding(0, 1)
 	fieldStyle          = lipgloss.NewStyle().Border(lipgloss.RoundedBorder()).BorderForeground(colorHighlightMed)
 	focusedFieldStyle   = lipgloss.NewStyle().Border(lipgloss.RoundedBorder()).BorderForeground(colorIris)
