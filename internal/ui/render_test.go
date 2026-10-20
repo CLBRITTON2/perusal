@@ -1,6 +1,7 @@
 package ui
 
 import (
+	"slices"
 	"strings"
 	"testing"
 
@@ -30,15 +31,15 @@ func TestBorderLine(t *testing.T) {
 func cutsALongTitleToKeepTheLineCounts(t *testing.T) {
 	counts := renderLineCounts(diff.LineCounts{Added: 12, Removed: 3})
 
-	got := []string{
-		ansi.Strip(borderLine("╭", titleStyle, "internal/ui/model.go", counts, "╮", 22)),
-		ansi.Strip(borderLine("╭", titleStyle, "a.go", counts, "╮", 22)),
-		ansi.Strip(borderLine("╭", titleStyle, "a.go", counts, "╮", 13)),
-	}
+	got := strippedLines([]string{
+		borderLine("╭", titleStyle, "internal/ui/model.go", counts, "╮", 22),
+		borderLine("╭", titleStyle, "a.go", counts, "╮", 22),
+		borderLine("╭", titleStyle, "a.go", counts, "╮", 13),
+	})
 
 	want := []string{"╭─ internal… ─ +12 -3 ─╮", "╭─ a.go ────── +12 -3 ─╮", "╭─ a.go ──────╮"}
-	if strings.Join(got, "\n") != strings.Join(want, "\n") {
-		t.Fatalf("got\n%s\nwant\n%s", strings.Join(got, "\n"), strings.Join(want, "\n"))
+	if !slices.Equal(got, want) {
+		t.Fatalf("got\n%q\nwant\n%q", got, want)
 	}
 }
 
@@ -53,12 +54,9 @@ func showsANewFileAcrossTheWholeWidth(t *testing.T) {
 
 	lines := renderFileDiff(fileDiff, 21)
 
-	got := []string{}
-	for _, line := range lines[1:] {
-		got = append(got, ansi.Strip(line))
-	}
+	got := strippedLines(lines[1:])
 	want := []string{"1 package x          ", "2                    "}
-	if strings.Join(got, "\n") != strings.Join(want, "\n") {
+	if !slices.Equal(got, want) {
 		t.Fatalf("got\n%q\nwant\n%q", got, want)
 	}
 }
@@ -74,13 +72,10 @@ func wrapsALongLineAndPadsTheOtherSide(t *testing.T) {
 
 	lines := renderSideBySide(fileDiff, 21)
 
-	got := []string{}
-	for _, line := range lines[1:] {
-		got = append(got, ansi.Strip(line))
-	}
+	got := strippedLines(lines[1:])
 	want := []string{"7 old     │7 abcdefgh", "          │  ijklmnop", "          │  qrst    "}
-	if strings.Join(got, "\n") != strings.Join(want, "\n") {
-		t.Fatalf("got\n%s\nwant\n%s", strings.Join(got, "\n"), strings.Join(want, "\n"))
+	if !slices.Equal(got, want) {
+		t.Fatalf("got\n%q\nwant\n%q", got, want)
 	}
 }
 
@@ -118,4 +113,12 @@ func everyRowFillsTheWidthExactly(t *testing.T) {
 			}
 		}
 	}
+}
+
+func strippedLines(lines []string) []string {
+	stripped := []string{}
+	for _, line := range lines {
+		stripped = append(stripped, ansi.Strip(line))
+	}
+	return stripped
 }

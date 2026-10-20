@@ -169,8 +169,8 @@ func rejectionClearsTheReviewAndThePopup(t *testing.T) {
 
 	m = update(t, m, FocusRejected{Reason: "outside\nthe dev directory"})
 
-	if m.repository.Dir != "" || len(m.status.Files) != 0 || m.committing || m.rejection != "outside | the dev directory" {
-		t.Fatalf("got repository %q, %d files, committing %v, rejection %q", m.repository.Dir, len(m.status.Files), m.committing,
+	if m.repository.Dir != "" || len(m.status.Files) != 0 || m.popup != noPopup || m.rejection != "outside | the dev directory" {
+		t.Fatalf("got repository %q, %d files, popup %d, rejection %q", m.repository.Dir, len(m.status.Files), m.popup,
 			m.rejection)
 	}
 }
@@ -190,9 +190,14 @@ func refocusingTheSameRepositoryKeepsTheSelection(t *testing.T) {
 func update(t *testing.T, m Model, msg tea.Msg) Model {
 	t.Helper()
 	next, _ := m.Update(msg)
+	return asModel(t, next)
+}
+
+func asModel(t *testing.T, next tea.Model) Model {
+	t.Helper()
 	model, isModel := next.(Model)
 	if !isModel {
-		t.Fatalf("Update returned %T, want Model", next)
+		t.Fatalf("got %T, want Model", next)
 	}
 	return model
 }
@@ -256,9 +261,5 @@ func numberedCommits(count int) []gitrepo.Commit {
 func selectLogRow(t *testing.T, m Model, index int) (Model, tea.Cmd) {
 	t.Helper()
 	next, cmd := m.selectLogRow(index)
-	model, isModel := next.(Model)
-	if !isModel {
-		t.Fatalf("selectLogRow returned %T, want Model", next)
-	}
-	return model, cmd
+	return asModel(t, next), cmd
 }

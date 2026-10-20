@@ -22,25 +22,17 @@ import (
 )
 
 const (
-	headerHeight         = 1
-	footerHeight         = 1
-	minimumListWidth     = 20
-	listPercent          = 25
-	wheelScrollLines     = 3
-	maximumPopupWidth    = 72
-	descriptionHeight    = 5
-	maximumErrorLines    = 12
-	branchGlyph          = ""
-	folderGlyph          = ""
-	detachedBranchLabel  = "detached HEAD"
-	emptySummaryMessage  = "the summary is required"
-	commitRunningMessage = "committing..."
-	pushRunningMessage   = "pushing..."
-	noUpstreamMessage    = "the branch tracks no upstream, so there is nowhere to push"
-	nothingToPushMessage = "nothing to push"
-	waitingMessage       = "waiting for a repository"
-	refusedMessage       = "refused the focused pane's directory"
-	appName              = "perusal"
+	headerHeight      = 1
+	footerHeight      = 1
+	minimumListWidth  = 20
+	listPercent       = 25
+	wheelScrollLines  = 3
+	maximumPopupWidth = 72
+	descriptionHeight = 5
+	maximumErrorLines = 12
+	branchGlyph       = ""
+	folderGlyph       = ""
+	appName           = "perusal"
 )
 
 const commitRow = -1
@@ -50,6 +42,14 @@ type viewKind int
 const (
 	viewChanges viewKind = iota
 	viewLog
+)
+
+type popupKind int
+
+const (
+	noPopup popupKind = iota
+	commitPopup
+	pushPopup
 )
 
 type Model struct {
@@ -79,13 +79,10 @@ type Model struct {
 	help               help.Model
 	summaryInput       textinput.Model
 	descriptionBox     textarea.Model
-	committing         bool
 	descriptionFocused bool
-	commitRunning      bool
-	commitError        string
-	pushing            bool
-	pushRunning        bool
-	pushError          string
+	popup              popupKind
+	popupRunning       bool
+	popupError         string
 	footerText         string
 	footerIsError      bool
 	width              int
@@ -141,7 +138,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m = m.withRepository(msg.Repository, "")
 		return m, repositoryRequest{repository: m.repository}.loadStatus
 	case FocusRejected:
-		return m.withRepository(gitrepo.Repository{}, sanitizeText(singleLine(msg.Reason))), nil
+		return m.withRepository(gitrepo.Repository{}, sanitizeSingleLine(msg.Reason)), nil
 	case pollTickMsg:
 		if m.repository.Dir == "" {
 			return m, nextPoll()
@@ -182,74 +179,51 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, repositoryRequest{repository: m.repository}.loadStatus
 	case committedMsg:
 		if msg.dir != m.repository.Dir {
-			m.footerText = sanitizeText("committed in " + msg.dir + ": " + msg.summary)
-			m.footerIsError = false
-			return m, nil
+			return m.withFooterNotice("committed in " + msg.dir + ": " + msg.summary), nil
 		}
-		m = m.withCommitPopupClosed()
+		m = m.withPopupClosed().withFooterNotice(msg.summary)
 		m.summaryInput.Reset()
 		m.descriptionBox.Reset()
-		m.footerText = sanitizeText(msg.summary)
-		m.footerIsError = false
 		return m, repositoryRequest{repository: m.repository}.loadStatus
-	case commitFailedMsg:
-		if msg.dir != m.repository.Dir {
-			m.footerText = sanitizeText(singleLine(msg.err.Error()))
-			m.footerIsError = true
-			return m, nil
-		}
-		m.commitRunning = false
-		m.commitError = sanitizeLines(strings.TrimSpace(msg.err.Error()))
-		return m, nil
 	case pushedMsg:
 		if msg.dir != m.repository.Dir {
-			m.footerText = sanitizeText("pushed " + msg.dir + " to " + msg.upstream)
-			m.footerIsError = false
-			return m, nil
+			return m.withFooterNotice("pushed " + msg.dir + " to " + msg.upstream), nil
 		}
-		m = m.withPushPopupClosed()
-		m.footerText = sanitizeText("pushed to " + msg.upstream)
-		m.footerIsError = false
-		return m, repositoryRequest{repository: m.repository}.loadStatus
-	case pushFailedMsg:
-		if msg.dir != m.repository.Dir {
-			m.footerText = sanitizeText(singleLine(msg.err.Error()))
-			m.footerIsError = true
-			return m, nil
+		return m.withPopupClosed().withFooterNotice("pushed to " + msg.upstream),
+			repositoryRequest{repository: m.repository}.loadStatus
+	case popupFailedMsg:
+		if msg.dir != m.repository.Dir || m.popup == noPopup {
+			return m.withFooterError(msg.err.Error()), nil
 		}
-		m.pushRunning = false
-		m.pushError = sanitizeLines(strings.TrimSpace(msg.err.Error()))
+		m.popupRunning = false
+		m.popupError = sanitizeLines(msg.err.Error())
 		return m, nil
 	case gitFailedMsg:
-		m.footerText = sanitizeText(singleLine(msg.err.Error()))
-		m.footerIsError = true
-		return m, nil
+		return m.withFooterError(msg.err.Error()), nil
 	case tea.KeyPressMsg:
-		if key.Matches(msg, forceQuitKey) {
+		switch {
+		case key.Matches(msg, forceQuitKey):
 			return m, tea.Quit
-		}
-		if m.committing {
+		case m.popup == commitPopup:
 			return m.updateCommitBox(msg)
-		}
-		if m.pushing {
+		case m.popup == pushPopup:
 			return m.updatePushPopup(msg)
-		}
-		if m.searching {
+		case m.searching:
 			return m.updateSearch(msg)
 		}
 		return m.updateBrowsing(msg)
 	case tea.MouseClickMsg:
-		if m.committing || m.pushing || msg.Button != tea.MouseLeft {
+		if m.popup != noPopup || msg.Button != tea.MouseLeft {
 			return m, nil
 		}
 		return m.clickList(msg.Mouse())
 	case tea.MouseWheelMsg:
-		if m.committing || m.pushing {
+		if m.popup != noPopup {
 			return m, nil
 		}
 		return m.scrollWheel(msg.Mouse())
 	}
-	if m.committing {
+	if m.popup == commitPopup {
 		return m.updateFocusedField(msg)
 	}
 	if m.searching {
@@ -296,8 +270,7 @@ func (m Model) updateBrowsing(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		m.searchInput.CursorEnd()
 		return m, m.searchInput.Focus()
 	case key.Matches(msg, clearSearchKey) && m.view == viewLog && m.logFilter != nil:
-		m.searchInput.Reset()
-		return m.withLogFilter(nil)
+		return m.clearSearch()
 	case key.Matches(msg, stageKey):
 		if m.view != viewChanges || len(m.status.Files) == 0 {
 			return m, nil
@@ -320,7 +293,7 @@ func (m Model) updateBrowsing(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		if m.repository.Dir == "" {
 			return m, nil
 		}
-		m.committing = true
+		m.popup = commitPopup
 		m.descriptionFocused = false
 		return m, m.summaryInput.Focus()
 	case key.Matches(msg, pushKey):
@@ -331,58 +304,44 @@ func (m Model) updateBrowsing(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 
 func (m Model) switchView() (tea.Model, tea.Cmd) {
 	if m.view == viewChanges {
-		m = m.withFocus(viewLog)
+		m.view = viewLog
 	} else {
-		m = m.withFocus(viewChanges)
+		m.view = viewChanges
 	}
+	m.diffView.SetYOffset(0)
+	m = m.withLayout()
 	return m, m.loadSelectedCommitDiff()
 }
 
-func (m Model) withFocus(view viewKind) Model {
-	if view != m.view {
-		m.diffView.SetYOffset(0)
-	}
-	m.view = view
-	return m.withLayout()
+func (m Model) withRepository(repository gitrepo.Repository, rejection string) Model {
+	next := New()
+	next.repository = repository
+	next.rejection = rejection
+	next.view = m.view
+	next.width = m.width
+	next.height = m.height
+	return next.withLayout()
 }
 
-func (m Model) withRepository(repository gitrepo.Repository, rejection string) Model {
-	m = m.withCommitPopupClosed().withPushPopupClosed()
-	m.summaryInput.Reset()
-	m.descriptionBox.Reset()
-	m.repository = repository
-	m.rejection = rejection
-	m.status = gitrepo.Status{Files: []gitrepo.FileStatus{}}
-	m.selected = 0
-	m.listOffset = 0
-	m.diffPath = ""
-	m.fileDiff = diff.FileDiff{}
-	m.commits = []gitrepo.Commit{}
-	m.graph = []graphRow{}
-	m.selectedCommit = 0
-	m.logLimit = logPageSize
-	m.selectedFile = commitRow
-	m.logOffset = 0
-	m.commitFiles = map[string][]diff.FileSection{}
-	m.expanded = map[string]bool{}
-	m.logFilter = nil
-	m.searching = false
-	m.searchInput.Blur()
-	m.searchInput.Reset()
-	m.searchError = ""
-	m.diffView.SetYOffset(0)
-	m.footerText = ""
+func (m Model) withFooterNotice(text string) Model {
+	m.footerText = sanitizeSingleLine(text)
 	m.footerIsError = false
-	return m.withLayout()
+	return m
+}
+
+func (m Model) withFooterError(text string) Model {
+	m.footerText = sanitizeSingleLine(text)
+	m.footerIsError = true
+	return m
 }
 
 func (m Model) updateCommitBox(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
-	if m.commitRunning {
+	if m.popupRunning {
 		return m, nil
 	}
 	switch {
 	case key.Matches(msg, cancelKey):
-		return m.withCommitPopupClosed(), nil
+		return m.withPopupClosed(), nil
 	case key.Matches(msg, nextFieldKey):
 		return m.toggleCommitField()
 	case key.Matches(msg, submitKey):
@@ -416,11 +375,11 @@ func (m Model) toggleCommitField() (tea.Model, tea.Cmd) {
 func (m Model) startCommit() (tea.Model, tea.Cmd) {
 	summary := strings.TrimSpace(m.summaryInput.Value())
 	if summary == "" {
-		m.commitError = emptySummaryMessage
+		m.popupError = "the summary is required"
 		return m, nil
 	}
-	m.commitRunning = true
-	m.commitError = ""
+	m.popupRunning = true
+	m.popupError = ""
 	message := joinCommitMessage(summary, m.descriptionBox.Value())
 	return m, commitRequest{repository: m.repository, message: message}.commit
 }
@@ -433,10 +392,10 @@ func joinCommitMessage(summary string, description string) string {
 	return summary + "\n\n" + trimmedDescription
 }
 
-func (m Model) withCommitPopupClosed() Model {
-	m.committing = false
-	m.commitRunning = false
-	m.commitError = ""
+func (m Model) withPopupClosed() Model {
+	m.popup = noPopup
+	m.popupRunning = false
+	m.popupError = ""
 	m.summaryInput.Blur()
 	m.descriptionBox.Blur()
 	return m
@@ -447,38 +406,27 @@ func (m Model) openPushPopup() (tea.Model, tea.Cmd) {
 	case m.repository.Dir == "":
 		return m, nil
 	case m.status.Upstream == "":
-		m.footerText = noUpstreamMessage
-		m.footerIsError = true
-		return m, nil
+		return m.withFooterError("the branch tracks no upstream, so there is nowhere to push"), nil
 	case m.status.Ahead == 0:
-		m.footerText = nothingToPushMessage
-		m.footerIsError = true
-		return m, nil
+		return m.withFooterError("nothing to push"), nil
 	}
-	m.pushing = true
+	m.popup = pushPopup
 	return m, nil
 }
 
 func (m Model) updatePushPopup(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
-	if m.pushRunning {
+	if m.popupRunning {
 		return m, nil
 	}
 	switch {
 	case key.Matches(msg, cancelKey):
-		return m.withPushPopupClosed(), nil
+		return m.withPopupClosed(), nil
 	case key.Matches(msg, confirmPushKey):
-		m.pushRunning = true
-		m.pushError = ""
+		m.popupRunning = true
+		m.popupError = ""
 		return m, pushRequest{repository: m.repository, upstream: m.status.Upstream}.push
 	}
 	return m, nil
-}
-
-func (m Model) withPushPopupClosed() Model {
-	m.pushing = false
-	m.pushRunning = false
-	m.pushError = ""
-	return m
 }
 
 func (m Model) moveSelection(delta int) (tea.Model, tea.Cmd) {
@@ -520,8 +468,9 @@ func (m Model) withMoreLogNearEnd() (Model, tea.Cmd) {
 }
 
 func (m Model) withCommits(commits []gitrepo.Commit, loadedAt time.Time) (tea.Model, tea.Cmd) {
-	index, found := commitIndex(commits, m.selectedCommitHash())
-	if !found {
+	hash := m.selectedCommitHash()
+	index := slices.IndexFunc(commits, func(commit gitrepo.Commit) bool { return commit.Hash == hash })
+	if index < 0 {
 		m.selectedFile = commitRow
 	}
 	if !sameTopology(commits, m.commits) {
@@ -529,7 +478,7 @@ func (m Model) withCommits(commits []gitrepo.Commit, loadedAt time.Time) (tea.Mo
 	}
 	m.commits = commits
 	m.logLoadedAt = loadedAt
-	m.selectedCommit = index
+	m.selectedCommit = max(index, 0)
 	m = m.withLayout()
 	return m, m.loadSelectedCommitDiff()
 }
@@ -556,27 +505,32 @@ func (m Model) toggleExpanded() (tea.Model, tea.Cmd) {
 func (m Model) updateSearch(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	switch {
 	case key.Matches(msg, keepSearchKey):
-		m.searching = false
-		m.searchError = ""
-		m.searchInput.Blur()
-		return m, nil
+		return m.withSearchClosed(), nil
 	case key.Matches(msg, clearSearchKey):
-		m.searching = false
-		m.searchError = ""
-		m.searchInput.Blur()
-		m.searchInput.Reset()
-		return m.withLogFilter(nil)
+		return m.withSearchClosed().clearSearch()
 	}
 	var inputCmd tea.Cmd
 	m.searchInput, inputCmd = m.searchInput.Update(msg)
 	filter, err := compileSearch(m.searchInput.Value())
 	if err != nil {
-		m.searchError = sanitizeText(singleLine(err.Error()))
+		m.searchError = sanitizeSingleLine(err.Error())
 		return m, inputCmd
 	}
 	m.searchError = ""
 	next, loadCmd := m.withLogFilter(filter)
 	return next, tea.Batch(inputCmd, loadCmd)
+}
+
+func (m Model) withSearchClosed() Model {
+	m.searching = false
+	m.searchError = ""
+	m.searchInput.Blur()
+	return m
+}
+
+func (m Model) clearSearch() (tea.Model, tea.Cmd) {
+	m.searchInput.Reset()
+	return m.withLogFilter(nil)
 }
 
 func (m Model) withLogFilter(filter searchTerms) (tea.Model, tea.Cmd) {
@@ -604,7 +558,7 @@ type logRow struct {
 func (m Model) visibleLogRows() []logRow {
 	rows := []logRow{}
 	for index, commit := range m.commits {
-		if !m.commitMatches(commit) {
+		if !m.logFilter.matches(commit) {
 			continue
 		}
 		rows = append(rows, logRow{commit: index, file: commitRow})
@@ -626,10 +580,6 @@ func (m Model) selectedLogRow(rows []logRow) int {
 		}
 	}
 	return -1
-}
-
-func (m Model) commitMatches(commit gitrepo.Commit) bool {
-	return m.logFilter.matches(commit)
 }
 
 func (m Model) clickList(mouse tea.Mouse) (tea.Model, tea.Cmd) {
@@ -698,15 +648,6 @@ func (m Model) selectedCommitHash() string {
 		return ""
 	}
 	return m.commits[m.selectedCommit].Hash
-}
-
-func commitIndex(commits []gitrepo.Commit, hash string) (int, bool) {
-	for index, commit := range commits {
-		if commit.Hash == hash {
-			return index, true
-		}
-	}
-	return 0, false
 }
 
 func (m Model) withLayout() Model {
@@ -814,9 +755,9 @@ func (m Model) View() tea.View {
 	switch {
 	case m.width == 0:
 		view = tea.NewView("")
-	case m.committing:
+	case m.popup == commitPopup:
 		view = tea.NewView(m.overlayPopup(m.renderScreen(), m.renderCommitPopup()))
-	case m.pushing:
+	case m.popup == pushPopup:
 		view = tea.NewView(m.overlayPopup(m.renderScreen(), m.renderPushPopup()))
 	default:
 		view = tea.NewView(m.renderScreen())
@@ -829,9 +770,9 @@ func (m Model) View() tea.View {
 
 func (m Model) windowTitle() string {
 	if m.repository.Dir == "" {
-		return "perusal"
+		return appName
 	}
-	return "perusal: " + sanitizeText(filepath.Base(m.repository.Dir))
+	return appName + ": " + sanitizeText(filepath.Base(m.repository.Dir))
 }
 
 func (m Model) renderScreen() string {
@@ -844,7 +785,7 @@ func (m Model) renderScreen() string {
 
 func (m Model) branchLabel() string {
 	if m.status.Branch == "" {
-		return detachedBranchLabel
+		return "detached HEAD"
 	}
 	return sanitizeText(m.status.Branch)
 }
@@ -852,9 +793,9 @@ func (m Model) branchLabel() string {
 func (m Model) renderHeader() string {
 	switch {
 	case m.rejection != "":
-		return fitToWidth(" "+errorStyle.Render(refusedMessage), m.width)
+		return fitToWidth(" "+errorStyle.Render("refused the focused pane's directory"), m.width)
 	case m.repository.Dir == "":
-		return fitToWidth(" "+mutedStyle.Render(waitingMessage), m.width)
+		return fitToWidth(" "+mutedStyle.Render("waiting for a repository"), m.width)
 	}
 	left := " " + repositoryStyle.Render(folderGlyph+" "+sanitizeText(filepath.Base(m.repository.Dir))) + "  " +
 		branchStyle.Render(branchGlyph+" "+m.branchLabel()) + m.renderAheadBehind()
@@ -972,7 +913,7 @@ func (m Model) logLabel() string {
 	matching := 0
 	position := 0
 	for index, commit := range m.commits {
-		if !m.commitMatches(commit) {
+		if !m.logFilter.matches(commit) {
 			continue
 		}
 		matching++
@@ -1094,40 +1035,33 @@ func (m Model) overlayPopup(screen string, popup string) string {
 }
 
 func (m Model) renderCommitPopup() string {
-	width := m.popupInnerWidth()
-	lines := []string{
+	return m.renderPopup([]string{
 		titleStyle.Render("commit to " + m.branchLabel()),
 		renderField(m.summaryInput.View(), !m.descriptionFocused, m.fieldInnerWidth(), 1),
 		renderField(m.descriptionBox.View(), m.descriptionFocused, m.fieldInnerWidth(), descriptionHeight),
-		"",
-	}
-	switch {
-	case m.commitRunning:
-		lines = append(lines, mutedStyle.Render(commitRunningMessage))
-	case m.commitError != "":
-		lines = append(lines, renderPopupError(m.commitError, width))
-	default:
-		lines = append(lines, m.help.ShortHelpView(commitHelp))
-	}
-	return popupStyle.Width(width + 4).Render(strings.Join(lines, "\n"))
+	}, "committing...", commitHelp)
 }
 
 func (m Model) renderPushPopup() string {
-	width := m.popupInnerWidth()
-	lines := []string{
+	return m.renderPopup([]string{
 		titleStyle.Render("push " + m.branchLabel() + " to " + sanitizeText(m.status.Upstream)),
 		textStyle.Render(commitCount(m.status.Ahead)),
-		"",
-	}
+	}, "pushing...", pushHelp)
+}
+
+func (m Model) renderPopup(lines []string, runningText string, bindings []key.Binding) string {
+	width := m.popupInnerWidth()
+	var status string
 	switch {
-	case m.pushRunning:
-		lines = append(lines, mutedStyle.Render(pushRunningMessage))
-	case m.pushError != "":
-		lines = append(lines, renderPopupError(m.pushError, width))
+	case m.popupRunning:
+		status = mutedStyle.Render(runningText)
+	case m.popupError != "":
+		wrapped := strings.Split(lipgloss.Wrap(m.popupError, width, ""), "\n")
+		status = errorStyle.Render(strings.Join(wrapped[:min(len(wrapped), maximumErrorLines)], "\n"))
 	default:
-		lines = append(lines, m.help.ShortHelpView(pushHelp))
+		status = m.help.ShortHelpView(bindings)
 	}
-	return popupStyle.Width(width + 4).Render(strings.Join(lines, "\n"))
+	return popupStyle.Width(width + 4).Render(strings.Join(lines, "\n") + "\n\n" + status)
 }
 
 func commitCount(count int) string {
@@ -1135,11 +1069,6 @@ func commitCount(count int) string {
 		return "1 commit"
 	}
 	return strconv.Itoa(count) + " commits"
-}
-
-func renderPopupError(text string, width int) string {
-	wrapped := strings.Split(lipgloss.Wrap(text, width, ""), "\n")
-	return errorStyle.Render(strings.Join(wrapped[:min(len(wrapped), maximumErrorLines)], "\n"))
 }
 
 func renderField(view string, focused bool, innerWidth int, innerHeight int) string {

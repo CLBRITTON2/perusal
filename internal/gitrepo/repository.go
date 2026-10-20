@@ -136,10 +136,7 @@ func (r Repository) untrackedFileDiff(ctx context.Context, path string) (string,
 	args := []string{"diff", "--no-index", "--no-color", "--no-ext-diff", "--", "/dev/null", path}
 	output, err := runGit(ctx, r.Dir, args)
 	var exitErr *exec.ExitError
-	if errors.As(err, &exitErr) && exitErr.ExitCode() == 1 {
-		return string(output), nil
-	}
-	if err != nil {
+	if err != nil && !(errors.As(err, &exitErr) && exitErr.ExitCode() == 1) {
 		return "", err
 	}
 	return string(output), nil

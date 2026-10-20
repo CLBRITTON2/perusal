@@ -295,7 +295,7 @@ func sanitizeText(text string) string {
 }
 
 func sanitizeLines(text string) string {
-	lines := strings.Split(strings.ReplaceAll(text, "\r\n", "\n"), "\n")
+	lines := strings.Split(strings.ReplaceAll(strings.TrimSpace(text), "\r\n", "\n"), "\n")
 	sanitized := []string{}
 	for _, line := range lines {
 		sanitized = append(sanitized, sanitizeText(line))
@@ -303,11 +303,7 @@ func sanitizeLines(text string) string {
 	return strings.Join(sanitized, "\n")
 }
 
-func singleLine(text string) string {
-	lines := strings.FieldsFunc(text, isLineBreak)
-	return strings.Join(lines, " | ")
-}
-
-func isLineBreak(character rune) bool {
-	return character == '\n' || character == '\r'
+func sanitizeSingleLine(text string) string {
+	lines := strings.FieldsFunc(text, func(character rune) bool { return character == '\n' || character == '\r' })
+	return sanitizeText(strings.Join(lines, " | "))
 }

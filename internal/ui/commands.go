@@ -69,17 +69,13 @@ type committedMsg struct {
 	summary string
 }
 
-type commitFailedMsg struct {
-	dir string
-	err error
-}
-
 type pushedMsg struct {
 	dir      string
 	upstream string
 }
 
-type pushFailedMsg struct {
+// popupFailedMsg is the failure of the git run an open popup started.
+type popupFailedMsg struct {
 	dir string
 	err error
 }
@@ -101,17 +97,18 @@ func (r repositoryRequest) loadStatus() tea.Msg {
 }
 
 func (r repositoryRequest) stageAll() tea.Msg {
-	if err := r.repository.StageAll(context.Background()); err != nil {
-		return gitFailedMsg{err: err}
-	}
-	return indexChangedMsg{dir: r.repository.Dir}
+	return indexChanged(r.repository.Dir, r.repository.StageAll(context.Background()))
 }
 
 func (r repositoryRequest) unstageAll() tea.Msg {
-	if err := r.repository.UnstageAll(context.Background()); err != nil {
+	return indexChanged(r.repository.Dir, r.repository.UnstageAll(context.Background()))
+}
+
+func indexChanged(dir string, err error) tea.Msg {
+	if err != nil {
 		return gitFailedMsg{err: err}
 	}
-	return indexChangedMsg{dir: r.repository.Dir}
+	return indexChangedMsg{dir: dir}
 }
 
 type logRequest struct {
@@ -134,7 +131,7 @@ type pushRequest struct {
 
 func (r pushRequest) push() tea.Msg {
 	if err := r.repository.Push(context.Background()); err != nil {
-		return pushFailedMsg{dir: r.repository.Dir, err: err}
+		return popupFailedMsg{dir: r.repository.Dir, err: err}
 	}
 	return pushedMsg{dir: r.repository.Dir, upstream: r.upstream}
 }
@@ -157,17 +154,11 @@ func (r fileRequest) loadDiff() tea.Msg {
 }
 
 func (r fileRequest) stage() tea.Msg {
-	if err := r.repository.Stage(context.Background(), r.file); err != nil {
-		return gitFailedMsg{err: err}
-	}
-	return indexChangedMsg{dir: r.repository.Dir}
+	return indexChanged(r.repository.Dir, r.repository.Stage(context.Background(), r.file))
 }
 
 func (r fileRequest) unstage() tea.Msg {
-	if err := r.repository.Unstage(context.Background(), r.file); err != nil {
-		return gitFailedMsg{err: err}
-	}
-	return indexChangedMsg{dir: r.repository.Dir}
+	return indexChanged(r.repository.Dir, r.repository.Unstage(context.Background(), r.file))
 }
 
 type commitDiffRequest struct {
@@ -195,7 +186,7 @@ type commitRequest struct {
 func (r commitRequest) commit() tea.Msg {
 	summary, err := r.repository.Commit(context.Background(), r.message)
 	if err != nil {
-		return commitFailedMsg{dir: r.repository.Dir, err: err}
+		return popupFailedMsg{dir: r.repository.Dir, err: err}
 	}
 	return committedMsg{dir: r.repository.Dir, summary: summary}
 }
