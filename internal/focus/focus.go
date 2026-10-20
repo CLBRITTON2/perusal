@@ -1,6 +1,4 @@
-// Package focus turns the directory the agent account publishes for its focused herdr pane into a repository the
-// owner can review and commit as themselves. The agent can write anything into the focus file, so every path is
-// checked before git runs on it.
+// Package focus maps the agent's focused herdr pane to a repository the owner can safely run git in.
 package focus
 
 import (
@@ -27,21 +25,18 @@ var (
 	ErrGitDirUnprotected  = errors.New("the .git directory is not write-denied to the agent account")
 )
 
-// Rules are what Resolve checks a published path against. AgentDevDir is the agent account's path to the directory
-// the owner reaches as OwnerDevDir.
+// AgentDevDir and OwnerDevDir are one directory, as each account reaches it.
 type Rules struct {
 	AgentDevDir string
 	OwnerDevDir string
 	AgentSID    string
 }
 
-// Result is the repository the focused pane works in, or why its path was refused.
 type Result struct {
 	Repository gitrepo.Repository
 	Err        error
 }
 
-// Follow sends the result for focusFile, then a new one each time the file is written, until ctx ends.
 func Follow(ctx context.Context, rules Rules, focusFile string) (<-chan Result, error) {
 	watcher, err := fsnotify.NewWatcher()
 	if err != nil {
@@ -106,8 +101,7 @@ func resolveResult(ctx context.Context, rules Rules, focusFile string) Result {
 	return Result{Repository: repository, Err: err}
 }
 
-// Resolve returns the repository focusFile names. It refuses a repository whose .git the agent could have written,
-// since the owner's git would run the config and hooks in it.
+// The owner's git runs the config and hooks of a .git, so one the agent could write is refused.
 func Resolve(ctx context.Context, rules Rules, focusFile string) (gitrepo.Repository, error) {
 	content, err := readFocusFile(focusFile)
 	if err != nil {
@@ -172,7 +166,7 @@ func readFocusFile(focusFile string) (string, error) {
 	return string(content), nil
 }
 
-// ParseFocusFile returns the one path in content. A trailing line break is allowed, so a hand-written file works.
+// A trailing line break is allowed so a hand-written file works.
 func ParseFocusFile(content string) (string, error) {
 	path := strings.TrimRight(content, "\r\n")
 	if path == "" || strings.ContainsAny(path, "\r\n") {
@@ -181,7 +175,6 @@ func ParseFocusFile(content string) (string, error) {
 	return path, nil
 }
 
-// MapPath rewrites agentPath, which lies under agentDevDir, to the same place under ownerDevDir.
 func MapPath(agentPath string, agentDevDir string, ownerDevDir string) (string, error) {
 	cleaned := filepath.Clean(agentPath)
 	root := filepath.Clean(agentDevDir)
@@ -198,8 +191,6 @@ func MapPath(agentPath string, agentDevDir string, ownerDevDir string) (string, 
 	return filepath.Join(ownerDevDir, cleaned[len(prefix):]), nil
 }
 
-// FindWorkTree walks up from dir to the nearest directory holding a .git entry, the way git discovers a repository,
-// and stops at ownerDevDir.
 func FindWorkTree(dir string, ownerDevDir string) (string, error) {
 	root := filepath.Clean(ownerDevDir)
 	current := filepath.Clean(dir)

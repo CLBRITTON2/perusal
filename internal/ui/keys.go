@@ -4,7 +4,7 @@ import (
 	"charm.land/bubbles/v2/key"
 )
 
-// Bindings with no help text are the second half of a pair whose help the first one shows, such as j/k.
+// A binding with no help text is the second half of a pair the first one documents, such as j/k.
 var (
 	downKey        = key.NewBinding(key.WithKeys("j", "down"), key.WithHelp("j/k", "select"))
 	upKey          = key.NewBinding(key.WithKeys("k", "up"))

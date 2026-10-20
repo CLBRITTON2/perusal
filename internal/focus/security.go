@@ -20,7 +20,6 @@ const (
 	deniedInheritFlags = windows.OBJECT_INHERIT_ACE | windows.CONTAINER_INHERIT_ACE
 )
 
-// LookupAccountSID returns the SID string of the user account named account.
 func LookupAccountSID(account string) (string, error) {
 	sid, _, accountType, err := windows.LookupSID("", account)
 	if err != nil {
@@ -32,7 +31,6 @@ func LookupAccountSID(account string) (string, error) {
 	return sid.String(), nil
 }
 
-// ProfileDirectory returns the profile folder Windows records for the account with SID sid.
 func ProfileDirectory(sid string) (string, error) {
 	key, err := registry.OpenKey(registry.LOCAL_MACHINE, profileListKey+`\`+sid, registry.QUERY_VALUE)
 	if err != nil {
@@ -50,8 +48,6 @@ func ProfileDirectory(sid string) (string, error) {
 	return expanded, nil
 }
 
-// VerifyGitDir succeeds when gitDir is a plain directory that the agent does not own and that carries the agent
-// write deny on itself and everything below it.
 func VerifyGitDir(gitDir string, agentSID string) error {
 	info, err := os.Lstat(gitDir)
 	if err != nil {
@@ -111,8 +107,7 @@ func deniesAgentWrites(ace *windows.ACCESS_ALLOWED_ACE, agent *windows.SID) bool
 	return (*windows.SID)(unsafe.Pointer(&ace.SidStart)).Equals(agent)
 }
 
-// openSharingDelete opens path for reading while letting another process replace it. os.Open does not share delete
-// access, which makes the publisher's replace fail while perusal has the file open.
+// os.Open does not share delete access, which would make the publisher's replace fail.
 func openSharingDelete(path string) (*os.File, error) {
 	name, err := windows.UTF16PtrFromString(path)
 	if err != nil {

@@ -8,11 +8,9 @@ import (
 	"strings"
 )
 
-// FileStatus is one changed file. IndexStatus and WorktreeStatus are the X and Y codes of git status --short, with
-// ' ' for unchanged.
+// IndexStatus and WorktreeStatus are the X and Y codes of git status --short.
 type FileStatus struct {
-	Path string
-	// OriginalPath is the source of a rename or copy, empty otherwise.
+	Path           string
 	OriginalPath   string
 	IndexStatus    byte
 	WorktreeStatus byte
@@ -35,10 +33,9 @@ type Status struct {
 	// Branch is empty when HEAD is detached.
 	Branch string
 	// Upstream is empty when the branch tracks nothing, and then Ahead and Behind are 0.
-	Upstream string
-	Ahead    int
-	Behind   int
-	// HasCommits is false on an unborn branch, before the first commit.
+	Upstream   string
+	Ahead      int
+	Behind     int
 	HasCommits bool
 	Files      []FileStatus
 }
@@ -107,7 +104,6 @@ func statusWithHeader(status Status, header string) (Status, error) {
 	return status, nil
 }
 
-// parseAheadBehind reads a branch.ab value such as "+2 -0".
 func parseAheadBehind(value string) (int, int, error) {
 	aheadText, behindText, found := strings.Cut(value, " ")
 	if !found || !strings.HasPrefix(aheadText, "+") || !strings.HasPrefix(behindText, "-") {
@@ -124,11 +120,10 @@ func parseAheadBehind(value string) (int, int, error) {
 	return ahead, behind, nil
 }
 
-// fieldsBeforePath counts the space-separated fields, XY first, that precede the path in each kind of changed entry.
+// Counts XY and every field before the path, per porcelain v2 entry kind.
 var fieldsBeforePath = map[string]int{"1": 7, "2": 8, "u": 9}
 
-// parseChangedEntry reads an ordinary, renamed or unmerged entry. The path is the rest of the entry, so it can hold
-// spaces.
+// The path is the rest of the entry, so it can hold spaces.
 func parseChangedEntry(kind string, rest string) (FileStatus, error) {
 	count := fieldsBeforePath[kind]
 	parts := strings.SplitN(rest, " ", count+1)
@@ -142,7 +137,6 @@ func parseChangedEntry(kind string, rest string) (FileStatus, error) {
 	}, nil
 }
 
-// shortStatusCode maps porcelain v2's '.' for unchanged to the ' ' of git status --short.
 func shortStatusCode(code byte) byte {
 	if code == '.' {
 		return ' '

@@ -6,15 +6,13 @@ import (
 	"github.com/CLBRITTON2/perusal/internal/gitrepo"
 )
 
-// graphRow is the branch lines of one commit: commit for its own row, below for the rows of its files under it. Both
-// are the same width, two cells per lane.
+// commit and below are the same width, two cells per lane.
 type graphRow struct {
 	commit string
 	below  string
 }
 
-// commitGraph lays out commits, newest first and no parent above its children, in lanes the way git log --graph
-// does, but with one row per commit. Each lane holds the hash of the commit it leads down to.
+// Each lane holds the hash of the commit it leads down to.
 func commitGraph(commits []gitrepo.Commit) []graphRow {
 	rows := []graphRow{}
 	lanes := []string{}
@@ -26,8 +24,6 @@ func commitGraph(commits []gitrepo.Commit) []graphRow {
 	return rows
 }
 
-// graphStep draws commit given the lanes above it and returns the lanes below it. Lanes waiting for commit end in it,
-// its first parent takes over its lane, and each other parent joins the lane already waiting for it or opens one.
 func graphStep(above []string, commit gitrepo.Commit) (graphRow, []string) {
 	column := commitLane(above, commit.Hash)
 	below := slices.Clone(above)
@@ -122,7 +118,7 @@ func graphStep(above []string, commit gitrepo.Commit) (graphRow, []string) {
 	return graphRow{commit: commitCells, below: belowCells}, below
 }
 
-// freeLane is the first lane empty in both lane lists, so a lane that just ended is not reused on the same row.
+// Also empty above, so a lane that just ended is not reused on the same row.
 func freeLane(lanes []string, above []string) int {
 	for lane := range lanes {
 		if lanes[lane] == "" && (lane >= len(above) || above[lane] == "") {
@@ -132,7 +128,6 @@ func freeLane(lanes []string, above []string) int {
 	return len(lanes)
 }
 
-// commitLane is the lane waiting for hash, or a free one for a commit no lane leads to, such as a branch tip.
 func commitLane(above []string, hash string) int {
 	if slices.Contains(above, hash) {
 		return slices.Index(above, hash)

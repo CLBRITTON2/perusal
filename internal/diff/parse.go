@@ -23,7 +23,6 @@ type Line struct {
 	Text   string
 }
 
-// Row is one side-by-side line: Left from the old file, Right from the new one.
 type Row struct {
 	Left  Line
 	Right Line
@@ -34,7 +33,6 @@ type Hunk struct {
 	Rows   []Row
 }
 
-// FileChange is what happened to a file as a whole, read from the extended header lines above its first hunk.
 type FileChange int
 
 const (
@@ -45,13 +43,11 @@ const (
 )
 
 type FileDiff struct {
-	Hunks []Hunk
-	// Binary is set when git reports the file as binary, which has no hunks.
+	Hunks  []Hunk
 	Binary bool
 	Change FileChange
 }
 
-// FileSection is one file of a diff that spans several, such as git show prints for a commit.
 type FileSection struct {
 	Path     string
 	FileDiff FileDiff
@@ -61,7 +57,6 @@ var hunkHeader = regexp.MustCompile(`^@@ -(\d+)(?:,\d+)? \+(\d+)(?:,\d+)? @@`)
 
 const fileHeaderPrefix = "diff --git "
 
-// ParseFiles splits a diff of several files at each "diff --git" line and parses every file.
 func ParseFiles(text string) ([]FileSection, error) {
 	sections := []FileSection{}
 	lines := strings.Split(text, "\n")
@@ -90,8 +85,7 @@ func parseFileSection(lines []string) (FileSection, error) {
 	return FileSection{Path: sectionPath(lines), FileDiff: fileDiff}, nil
 }
 
-// sectionPath finds the new path of a file section, or the old one for a deletion. A binary file has no ---/+++
-// lines, so its path comes from the "diff --git a/<path> b/<path>" header, which is ambiguous only for a rename.
+// A binary file has no ---/+++ lines, so its path comes from the diff --git header.
 func sectionPath(lines []string) string {
 	oldPath := ""
 	for _, line := range lines {
@@ -113,7 +107,6 @@ func sectionPath(lines []string) string {
 	return headerPath(strings.TrimPrefix(lines[0], fileHeaderPrefix))
 }
 
-// headerPath reads "a/<path> b/<path>", where both halves name the same path.
 func headerPath(paths string) string {
 	half := (len(paths) - 1) / 2
 	if len(paths)%2 == 1 && strings.HasPrefix(paths, "a/") && paths[half:half+3] == " b/" {
@@ -122,8 +115,6 @@ func headerPath(paths string) string {
 	return paths
 }
 
-// ParseUnified pairs the lines of a git unified diff for side-by-side display. Within a change, the nth removed line
-// sits beside the nth added line, and the longer side's extra lines sit beside blanks.
 func ParseUnified(text string) (FileDiff, error) {
 	fileDiff := FileDiff{}
 	var hunk *Hunk
@@ -193,7 +184,6 @@ func ParseUnified(text string) (FileDiff, error) {
 	return fileDiff, nil
 }
 
-// parseHunkStarts returns the first old and new line numbers of a header such as "@@ -134,7 +134,6 @@ func".
 func parseHunkStarts(header string) (int, int, error) {
 	match := hunkHeader.FindStringSubmatch(header)
 	if match == nil {
@@ -210,7 +200,6 @@ func parseHunkStarts(header string) (int, int, error) {
 	return oldStart, newStart, nil
 }
 
-// changeBlock holds a run of removed lines and the added lines that replace them.
 type changeBlock struct {
 	removed []Line
 	added   []Line

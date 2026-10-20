@@ -15,21 +15,18 @@ import (
 const (
 	logPageSize  = 500
 	pollInterval = 2 * time.Second
-	// wholeHistory is a log limit no repository reaches. git parses --max-count into a 32-bit int.
+	// git parses --max-count into a 32-bit int.
 	wholeHistory = math.MaxInt32
 )
 
-// RepositoryFocused switches the review to Repository, unless it is already on screen.
 type RepositoryFocused struct {
 	Repository gitrepo.Repository
 }
 
-// FocusRejected clears the review and shows Reason, so nothing of the previous repository stays on screen.
 type FocusRejected struct {
 	Reason string
 }
 
-// pollTickMsg reloads the status, which reloads the selected diff and the log, so edits made outside perusal show up.
 type pollTickMsg struct{}
 
 func nextPoll() tea.Cmd {

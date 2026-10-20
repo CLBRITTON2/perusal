@@ -4,8 +4,7 @@ import (
 	"charm.land/lipgloss/v2"
 )
 
-// Rosé Pine main variant, https://rosepinetheme.com/palette. Nothing sets a background for the whole screen, so the
-// terminal's own background and opacity show through.
+// Rosé Pine main, https://rosepinetheme.com/palette. Nothing sets a screen background, so terminal opacity shows.
 var (
 	colorOverlay      = lipgloss.Color("#26233a")
 	colorMuted        = lipgloss.Color("#6e6a86")
@@ -17,7 +16,7 @@ var (
 	colorFoam         = lipgloss.Color("#9ccfd8")
 	colorIris         = lipgloss.Color("#c4a7e7")
 	colorHighlightMed = lipgloss.Color("#403d52")
-	// love and foam blended 15% over base
+	// love and foam, each blended 15% over base
 	colorRemovedBackground = lipgloss.Color("#382434")
 	colorAddedBackground   = lipgloss.Color("#2d333f")
 )

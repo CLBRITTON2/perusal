@@ -15,7 +15,7 @@ import (
 	"github.com/CLBRITTON2/perusal/internal/ui"
 )
 
-// focusFileName is where windows-dev's herdr/focus-file plugin publishes the focused pane, in the agent's dev directory.
+// Published by windows-dev's herdr/focus-file plugin.
 const focusFileName = ".herdr-focus"
 
 func main() {
@@ -29,8 +29,6 @@ func main() {
 	}
 }
 
-// run reviews and commits the changes of one working tree, or with follow, of whichever one the agent's focused herdr
-// pane works in, until the user quits.
 func run(args []string) error {
 	if len(args) > 0 && args[0] == "follow" {
 		return runFollow(args[1:])
@@ -63,8 +61,7 @@ func runReview(args []string) error {
 	return review(workingDir)
 }
 
-// runFollow finds the agent's dev directory and focus file from the agent account alone, and maps them to the owner's
-// dev directory, the layout windows-dev's setup-agent-account.ps1 creates.
+// Relies on the dev directory layout windows-dev's setup-agent-account.ps1 creates.
 func runFollow(args []string) error {
 	flags := flag.NewFlagSet("perusal follow", flag.ContinueOnError)
 	flags.Usage = func() {

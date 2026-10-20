@@ -19,8 +19,6 @@ const tabWidth = 4
 
 const columnSeparator = "│"
 
-// renderFileDiff lays out fileDiff as rows exactly width cells wide. Only a file that existed before and after gets
-// the side-by-side split: an added or deleted file has one side, so it takes the whole width.
 func renderFileDiff(fileDiff diff.FileDiff, width int) []string {
 	switch {
 	case fileDiff.Binary:
@@ -36,8 +34,6 @@ func renderFileDiff(fileDiff diff.FileDiff, width int) []string {
 	}
 }
 
-// renderSideBySide puts the old file left and the new file right. A line too long for its side wraps onto the rows
-// below, and the other side is padded to match.
 func renderSideBySide(fileDiff diff.FileDiff, width int) []string {
 	numberWidth := len(strconv.Itoa(maxLineNumber(fileDiff)))
 	leftWidth := (width - 1) / 2
@@ -80,8 +76,6 @@ func newLine(row diff.Row) diff.Line {
 	return row.Right
 }
 
-// wrapSide renders one half of a row, width cells wide per returned line: a right-aligned line number and a space on
-// the first line, a blank gutter on the lines the text wraps onto.
 func wrapSide(line diff.Line, numberWidth int, width int) []string {
 	gutterWidth := numberWidth + 1
 	if width <= gutterWidth || line.Kind == diff.LineBlank {
@@ -103,8 +97,6 @@ func wrapSide(line diff.Line, numberWidth int, width int) []string {
 	return rendered
 }
 
-// segmentOrFiller returns the wrapped line at index, or blank cells in the background of kind once the side's text
-// has run out.
 func segmentOrFiller(segments []string, index int, kind diff.LineKind, width int) string {
 	if index < len(segments) {
 		return segments[index]
@@ -158,7 +150,7 @@ func renderCommit(commit gitrepo.Commit, sections []diff.FileSection, width int)
 	return lines
 }
 
-// renderTreeFileRow shows one file of an expanded commit under it, with the letter git log --name-status uses.
+// Letters match git log --name-status.
 func renderTreeFileRow(section diff.FileSection, last bool, width int) string {
 	var branch string
 	if last {
@@ -190,7 +182,6 @@ func expandMarker(expanded bool) string {
 	return mutedStyle.Render("▸ ")
 }
 
-// compactAge shortens age to its largest whole unit, such as 5m, 3h, 2d, 6w, 4mo or 2y.
 func compactAge(age time.Duration) string {
 	const day = 24 * time.Hour
 	switch {
@@ -211,7 +202,6 @@ func compactAge(age time.Duration) string {
 	}
 }
 
-// fitToWidth cuts text, which may hold ANSI styling, to width cells with an ellipsis, or pads it with spaces.
 func fitToWidth(text string, width int) string {
 	truncated := ansi.Truncate(text, width, "…")
 	return truncated + strings.Repeat(" ", max(width-ansi.StringWidth(truncated), 0))
@@ -229,7 +219,6 @@ func fitLines(lines []string, width int, height int) []string {
 	return fitted
 }
 
-// spaceBetween puts left and right at the two ends of a line width cells wide. Left wins when both do not fit.
 func spaceBetween(left string, right string, width int) string {
 	gap := width - lipgloss.Width(left) - lipgloss.Width(right)
 	if gap < 1 {
@@ -238,7 +227,6 @@ func spaceBetween(left string, right string, width int) string {
 	return left + strings.Repeat(" ", gap) + right
 }
 
-// renderPane draws a rounded box with title set into its top border and label into its bottom border.
 func renderPane(title string, label string, body []string, innerWidth int, innerHeight int) string {
 	lines := []string{borderLine("╭", titleStyle, title, "╮", innerWidth)}
 	side := borderStyle.Render("│")
@@ -249,8 +237,6 @@ func renderPane(title string, label string, body []string, innerWidth int, inner
 	return strings.Join(lines, "\n")
 }
 
-// renderFoldedPane draws a pane folded to one line as wide as the open box, title at the left and label at the
-// right. The label is the first to go when both do not fit.
 func renderFoldedPane(title string, label string, innerWidth int) string {
 	outerWidth := innerWidth + 2
 	fittedTitle := ansi.Truncate(title, max(outerWidth-6, 0), "…")
@@ -266,7 +252,6 @@ func renderFoldedPane(title string, label string, innerWidth int) string {
 	return left + borderStyle.Render(strings.Repeat("─", fill)) + right
 }
 
-// borderLine draws one horizontal border with text after a short lead, such as "╭─ changes ──╮".
 func borderLine(leftCorner string, style lipgloss.Style, text string, rightCorner string, innerWidth int) string {
 	if text == "" || innerWidth < 4 {
 		return borderStyle.Render(leftCorner + strings.Repeat("─", max(innerWidth, 0)) + rightCorner)
@@ -277,9 +262,7 @@ func borderLine(leftCorner string, style lipgloss.Style, text string, rightCorne
 		strings.Repeat("─", fill)+rightCorner)
 }
 
-// sanitizeText makes repository content safe to print. File text, paths and git output can come from the agent
-// account, so a control character, which could start an escape sequence, becomes U+FFFD, and so does a bidi
-// control, which could make the shown code read differently from what gets committed. A tab becomes spaces.
+// Text can come from the agent: a control character could start an escape, a bidi control could disguise code.
 func sanitizeText(text string) string {
 	var sanitized strings.Builder
 	for _, character := range text {
@@ -295,7 +278,6 @@ func sanitizeText(text string) string {
 	return sanitized.String()
 }
 
-// sanitizeLines sanitizes multi-line text one line at a time, so its line breaks survive.
 func sanitizeLines(text string) string {
 	lines := strings.Split(strings.ReplaceAll(text, "\r\n", "\n"), "\n")
 	sanitized := []string{}

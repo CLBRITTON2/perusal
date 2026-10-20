@@ -44,7 +44,6 @@ const (
 	appName              = "perusal"
 )
 
-// commitRow is the selectedFile of a commit row in the log, as opposed to one of its files.
 const commitRow = -1
 
 type viewKind int
@@ -55,55 +54,45 @@ const (
 )
 
 type Model struct {
-	repository gitrepo.Repository
-	// rejection says why no repository is on screen, empty while one is or before the first arrives.
-	rejection  string
-	view       viewKind
-	status     gitrepo.Status
-	selected   int
-	listOffset int
-	diffPath   string
-	fileDiff   diff.FileDiff
-	commits    []gitrepo.Commit
-	// graph is the branch lines of commits, laid out again only when their hashes or parents change.
-	graph []graphRow
-	// logLimit is how many commits the log asks git for. Fewer come back once the whole history is loaded.
-	logLimit int
-	// logLoadedAt is when commits was read, the reference for their ages.
+	repository     gitrepo.Repository
+	rejection      string
+	view           viewKind
+	status         gitrepo.Status
+	selected       int
+	listOffset     int
+	diffPath       string
+	fileDiff       diff.FileDiff
+	commits        []gitrepo.Commit
+	graph          []graphRow
+	logLimit       int
 	logLoadedAt    time.Time
 	selectedCommit int
 	selectedFile   int
 	// logOffset counts rows of the log tree, commit and file rows alike.
-	logOffset int
-	// commitFiles holds the parsed diff of every commit loaded so far, by hash, and expanded the commits whose files
-	// the log tree lists.
-	commitFiles map[string][]diff.FileSection
-	expanded    map[string]bool
-	// logFilter is nil while the log shows every commit.
-	logFilter      *regexp.Regexp
-	searching      bool
-	searchInput    textinput.Model
-	searchError    string
-	diffView       viewport.Model
-	help           help.Model
-	summaryInput   textinput.Model
-	descriptionBox textarea.Model
-	// committing is true while the commit popup is open, commitRunning while git commit runs.
+	logOffset          int
+	commitFiles        map[string][]diff.FileSection
+	expanded           map[string]bool
+	logFilter          *regexp.Regexp
+	searching          bool
+	searchInput        textinput.Model
+	searchError        string
+	diffView           viewport.Model
+	help               help.Model
+	summaryInput       textinput.Model
+	descriptionBox     textarea.Model
 	committing         bool
 	descriptionFocused bool
 	commitRunning      bool
 	commitError        string
-	// pushing is true while the push popup is open, pushRunning while git push runs.
-	pushing       bool
-	pushRunning   bool
-	pushError     string
-	footerText    string
-	footerIsError bool
-	width         int
-	height        int
+	pushing            bool
+	pushRunning        bool
+	pushError          string
+	footerText         string
+	footerIsError      bool
+	width              int
+	height             int
 }
 
-// New starts with no repository. A RepositoryFocused message picks the one to review.
 func New() Model {
 	summaryInput := textinput.New()
 	summaryInput.Placeholder = "Summary (required)"
@@ -272,7 +261,6 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	return m, nil
 }
 
-// withStatus shows status and loads the diff of the selected file, and the log when the branch has commits.
 func (m Model) withStatus(status gitrepo.Status) (tea.Model, tea.Cmd) {
 	m.status = status
 	m.selected = min(m.selected, max(len(m.status.Files)-1, 0))
@@ -351,7 +339,6 @@ func (m Model) switchView() (tea.Model, tea.Cmd) {
 	return m, m.loadSelectedCommitDiff()
 }
 
-// withFocus opens view's pane, folds the other one and gives view the keys and the diff pane.
 func (m Model) withFocus(view viewKind) Model {
 	if view != m.view {
 		m.diffView.SetYOffset(0)
@@ -360,8 +347,6 @@ func (m Model) withFocus(view viewKind) Model {
 	return m.withLayout()
 }
 
-// withRepository shows repository, or rejection when no repository is allowed, and drops everything shown for the
-// previous one, including a commit message being written for it.
 func (m Model) withRepository(repository gitrepo.Repository, rejection string) Model {
 	m = m.withCommitPopupClosed().withPushPopupClosed()
 	m.summaryInput.Reset()
@@ -441,7 +426,6 @@ func (m Model) startCommit() (tea.Model, tea.Cmd) {
 	return m, commitRequest{repository: m.repository, message: message}.commit
 }
 
-// joinCommitMessage puts the description one blank line below the summary, the shape git log and GitHub expect.
 func joinCommitMessage(summary string, description string) string {
 	trimmedDescription := strings.TrimSpace(description)
 	if trimmedDescription == "" {
@@ -459,7 +443,6 @@ func (m Model) withCommitPopupClosed() Model {
 	return m
 }
 
-// openPushPopup asks before pushing, unless there is nowhere to push or nothing to push.
 func (m Model) openPushPopup() (tea.Model, tea.Cmd) {
 	switch {
 	case m.repository.Dir == "":
@@ -514,7 +497,6 @@ func (m Model) selectFile(index int) (tea.Model, tea.Cmd) {
 	return m.withListScrolled(), m.loadSelectedDiff()
 }
 
-// selectLogRow selects the commit or file at index of the log tree, and loads the commit's diff unless it is loaded.
 func (m Model) selectLogRow(index int) (tea.Model, tea.Cmd) {
 	rows := m.visibleLogRows()
 	if len(rows) == 0 {
@@ -530,8 +512,6 @@ func (m Model) selectLogRow(index int) (tea.Model, tea.Cmd) {
 	return m, tea.Batch(m.loadSelectedCommitDiff(), loadMore)
 }
 
-// withMoreLogNearEnd asks for the next page of the log once the selection is within a screen of the last loaded
-// commit, unless the whole history is loaded or a page is already on its way.
 func (m Model) withMoreLogNearEnd() (Model, tea.Cmd) {
 	if len(m.commits) < m.logLimit || m.selectedCommit < len(m.commits)-m.listInnerHeight() {
 		return m, nil
@@ -540,7 +520,6 @@ func (m Model) withMoreLogNearEnd() (Model, tea.Cmd) {
 	return m, logRequest{repository: m.repository, limit: m.logLimit}.load
 }
 
-// withCommits shows a newly read log. The selection stays on the same commit when new ones arrive above it.
 func (m Model) withCommits(commits []gitrepo.Commit, loadedAt time.Time) (tea.Model, tea.Cmd) {
 	index, found := commitIndex(commits, m.selectedCommitHash())
 	if !found {
@@ -556,7 +535,6 @@ func (m Model) withCommits(commits []gitrepo.Commit, loadedAt time.Time) (tea.Mo
 	return m, m.loadSelectedCommitDiff()
 }
 
-// toggleExpanded lists or hides the files of the selected commit. Collapsing from one of its files selects the commit.
 func (m Model) toggleExpanded() (tea.Model, tea.Cmd) {
 	hash := m.selectedCommitHash()
 	if hash == "" {
@@ -576,7 +554,6 @@ func (m Model) toggleExpanded() (tea.Model, tea.Cmd) {
 	return m, m.loadSelectedCommitDiff()
 }
 
-// updateSearch filters the log as the pattern is typed. A pattern that does not compile leaves the last filter on.
 func (m Model) updateSearch(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	switch {
 	case key.Matches(msg, keepSearchKey):
@@ -603,8 +580,7 @@ func (m Model) updateSearch(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	return next, tea.Batch(inputCmd, loadCmd)
 }
 
-// compileSearch compiles pattern as a Go regular expression, matched case-insensitively unless it holds an uppercase
-// letter, the way ripgrep --smart-case does. An empty pattern is no filter.
+// Smart case, as ripgrep --smart-case does.
 func compileSearch(pattern string) (*regexp.Regexp, error) {
 	if pattern == "" {
 		return nil, nil
@@ -615,8 +591,6 @@ func compileSearch(pattern string) (*regexp.Regexp, error) {
 	return regexp.Compile(pattern)
 }
 
-// withLogFilter shows only the commits whose message filter matches, every commit when it is nil. A selection the
-// filter hides moves to the first row left. A filter loads the whole history, so it searches every commit.
 func (m Model) withLogFilter(filter *regexp.Regexp) (tea.Model, tea.Cmd) {
 	m.logFilter = filter
 	rows := m.visibleLogRows()
@@ -633,14 +607,12 @@ func (m Model) withLogFilter(filter *regexp.Regexp) (tea.Model, tea.Cmd) {
 	return m, tea.Batch(m.loadSelectedCommitDiff(), logRequest{repository: m.repository, limit: m.logLimit}.load)
 }
 
-// logRow is one row of the log tree: a commit, or one of its files under it when it is expanded. file indexes the
-// commit's commitFiles.
+// file indexes the commit's commitFiles, or is commitRow for the commit itself.
 type logRow struct {
 	commit int
 	file   int
 }
 
-// visibleLogRows lists the commits the filter lets through, each followed by its files when it is expanded.
 func (m Model) visibleLogRows() []logRow {
 	rows := []logRow{}
 	for index, commit := range m.commits {
@@ -658,7 +630,7 @@ func (m Model) visibleLogRows() []logRow {
 	return rows
 }
 
-// selectedLogRow is the index of the selection in rows, -1 when the filter hides it.
+// -1 when the filter hides the selection.
 func (m Model) selectedLogRow(rows []logRow) int {
 	for index, row := range rows {
 		if row.commit == m.selectedCommit && row.file == m.selectedFile {
@@ -695,7 +667,6 @@ func (m Model) clickList(mouse tea.Mouse) (tea.Model, tea.Cmd) {
 	return m.selectFile(m.listOffset + row)
 }
 
-// scrollWheel moves the selection over the list and scrolls the diff over the diff pane.
 func (m Model) scrollWheel(mouse tea.Mouse) (tea.Model, tea.Cmd) {
 	overList := mouse.X < m.listOuterWidth()
 	switch {
@@ -718,7 +689,6 @@ func (m Model) loadSelectedDiff() tea.Cmd {
 	return fileRequest{repository: m.repository, file: m.status.Files[m.selected]}.loadDiff
 }
 
-// loadSelectedCommitDiff loads the diff of the selected commit while the log is on screen, unless it is loaded.
 func (m Model) loadSelectedCommitDiff() tea.Cmd {
 	hash := m.selectedCommitHash()
 	_, loaded := m.commitFiles[hash]
@@ -789,7 +759,6 @@ func (m Model) withListScrolled() Model {
 	return m
 }
 
-// scrolledOffset returns the first visible row that keeps selected within visibleRows rows of it.
 func scrolledOffset(offset int, selected int, visibleRows int) int {
 	switch {
 	case selected < offset:
@@ -801,7 +770,6 @@ func scrolledOffset(offset int, selected int, visibleRows int) int {
 	}
 }
 
-// listOuterWidth is the width of the left column, where the changes pane sits above the log pane.
 func (m Model) listOuterWidth() int {
 	return max(m.width*listPercent/100, minimumListWidth)
 }
@@ -825,13 +793,12 @@ func (m Model) paneInnerHeight() int {
 	return max(m.columnHeight()-2, 0)
 }
 
-// listInnerHeight is the open pane's share of the column, all of it but its borders and the folded pane's line.
+// Leaves out the open pane's two borders and the folded pane's line.
 func (m Model) listInnerHeight() int {
 	return max(m.columnHeight()-3, 0)
 }
 
-// listFirstRowY is the screen row of the open pane's first entry. The changes pane stays above the log, so a folded
-// changes pane pushes the log down a line.
+// A folded changes pane sits above the log and pushes it down a line.
 func (m Model) listFirstRowY() int {
 	if m.view == viewLog {
 		return headerHeight + 2
@@ -906,7 +873,6 @@ func (m Model) renderHeader() string {
 	return fitToWidth(left, m.width)
 }
 
-// renderAheadBehind shows how far the branch has moved from its upstream, nothing when it tracks none or matches it.
 func (m Model) renderAheadBehind() string {
 	counts := []string{}
 	if m.status.Ahead > 0 {
@@ -961,8 +927,7 @@ func (m Model) renderLogRows(innerWidth int) []string {
 	return rendered
 }
 
-// logGraph draws the branch lines of every commit, or blank ones while a search filters the log, since the lines
-// between commits it hides would be wrong.
+// Blank while a search hides commits, since the lines between the shown ones would be wrong.
 func (m Model) logGraph() []graphRow {
 	if m.logFilter != nil {
 		return make([]graphRow, len(m.commits))
@@ -970,7 +935,7 @@ func (m Model) logGraph() []graphRow {
 	return m.graph
 }
 
-// sameTopology reports whether both logs hold the same commits with the same parents, all that commitGraph reads.
+// Hashes and parents are all commitGraph reads.
 func sameTopology(first []gitrepo.Commit, second []gitrepo.Commit) bool {
 	return slices.EqualFunc(first, second, func(a gitrepo.Commit, b gitrepo.Commit) bool {
 		return a.Hash == b.Hash && slices.Equal(a.Parents, b.Parents)
@@ -987,8 +952,7 @@ func (m Model) renderLogRow(row logRow, graph graphRow, width int) string {
 	return graph.below + renderTreeFileRow(files[row.file], row.file == len(files)-1, width-ansi.StringWidth(graph.below))
 }
 
-// listRow fits row to width behind a one-cell gutter, which holds a bar on the selected row. The selected row drops
-// its own colors, since each styled part would end the row's background early.
+// The selected row drops its own colors, since each styled part would end the row's background early.
 func listRow(row string, selected bool, width int) string {
 	if selected {
 		return selectionBarStyle.Render("▌") + selectedRowStyle.Render(fitToWidth(ansi.Strip(row), width-1))
@@ -996,7 +960,7 @@ func listRow(row string, selected bool, width int) string {
 	return " " + fitToWidth(row, width-1)
 }
 
-// changesLabel counts the files with staged and with unstaged changes. A partly staged file counts in both.
+// A partly staged file counts in both.
 func (m Model) changesLabel() string {
 	if len(m.status.Files) == 0 {
 		return ""
@@ -1014,7 +978,6 @@ func (m Model) changesLabel() string {
 	return strconv.Itoa(staged) + " staged · " + strconv.Itoa(unstaged) + " unstaged"
 }
 
-// logLabel places the selected commit among the commits the filter lets through.
 func (m Model) logLabel() string {
 	matching := 0
 	position := 0
@@ -1070,7 +1033,6 @@ func (m Model) renderDiffPane() string {
 	}
 }
 
-// commitPaneTitle names the selected file of the log tree, or the selected commit when no file is.
 func (m Model) commitPaneTitle() string {
 	commit := m.commits[m.selectedCommit]
 	sections, loaded := m.commitFiles[commit.Hash]
@@ -1080,7 +1042,6 @@ func (m Model) commitPaneTitle() string {
 	return sanitizeText(commit.ShortHash + " " + commit.Summary)
 }
 
-// scrollLabel shows how far down the diff is scrolled, nothing when it fits.
 func (m Model) scrollLabel() string {
 	if m.diffView.TotalLineCount() <= m.diffView.Height() {
 		return ""
@@ -1105,7 +1066,6 @@ func (m Model) renderFooter() string {
 	}
 }
 
-// renderHelpLine shows bindings with the app name at the right end, which a narrow screen drops first.
 func (m Model) renderHelpLine(bindings []key.Binding) string {
 	return spaceBetween(" "+m.help.ShortHelpView(bindings), mutedStyle.Render(appName)+" ", m.width)
 }
@@ -1160,7 +1120,6 @@ func commitCount(count int) string {
 	return strconv.Itoa(count) + " commits"
 }
 
-// renderPopupError wraps text to the popup and keeps its first maximumErrorLines lines.
 func renderPopupError(text string, width int) string {
 	wrapped := strings.Split(lipgloss.Wrap(text, width, ""), "\n")
 	return errorStyle.Render(strings.Join(wrapped[:min(len(wrapped), maximumErrorLines)], "\n"))
