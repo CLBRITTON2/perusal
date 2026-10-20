@@ -3,7 +3,6 @@ package ui
 import (
 	"maps"
 	"path/filepath"
-	"regexp"
 	"slices"
 	"strconv"
 	"strings"
@@ -72,7 +71,7 @@ type Model struct {
 	logOffset          int
 	commitFiles        map[string][]diff.FileSection
 	expanded           map[string]bool
-	logFilter          *regexp.Regexp
+	logFilter          searchTerms
 	searching          bool
 	searchInput        textinput.Model
 	searchError        string
@@ -580,18 +579,7 @@ func (m Model) updateSearch(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	return next, tea.Batch(inputCmd, loadCmd)
 }
 
-// Smart case, as ripgrep --smart-case does.
-func compileSearch(pattern string) (*regexp.Regexp, error) {
-	if pattern == "" {
-		return nil, nil
-	}
-	if strings.ToLower(pattern) == pattern {
-		return regexp.Compile("(?i)" + pattern)
-	}
-	return regexp.Compile(pattern)
-}
-
-func (m Model) withLogFilter(filter *regexp.Regexp) (tea.Model, tea.Cmd) {
+func (m Model) withLogFilter(filter searchTerms) (tea.Model, tea.Cmd) {
 	m.logFilter = filter
 	rows := m.visibleLogRows()
 	if m.selectedLogRow(rows) < 0 && len(rows) > 0 {
@@ -641,7 +629,7 @@ func (m Model) selectedLogRow(rows []logRow) int {
 }
 
 func (m Model) commitMatches(commit gitrepo.Commit) bool {
-	return m.logFilter == nil || m.logFilter.MatchString(commit.Message)
+	return m.logFilter.matches(commit)
 }
 
 func (m Model) clickList(mouse tea.Mouse) (tea.Model, tea.Cmd) {
@@ -914,7 +902,7 @@ func (m Model) renderLogRows(innerWidth int) []string {
 	case m.repository.Dir != "" && !m.status.HasCommits:
 		return []string{mutedStyle.Render("no commits yet")}
 	case len(rows) == 0 && m.logFilter != nil:
-		return []string{mutedStyle.Render("no commit message matches")}
+		return []string{mutedStyle.Render("no commit matches")}
 	}
 	selected := m.selectedLogRow(rows)
 	graph := m.logGraph()
@@ -946,7 +934,7 @@ func (m Model) renderLogRow(row logRow, graph graphRow, width int) string {
 	commit := m.commits[row.commit]
 	if row.file == commitRow {
 		prefix := graph.commit + expandMarker(m.expanded[commit.Hash])
-		return prefix + renderCommitRow(commit, m.logLoadedAt, width-ansi.StringWidth(prefix))
+		return prefix + renderCommitRow(commit, m.logFilter, m.logLoadedAt, width-ansi.StringWidth(prefix))
 	}
 	files := m.commitFiles[commit.Hash]
 	return graph.below + renderTreeFileRow(files[row.file], row.file == len(files)-1, width-ansi.StringWidth(graph.below))
@@ -1005,14 +993,15 @@ func renderFileRow(file gitrepo.FileStatus) string {
 		" " + path
 }
 
-func renderCommitRow(commit gitrepo.Commit, now time.Time, width int) string {
+func renderCommitRow(commit gitrepo.Commit, search searchTerms, now time.Time, width int) string {
 	age := compactAge(now.Sub(commit.AuthoredAt))
 	summaryWidth := max(width-len(age)-1, 0)
-	summary := hashStyle.Render(sanitizeText(commit.ShortHash)) + " "
+	summary := search.highlight(commit.ShortHash, hashStyle) + " "
 	if len(commit.Refs) > 0 {
-		summary += refStyle.Render("("+sanitizeText(strings.Join(commit.Refs, ", "))+")") + " "
+		refs := search.highlight(strings.Join(commit.Refs, ", "), refStyle)
+		summary += refStyle.Render("(") + refs + refStyle.Render(")") + " "
 	}
-	summary += textStyle.Render(sanitizeText(commit.Summary))
+	summary += search.highlight(commit.Summary, textStyle)
 	return fitToWidth(fitToWidth(summary, summaryWidth)+" "+mutedStyle.Render(age), width)
 }
 

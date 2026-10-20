@@ -44,6 +44,7 @@ var (
 	untrackedStyle      = lipgloss.NewStyle().Foreground(colorGold).Bold(true)
 	hashStyle           = lipgloss.NewStyle().Foreground(colorGold)
 	refStyle            = lipgloss.NewStyle().Foreground(colorFoam).Bold(true)
+	searchMatchStyle    = lipgloss.NewStyle().Foreground(colorRose).Bold(true).Underline(true)
 	laneStyles          = []lipgloss.Style{
 		lipgloss.NewStyle().Foreground(colorIris),
 		lipgloss.NewStyle().Foreground(colorFoam),

@@ -23,6 +23,8 @@ func TestLog(t *testing.T) {
 	t.Run("expandingACommitListsItsFilesUnderIt", expandingACommitListsItsFilesUnderIt)
 	t.Run("searchKeepsOnlyMatchingMessagesIgnoringCase", searchKeepsOnlyMatchingMessagesIgnoringCase)
 	t.Run("anUppercaseLetterMakesTheSearchCaseSensitive", anUppercaseLetterMakesTheSearchCaseSensitive)
+	t.Run("searchNeedsEveryWordInAnyOrder", searchNeedsEveryWordInAnyOrder)
+	t.Run("searchLooksAtTheHashAuthorAndRefs", searchLooksAtTheHashAuthorAndRefs)
 	t.Run("clickingTheFoldedLogOpensIt", clickingTheFoldedLogOpensIt)
 	t.Run("nearingTheEndOfAFullPageLoadsTheNextOne", nearingTheEndOfAFullPageLoadsTheNextOne)
 	t.Run("aShortLogIsTheWholeHistory", aShortLogIsTheWholeHistory)
@@ -88,6 +90,35 @@ func anUppercaseLetterMakesTheSearchCaseSensitive(t *testing.T) {
 
 	if !reflect.DeepEqual(m.visibleLogRows(), []logRow{{commit: 1, file: commitRow}}) {
 		t.Fatalf("got rows %v", m.visibleLogRows())
+	}
+}
+
+func searchNeedsEveryWordInAnyOrder(t *testing.T) {
+	m := logOf(t, []gitrepo.Commit{
+		{Hash: strings.Repeat("1", 40), Message: "Fix wrap"},
+		{Hash: strings.Repeat("2", 40), Message: "Fix the log paging"},
+		{Hash: strings.Repeat("3", 40), Message: "log tree"},
+	})
+
+	m = typeSearch(t, m, "log fix")
+
+	if !reflect.DeepEqual(m.visibleLogRows(), []logRow{{commit: 1, file: commitRow}}) {
+		t.Fatalf("got rows %v", m.visibleLogRows())
+	}
+}
+
+func searchLooksAtTheHashAuthorAndRefs(t *testing.T) {
+	commits := []gitrepo.Commit{
+		{Hash: strings.Repeat("1", 40), Author: "Ada", Message: "Add tree"},
+		{Hash: strings.Repeat("2", 40), Refs: []string{"tag: v1"}, Message: "Add tree"},
+		{Hash: strings.Repeat("3", 40), Message: "Add tree"},
+	}
+	for want, pattern := range []string{"ada", "v1", "3333"} {
+		m := typeSearch(t, logOf(t, commits), pattern)
+
+		if !reflect.DeepEqual(m.visibleLogRows(), []logRow{{commit: want, file: commitRow}}) {
+			t.Fatalf("searching %q got rows %v, want commit %d", pattern, m.visibleLogRows(), want)
+		}
 	}
 }
 
