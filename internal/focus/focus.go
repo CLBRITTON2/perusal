@@ -1,3 +1,5 @@
+//go:build windows
+
 // Package focus maps the agent's focused herdr pane to a repository the owner can safely run git in.
 package focus
 
