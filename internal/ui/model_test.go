@@ -31,6 +31,54 @@ func TestFullscreenDiffCoversTheListsSoAClickThereSelectsNothing(t *testing.T) {
 	}
 }
 
+func TestPushPopup(t *testing.T) {
+	t.Run("aDivergedBranchOffersAForcePush", aDivergedBranchOffersAForcePush)
+	t.Run("aDivergedMainIsNeverForcePushed", aDivergedMainIsNeverForcePushed)
+}
+
+func aDivergedBranchOffersAForcePush(t *testing.T) {
+	m := pressPush(t, gitrepo.Status{Branch: "fix", Upstream: "origin/fix", Ahead: 2, Behind: 1})
+
+	if m.popup != forcePushPopup || !strings.Contains(m.renderForcePushPopup(), "replaces 1 commit on origin/fix with 2 commits") {
+		t.Fatalf("got popup %d:\n%s", m.popup, m.renderForcePushPopup())
+	}
+}
+
+func aDivergedMainIsNeverForcePushed(t *testing.T) {
+	m := pressPush(t, gitrepo.Status{Branch: "fix", Upstream: "origin/main", Ahead: 2, Behind: 1})
+
+	if m.popup != noPopup || !m.footerIsError {
+		t.Fatalf("got popup %d, footer %q, want a refusal", m.popup, m.footerText)
+	}
+}
+
+func pressPush(t *testing.T, status gitrepo.Status) Model {
+	t.Helper()
+	m := update(t, New(), RepositoryFocused{Repository: gitrepo.Repository{Dir: "C:/dev/repo"}})
+	m = update(t, m, statusLoadedMsg{dir: "C:/dev/repo", status: status})
+	return update(t, m, tea.KeyPressMsg{Code: 'P', Text: "P"})
+}
+
+func TestRightClickingAnOlderPushedCommitOffersToAmendItWithAForcePushWarning(t *testing.T) {
+	m := update(t, New(), tea.WindowSizeMsg{Width: 120, Height: 30})
+	m = update(t, m, RepositoryFocused{Repository: gitrepo.Repository{Dir: "C:/dev/repo"}})
+	m = update(t, m, statusLoadedMsg{dir: "C:/dev/repo", status: gitrepo.Status{Branch: "fix", Upstream: "origin/fix",
+		Ahead: 1, Files: twoFiles(), HasCommits: true}})
+	m = update(t, m, logLoadedMsg{dir: "C:/dev/repo", limit: logPageSize, commits: []gitrepo.Commit{
+		{Hash: strings.Repeat("1", 40), Parents: []string{strings.Repeat("2", 40)}},
+		{Hash: strings.Repeat("2", 40), ShortHash: "2222222", Summary: "Fix wrap"},
+	}})
+	m = update(t, m, tea.KeyPressMsg{Code: tea.KeyTab})
+
+	m = update(t, m, tea.MouseClickMsg{X: 3, Y: 4, Button: tea.MouseRight})
+
+	popup := m.renderAmendPopup()
+	if m.popup != amendPopup || m.amendTarget.Hash != strings.Repeat("2", 40) || !strings.Contains(popup, "with 1 file staged") ||
+		!strings.Contains(popup, "rewrites every commit above it") || !strings.Contains(popup, "the next push is a force push") {
+		t.Fatalf("got popup %d on %q:\n%s", m.popup, m.amendTarget.Hash, popup)
+	}
+}
+
 func TestLog(t *testing.T) {
 	t.Run("selectionFollowsTheCommitWhenNewOnesArriveAbove", selectionFollowsTheCommitWhenNewOnesArriveAbove)
 	t.Run("expandingACommitListsItsFilesUnderIt", expandingACommitListsItsFilesUnderIt)

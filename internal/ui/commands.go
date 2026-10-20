@@ -69,6 +69,11 @@ type committedMsg struct {
 	summary string
 }
 
+type amendedMsg struct {
+	dir    string
+	commit gitrepo.Commit
+}
+
 type pushedMsg struct {
 	dir      string
 	upstream string
@@ -134,6 +139,25 @@ func (r pushRequest) push() tea.Msg {
 		return popupFailedMsg{dir: r.repository.Dir, err: err}
 	}
 	return pushedMsg{dir: r.repository.Dir, upstream: r.upstream}
+}
+
+func (r pushRequest) forcePush() tea.Msg {
+	if err := r.repository.ForcePush(context.Background()); err != nil {
+		return popupFailedMsg{dir: r.repository.Dir, err: err}
+	}
+	return pushedMsg{dir: r.repository.Dir, upstream: r.upstream}
+}
+
+type amendRequest struct {
+	repository gitrepo.Repository
+	commit     gitrepo.Commit
+}
+
+func (r amendRequest) amend() tea.Msg {
+	if err := r.repository.Amend(context.Background(), r.commit.Hash); err != nil {
+		return popupFailedMsg{dir: r.repository.Dir, err: err}
+	}
+	return amendedMsg{dir: r.repository.Dir, commit: r.commit}
 }
 
 type fileRequest struct {

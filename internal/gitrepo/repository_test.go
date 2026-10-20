@@ -2,6 +2,7 @@ package gitrepo
 
 import (
 	"context"
+	"errors"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -135,4 +136,181 @@ func runSteps(t *testing.T, dir string, steps [][]string) {
 			t.Fatal(err)
 		}
 	}
+}
+
+func TestForcePush(t *testing.T) {
+	t.Run("replacesTheUpstreamCommitThisBranchRewrote", replacesTheUpstreamCommitThisBranchRewrote)
+	t.Run("refusesWhenTheRemoteMovedSinceTheLastFetch", refusesWhenTheRemoteMovedSinceTheLastFetch)
+}
+
+func TestAmend(t *testing.T) {
+	t.Run("foldsTheStagedChangesIntoHead", foldsTheStagedChangesIntoHead)
+	t.Run("foldsTheStagedChangesIntoAnOlderCommitAndKeepsUnstagedOnes",
+		foldsTheStagedChangesIntoAnOlderCommitAndKeepsUnstagedOnes)
+	t.Run("undoesTheFixupWhenTheRebaseStops", undoesTheFixupWhenTheRebaseStops)
+	t.Run("refusesACommitWithAMergeAboveIt", refusesACommitWithAMergeAboveIt)
+}
+
+func replacesTheUpstreamCommitThisBranchRewrote(t *testing.T) {
+	remote, work := pushedClone(t)
+	runSteps(t, work, [][]string{{"-C", work, "commit", "--amend", "--allow-empty", "--message", "Rewritten"}})
+
+	err := Repository{Dir: work}.ForcePush(context.Background())
+
+	if err != nil || revParse(t, remote, "main") != revParse(t, work, "HEAD") {
+		t.Fatalf("got push error %v, remote main %s, want local HEAD %s", err, revParse(t, remote, "main"),
+			revParse(t, work, "HEAD"))
+	}
+}
+
+func refusesWhenTheRemoteMovedSinceTheLastFetch(t *testing.T) {
+	remote, work := pushedClone(t)
+	other := filepath.Join(t.TempDir(), "other")
+	runSteps(t, work, [][]string{
+		{"clone", remote, other},
+		{"-C", other, "commit", "--allow-empty", "--message", "Someone else"},
+		{"-C", other, "push"},
+		{"-C", work, "commit", "--amend", "--allow-empty", "--message", "Rewritten"},
+	})
+	before := revParse(t, remote, "main")
+
+	err := Repository{Dir: work}.ForcePush(context.Background())
+
+	if err == nil || revParse(t, remote, "main") != before {
+		t.Fatalf("got push error %v, remote main %s, want a refusal leaving it at %s", err, revParse(t, remote, "main"),
+			before)
+	}
+}
+
+func foldsTheStagedChangesIntoHead(t *testing.T) {
+	work := repositoryWithHistory(t, []string{"1", "2"})
+	parent := revParse(t, work, "HEAD~1")
+	writeFile(t, filepath.Join(work, "a.txt"), "3\n")
+	runSteps(t, work, [][]string{{"-C", work, "add", "a.txt"}})
+
+	err := Repository{Dir: work}.Amend(context.Background(), revParse(t, work, "HEAD"))
+
+	if err != nil || blobAt(t, work, "HEAD:a.txt") != "3\n" || revParse(t, work, "HEAD~1") != parent {
+		t.Fatalf("got error %v, a.txt at HEAD %q, want 3 on the same parent", err, blobAt(t, work, "HEAD:a.txt"))
+	}
+}
+
+func foldsTheStagedChangesIntoAnOlderCommitAndKeepsUnstagedOnes(t *testing.T) {
+	work := repositoryWithHistory(t, []string{"1", "2", "3"})
+	writeFile(t, filepath.Join(work, "b.txt"), "staged\n")
+	runSteps(t, work, [][]string{{"-C", work, "add", "b.txt"}})
+	writeFile(t, filepath.Join(work, "a.txt"), "unstaged\n")
+
+	err := Repository{Dir: work}.Amend(context.Background(), revParse(t, work, "HEAD~1"))
+
+	count, countErr := runGit(context.Background(), work, []string{"rev-list", "--count", "HEAD"})
+	unstaged, readErr := os.ReadFile(filepath.Join(work, "a.txt"))
+	if err != nil || countErr != nil || readErr != nil || strings.TrimSpace(string(count)) != "3" ||
+		blobAt(t, work, "HEAD~1:b.txt") != "staged\n" || string(unstaged) != "unstaged\n" {
+		t.Fatalf("got error %v, %q commits (%v), a.txt %q (%v), want b.txt in the second of 3 commits, a.txt untouched",
+			err, count, countErr, unstaged, readErr)
+	}
+}
+
+func undoesTheFixupWhenTheRebaseStops(t *testing.T) {
+	work := repositoryWithHistory(t, []string{"1", "2", "3"})
+	head := revParse(t, work, "HEAD")
+	writeFile(t, filepath.Join(work, "a.txt"), "4\n")
+	runSteps(t, work, [][]string{{"-C", work, "add", "a.txt"}})
+
+	err := Repository{Dir: work}.Amend(context.Background(), revParse(t, work, "HEAD~1"))
+
+	staged, diffErr := runGit(context.Background(), work, []string{"diff", "--cached", "--name-only"})
+	_, statErr := os.Stat(filepath.Join(work, ".git", "rebase-merge"))
+	if err == nil || revParse(t, work, "HEAD") != head || diffErr != nil || strings.TrimSpace(string(staged)) != "a.txt" ||
+		!os.IsNotExist(statErr) {
+		t.Fatalf("got error %v, HEAD %s, staged %q (%v), rebase state %v, want HEAD back at %s with a.txt staged",
+			err, revParse(t, work, "HEAD"), staged, diffErr, statErr, head)
+	}
+}
+
+func refusesACommitWithAMergeAboveIt(t *testing.T) {
+	work := repositoryWithHistory(t, []string{"1"})
+	target := revParse(t, work, "HEAD")
+	runSteps(t, work, [][]string{
+		{"-C", work, "branch", "side"},
+		{"-C", work, "commit", "--allow-empty", "--message", "Main"},
+		{"-C", work, "merge", "--no-ff", "--message", "Merge side", "side"},
+	})
+	head := revParse(t, work, "HEAD")
+	writeFile(t, filepath.Join(work, "b.txt"), "staged\n")
+	runSteps(t, work, [][]string{{"-C", work, "add", "b.txt"}})
+
+	err := Repository{Dir: work}.Amend(context.Background(), target)
+
+	if !errors.Is(err, ErrCannotAmend) || revParse(t, work, "HEAD") != head {
+		t.Fatalf("got error %v, want ErrCannotAmend with HEAD left at %s", err, head)
+	}
+}
+
+// One commit per content, each rewriting a.txt.
+func repositoryWithHistory(t *testing.T, contents []string) string {
+	t.Helper()
+	useTestIdentity(t)
+	work := t.TempDir()
+	runSteps(t, work, [][]string{{"init", "--initial-branch=main", work}})
+	for _, content := range contents {
+		writeFile(t, filepath.Join(work, "a.txt"), content+"\n")
+		runSteps(t, work, [][]string{{"-C", work, "add", "a.txt"}, {"-C", work, "commit", "--message", "Write " + content}})
+	}
+	return work
+}
+
+func pushedClone(t *testing.T) (string, string) {
+	t.Helper()
+	useTestIdentity(t)
+	parent := t.TempDir()
+	remote := filepath.Join(parent, "remote.git")
+	work := filepath.Join(parent, "work")
+	runSteps(t, parent, [][]string{
+		{"init", "--bare", "--initial-branch=main", remote},
+		{"clone", remote, work},
+		{"-C", work, "commit", "--allow-empty", "--message", "Start"},
+		{"-C", work, "push", "--set-upstream", "origin", "main"},
+	})
+	return remote, work
+}
+
+// Amend runs git commit itself, so the identity and config go in the environment rather than -c flags.
+func useTestIdentity(t *testing.T) {
+	t.Helper()
+	for name, value := range map[string]string{
+		"GIT_AUTHOR_NAME": "perusal", "GIT_AUTHOR_EMAIL": "perusal@example.com",
+		"GIT_COMMITTER_NAME": "perusal", "GIT_COMMITTER_EMAIL": "perusal@example.com",
+		"GIT_CONFIG_COUNT": "3", "GIT_CONFIG_KEY_0": "commit.gpgsign", "GIT_CONFIG_VALUE_0": "false",
+		"GIT_CONFIG_KEY_1": "core.hooksPath", "GIT_CONFIG_VALUE_1": t.TempDir(),
+		"GIT_CONFIG_KEY_2": "core.autocrlf", "GIT_CONFIG_VALUE_2": "false",
+	} {
+		t.Setenv(name, value)
+	}
+}
+
+func writeFile(t *testing.T, path string, content string) {
+	t.Helper()
+	if err := os.WriteFile(path, []byte(content), 0o600); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func revParse(t *testing.T, dir string, revision string) string {
+	t.Helper()
+	hash, err := Repository{Dir: dir}.revParse(context.Background(), revision)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return hash
+}
+
+func blobAt(t *testing.T, dir string, object string) string {
+	t.Helper()
+	content, err := runGit(context.Background(), dir, []string{"show", object})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return string(content)
 }

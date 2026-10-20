@@ -36,6 +36,7 @@ var (
 	aheadStyle          = lipgloss.NewStyle().Foreground(colorGold)
 	behindStyle         = lipgloss.NewStyle().Foreground(colorLove)
 	errorStyle          = lipgloss.NewStyle().Foreground(colorLove)
+	warningStyle        = lipgloss.NewStyle().Foreground(colorGold)
 	successStyle        = lipgloss.NewStyle().Foreground(colorFoam)
 	selectedRowStyle    = lipgloss.NewStyle().Foreground(colorText).Background(colorHighlightMed)
 	selectionBarStyle   = lipgloss.NewStyle().Foreground(colorIris).Background(colorHighlightMed)

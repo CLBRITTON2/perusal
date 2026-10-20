@@ -50,7 +50,12 @@ const (
 	noPopup popupKind = iota
 	commitPopup
 	pushPopup
+	forcePushPopup
+	amendPopup
 )
+
+// A force push to these would rewrite history others build on.
+var protectedBranches = []string{"main", "master"}
 
 type Model struct {
 	repository     gitrepo.Repository
@@ -84,6 +89,8 @@ type Model struct {
 	popup              popupKind
 	popupRunning       bool
 	popupError         string
+	amendTarget        gitrepo.Commit
+	amendTargetPushed  bool
 	footerText         string
 	footerIsError      bool
 	width              int
@@ -186,6 +193,12 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.summaryInput.Reset()
 		m.descriptionBox.Reset()
 		return m, repositoryRequest{repository: m.repository}.loadStatus
+	case amendedMsg:
+		if msg.dir != m.repository.Dir {
+			return m.withFooterNotice("amended " + msg.commit.ShortHash + " in " + msg.dir), nil
+		}
+		return m.withPopupClosed().withFooterNotice("amended " + msg.commit.ShortHash + " " + msg.commit.Summary),
+			repositoryRequest{repository: m.repository}.loadStatus
 	case pushedMsg:
 		if msg.dir != m.repository.Dir {
 			return m.withFooterNotice("pushed " + msg.dir + " to " + msg.upstream), nil
@@ -208,16 +221,25 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		case m.popup == commitPopup:
 			return m.updateCommitBox(msg)
 		case m.popup == pushPopup:
-			return m.updatePushPopup(msg)
+			return m.updateConfirmPopup(msg, pushRequest{repository: m.repository, upstream: m.status.Upstream}.push)
+		case m.popup == forcePushPopup:
+			return m.updateConfirmPopup(msg, pushRequest{repository: m.repository, upstream: m.status.Upstream}.forcePush)
+		case m.popup == amendPopup:
+			return m.updateConfirmPopup(msg, amendRequest{repository: m.repository, commit: m.amendTarget}.amend)
 		case m.searching:
 			return m.updateSearch(msg)
 		}
 		return m.updateBrowsing(msg)
 	case tea.MouseClickMsg:
-		if m.popup != noPopup || msg.Button != tea.MouseLeft {
+		switch {
+		case m.popup != noPopup:
 			return m, nil
+		case msg.Button == tea.MouseLeft:
+			return m.clickList(msg.Mouse())
+		case msg.Button == tea.MouseRight:
+			return m.rightClickList(msg.Mouse())
 		}
-		return m.clickList(msg.Mouse())
+		return m, nil
 	case tea.MouseWheelMsg:
 		if m.popup != noPopup {
 			return m, nil
@@ -302,6 +324,8 @@ func (m Model) updateBrowsing(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		return m, m.summaryInput.Focus()
 	case key.Matches(msg, pushKey):
 		return m.openPushPopup()
+	case key.Matches(msg, amendKey) && m.view == viewLog:
+		return m.openAmendPopup(), nil
 	}
 	return m, nil
 }
@@ -414,22 +438,48 @@ func (m Model) openPushPopup() (tea.Model, tea.Cmd) {
 		return m.withFooterError("the branch tracks no upstream, so there is nowhere to push"), nil
 	case m.status.Ahead == 0:
 		return m.withFooterError("nothing to push"), nil
+	case m.status.Behind == 0:
+		m.popup = pushPopup
+		return m, nil
+	case forcePushProtected(m.status):
+		return m.withFooterError("the branch and " + m.status.Upstream + " have diverged, and perusal never force " +
+			"pushes main or master"), nil
 	}
-	m.popup = pushPopup
+	m.popup = forcePushPopup
 	return m, nil
 }
 
-func (m Model) updatePushPopup(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
+// The upstream counts too, since a branch can track one under another name.
+func forcePushProtected(status gitrepo.Status) bool {
+	_, upstreamBranch, _ := strings.Cut(status.Upstream, "/")
+	return slices.Contains(protectedBranches, status.Branch) || slices.Contains(protectedBranches, upstreamBranch)
+}
+
+func (m Model) openAmendPopup() Model {
+	if m.repository.Dir == "" || len(m.commits) == 0 {
+		return m
+	}
+	if m.stagedFileCount() == 0 {
+		return m.withFooterError("nothing is staged to amend with")
+	}
+	m.popup = amendPopup
+	m.amendTarget = m.commits[m.selectedCommit]
+	// No merge sits above an amendable commit, so the log lists those first and the first Ahead are the unpushed.
+	m.amendTargetPushed = m.status.Upstream != "" && m.selectedCommit >= m.status.Ahead
+	return m
+}
+
+func (m Model) updateConfirmPopup(msg tea.KeyPressMsg, run tea.Cmd) (tea.Model, tea.Cmd) {
 	if m.popupRunning {
 		return m, nil
 	}
 	switch {
 	case key.Matches(msg, cancelKey):
 		return m.withPopupClosed(), nil
-	case key.Matches(msg, confirmPushKey):
+	case key.Matches(msg, enterKey):
 		m.popupRunning = true
 		m.popupError = ""
-		return m, pushRequest{repository: m.repository, upstream: m.status.Upstream}.push
+		return m, run
 	}
 	return m, nil
 }
@@ -449,7 +499,7 @@ func (m Model) selectFile(index int) (tea.Model, tea.Cmd) {
 	return m.withListScrolled(), m.loadSelectedDiff()
 }
 
-func (m Model) selectLogRow(index int) (tea.Model, tea.Cmd) {
+func (m Model) selectLogRow(index int) (Model, tea.Cmd) {
 	rows := m.visibleLogRows()
 	if len(rows) == 0 {
 		return m, nil
@@ -588,14 +638,11 @@ func (m Model) selectedLogRow(rows []logRow) int {
 }
 
 func (m Model) clickList(mouse tea.Mouse) (tea.Model, tea.Cmd) {
-	if mouse.X >= m.listOuterWidth() {
-		return m, nil
-	}
-	if mouse.Y == m.foldedPaneY() {
+	if mouse.X < m.listOuterWidth() && mouse.Y == m.foldedPaneY() {
 		return m.switchView()
 	}
-	row := mouse.Y - m.listFirstRowY()
-	if row < 0 || row >= m.listInnerHeight() {
+	row, onRow := m.listRowAt(mouse)
+	if !onRow {
 		return m, nil
 	}
 	if m.view == viewLog {
@@ -608,6 +655,24 @@ func (m Model) clickList(mouse tea.Mouse) (tea.Model, tea.Cmd) {
 		return m, nil
 	}
 	return m.selectFile(m.listOffset + row)
+}
+
+func (m Model) rightClickList(mouse tea.Mouse) (tea.Model, tea.Cmd) {
+	row, onRow := m.listRowAt(mouse)
+	if m.view != viewLog || !onRow || m.logOffset+row >= len(m.visibleLogRows()) {
+		return m, nil
+	}
+	selected, cmd := m.selectLogRow(m.logOffset + row)
+	return selected.openAmendPopup(), cmd
+}
+
+// Counted from the open pane's first row.
+func (m Model) listRowAt(mouse tea.Mouse) (int, bool) {
+	row := mouse.Y - m.listFirstRowY()
+	if mouse.X >= m.listOuterWidth() || row < 0 || row >= m.listInnerHeight() {
+		return 0, false
+	}
+	return row, true
 }
 
 func (m Model) scrollWheel(mouse tea.Mouse) (tea.Model, tea.Cmd) {
@@ -767,6 +832,10 @@ func (m Model) View() tea.View {
 		view = tea.NewView(m.overlayPopup(m.renderScreen(), m.renderCommitPopup()))
 	case m.popup == pushPopup:
 		view = tea.NewView(m.overlayPopup(m.renderScreen(), m.renderPushPopup()))
+	case m.popup == forcePushPopup:
+		view = tea.NewView(m.overlayPopup(m.renderScreen(), m.renderForcePushPopup()))
+	case m.popup == amendPopup:
+		view = tea.NewView(m.overlayPopup(m.renderScreen(), m.renderAmendPopup()))
 	default:
 		view = tea.NewView(m.renderScreen())
 	}
@@ -907,17 +976,23 @@ func (m Model) changesLabel() string {
 	if len(m.status.Files) == 0 {
 		return ""
 	}
-	staged := 0
 	unstaged := 0
 	for _, file := range m.status.Files {
-		if file.HasStagedChanges() {
-			staged++
-		}
 		if file.HasUnstagedChanges() {
 			unstaged++
 		}
 	}
-	return strconv.Itoa(staged) + " staged · " + strconv.Itoa(unstaged) + " unstaged"
+	return strconv.Itoa(m.stagedFileCount()) + " staged · " + strconv.Itoa(unstaged) + " unstaged"
+}
+
+func (m Model) stagedFileCount() int {
+	staged := 0
+	for _, file := range m.status.Files {
+		if file.HasStagedChanges() {
+			staged++
+		}
+	}
+	return staged
 }
 
 func (m Model) logLabel() string {
@@ -1060,6 +1135,31 @@ func (m Model) renderPushPopup() string {
 	}, "pushing...", pushHelp)
 }
 
+func (m Model) renderForcePushPopup() string {
+	upstream := sanitizeText(m.status.Upstream)
+	return m.renderPopup([]string{
+		titleStyle.Render("force push " + m.branchLabel() + " to " + upstream),
+		textStyle.Render("replaces " + commitCount(m.status.Behind) + " on " + upstream + " with " +
+			commitCount(m.status.Ahead)),
+	}, "force pushing...", forcePushHelp)
+}
+
+func (m Model) renderAmendPopup() string {
+	lines := []string{
+		titleStyle.Render("amend " + sanitizeText(m.amendTarget.ShortHash)),
+		textStyle.Render(sanitizeText(m.amendTarget.Summary)),
+		textStyle.Render("with " + fileCount(m.stagedFileCount()) + " staged"),
+	}
+	if len(m.commits) > 0 && m.amendTarget.Hash != m.commits[0].Hash {
+		lines = append(lines, warningStyle.Render("rewrites every commit above it"))
+	}
+	if m.amendTargetPushed {
+		lines = append(lines, warningStyle.Render("it is on "+sanitizeText(m.status.Upstream)+
+			" already, so the next push is a force push"))
+	}
+	return m.renderPopup(lines, "amending...", amendHelp)
+}
+
 func (m Model) renderPopup(lines []string, runningText string, bindings []key.Binding) string {
 	width := m.popupInnerWidth()
 	var status string
@@ -1080,6 +1180,13 @@ func commitCount(count int) string {
 		return "1 commit"
 	}
 	return strconv.Itoa(count) + " commits"
+}
+
+func fileCount(count int) string {
+	if count == 1 {
+		return "1 file"
+	}
+	return strconv.Itoa(count) + " files"
 }
 
 func renderField(view string, focused bool, innerWidth int, innerHeight int) string {

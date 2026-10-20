@@ -33,6 +33,8 @@ type Commit struct {
 
 const logFieldSeparator = "\x1f"
 
+var ErrCannotAmend = errors.New("cannot amend")
+
 var commitHash = regexp.MustCompile(`^(?:[0-9a-f]{40}|[0-9a-f]{64})$`)
 
 func Open(ctx context.Context, dir string) (Repository, error) {
@@ -179,6 +181,117 @@ func (r Repository) Commit(ctx context.Context, message string) (string, error) 
 func (r Repository) Push(ctx context.Context) error {
 	_, err := runGit(ctx, r.Dir, []string{"push"})
 	return err
+}
+
+// git refuses unless the remote branch is still where it was last fetched and that tip is in the local reflog,
+// so a force push replaces only commits this branch already rewrote.
+func (r Repository) ForcePush(ctx context.Context) error {
+	_, err := runGit(ctx, r.Dir, []string{"push", "--force-with-lease", "--force-if-includes"})
+	return err
+}
+
+// Amend folds the staged changes into hash, which must be HEAD or an ancestor with no merge above it. Below HEAD it
+// commits a fixup and autosquashes it in, and a rebase that stops is aborted and the fixup undone, so the staged
+// changes stay staged.
+func (r Repository) Amend(ctx context.Context, hash string) error {
+	if !commitHash.MatchString(hash) {
+		return fmt.Errorf("%w %q in %s: not a full commit hash", ErrCannotAmend, hash, r.Dir)
+	}
+	nothingStaged, err := r.gitSucceeds(ctx, []string{"diff", "--cached", "--quiet"})
+	if err != nil {
+		return err
+	}
+	if nothingStaged {
+		return fmt.Errorf("%w %s in %s: nothing is staged", ErrCannotAmend, hash, r.Dir)
+	}
+	head, err := r.revParse(ctx, "HEAD")
+	if err != nil {
+		return err
+	}
+	if hash == head {
+		_, err := runGit(ctx, r.Dir, []string{"commit", "--amend", "--no-edit"})
+		return err
+	}
+	if err := r.checkRewritable(ctx, hash); err != nil {
+		return err
+	}
+	if _, err := runGit(ctx, r.Dir, []string{"commit", "--fixup=" + hash}); err != nil {
+		return err
+	}
+	fixup, err := r.revParse(ctx, "HEAD")
+	if err != nil {
+		return err
+	}
+	// ":" is the editor git skips, so the todo list runs as autosquash wrote it.
+	_, rebaseErr := runGit(ctx, r.Dir, []string{"-c", "sequence.editor=:", "rebase", "--interactive", "--autosquash",
+		"--autostash", hash + "^"})
+	if rebaseErr != nil {
+		return r.undoFixup(ctx, fixup, rebaseErr)
+	}
+	return nil
+}
+
+// A rebase would drop a merge above hash and has no parent to start from below a root.
+func (r Repository) checkRewritable(ctx context.Context, hash string) error {
+	isAncestor, err := r.gitSucceeds(ctx, []string{"merge-base", "--is-ancestor", hash, "HEAD"})
+	if err != nil {
+		return err
+	}
+	if !isAncestor {
+		return fmt.Errorf("%w %s in %s: not in the history of HEAD", ErrCannotAmend, hash, r.Dir)
+	}
+	parents, err := runGit(ctx, r.Dir, []string{"log", "--max-count=1", "--format=%P", hash})
+	if err != nil {
+		return err
+	}
+	if len(strings.Fields(string(parents))) != 1 {
+		return fmt.Errorf("%w %s in %s: it is a merge or a root commit", ErrCannotAmend, hash, r.Dir)
+	}
+	merges, err := runGit(ctx, r.Dir, []string{"rev-list", "--min-parents=2", hash + "..HEAD"})
+	if err != nil {
+		return err
+	}
+	if len(bytes.TrimSpace(merges)) != 0 {
+		return fmt.Errorf("%w %s in %s: a merge sits between it and HEAD", ErrCannotAmend, hash, r.Dir)
+	}
+	return nil
+}
+
+func (r Repository) undoFixup(ctx context.Context, fixup string, rebaseErr error) error {
+	_, abortErr := runGit(ctx, r.Dir, []string{"rebase", "--abort"})
+	head, err := r.revParse(ctx, "HEAD")
+	if err != nil {
+		return errors.Join(rebaseErr, abortErr, err)
+	}
+	if head != fixup {
+		return errors.Join(rebaseErr, abortErr, fmt.Errorf("HEAD in %s is %s after the rebase stopped, not the fixup "+
+			"commit %s, so the fixup was left in place", r.Dir, head, fixup))
+	}
+	if _, err := runGit(ctx, r.Dir, []string{"reset", "--soft", fixup + "^"}); err != nil {
+		return errors.Join(rebaseErr, abortErr, err)
+	}
+	return fmt.Errorf("undid the fixup commit, so the changes are staged again: %w", errors.Join(rebaseErr, abortErr))
+}
+
+func (r Repository) revParse(ctx context.Context, revision string) (string, error) {
+	output, err := runGit(ctx, r.Dir, []string{"rev-parse", "--verify", revision + "^{commit}"})
+	if err != nil {
+		return "", err
+	}
+	return strings.TrimSpace(string(output)), nil
+}
+
+// For the git commands that answer with exit code 1 for no.
+func (r Repository) gitSucceeds(ctx context.Context, args []string) (bool, error) {
+	_, err := runGit(ctx, r.Dir, args)
+	var exitErr *exec.ExitError
+	switch {
+	case err == nil:
+		return true, nil
+	case errors.As(err, &exitErr) && exitErr.ExitCode() == 1:
+		return false, nil
+	}
+	return false, err
 }
 
 // The error carries stdout too: git commit with nothing staged explains itself only there.

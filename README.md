@@ -7,7 +7,7 @@ writes the code and you read every line before it lands: a slimmed-down lazygit 
 
 - Lists the working tree's changed files and shows each as a side-by-side diff, or one-sided for an added or deleted
   file.
-- Stages, unstages, commits and pushes.
+- Stages, unstages, commits, amends and pushes.
 - Browses the log with a commit graph, expands a commit into its files, and searches by hash, author, ref or message.
 - Refreshes every 2 seconds, so the review keeps up with edits as they happen.
 
@@ -40,13 +40,23 @@ perusal -repo <dir>  # review the repository <dir> is in
 | `d` | anywhere | show the diff fullscreen, `d` again brings the lists back |
 | `c` | anywhere | open the commit popup |
 | `P` | anywhere | open the push popup |
+| `A` | log | amend the selected commit with the staged changes |
 | `enter` | log | expand the commit into its files |
 | `/` | log | search, `enter` keeps it, `esc` clears it |
 | `q` | anywhere | quit |
 
 In the commit popup, `tab` switches between summary and description, `enter` commits from the summary,
 `ctrl+enter` commits from either field, and `esc` cancels. The mouse works too: click a row to select it, click the
-folded pane to open it. The wheel moves the selection over a list and scrolls the diff anywhere else.
+folded pane to open it, right-click a commit to amend it. The wheel moves the selection over a list and scrolls the
+diff anywhere else.
+
+Amend folds only the staged changes into the commit and keeps its message. An older commit gets a fixup commit and an
+autosquash rebase, so every commit above it is rewritten, and a rebase that stops is aborted and the fixup undone.
+Below `HEAD`, perusal refuses a merge commit, the root commit and any commit with a merge above it.
+
+When the branch and its upstream have diverged, as after amending a pushed commit, the push popup offers a force push
+instead. It pushes with `--force-with-lease --force-if-includes`, so git refuses if the upstream moved since your last
+fetch. perusal never force pushes `main` or `master`.
 
 ## Follow mode (Windows)
 
