@@ -239,7 +239,8 @@ func spaceBetween(left string, right string, width int) string {
 }
 
 // renderPane draws a rounded box with title set into its top border and label into its bottom border.
-func renderPane(title string, label string, body []string, innerWidth int, innerHeight int) string {
+func renderPane(title string, titleStyle lipgloss.Style, label string, body []string, innerWidth int,
+	innerHeight int) string {
 	lines := []string{borderLine("╭", titleStyle, title, "╮", innerWidth)}
 	side := borderStyle.Render("│")
 	for _, line := range fitLines(body, innerWidth, innerHeight) {

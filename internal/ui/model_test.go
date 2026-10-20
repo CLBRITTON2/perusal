@@ -22,6 +22,22 @@ func TestLog(t *testing.T) {
 	t.Run("expandingACommitListsItsFilesUnderIt", expandingACommitListsItsFilesUnderIt)
 	t.Run("searchKeepsOnlyMatchingMessagesIgnoringCase", searchKeepsOnlyMatchingMessagesIgnoringCase)
 	t.Run("anUppercaseLetterMakesTheSearchCaseSensitive", anUppercaseLetterMakesTheSearchCaseSensitive)
+	t.Run("clickingACommitBelowTheChangesFocusesTheLog", clickingACommitBelowTheChangesFocusesTheLog)
+}
+
+func clickingACommitBelowTheChangesFocusesTheLog(t *testing.T) {
+	m := update(t, New(), tea.WindowSizeMsg{Width: 120, Height: 30})
+	m = update(t, m, RepositoryFocused{Repository: gitrepo.Repository{Dir: "C:/dev/repo"}})
+	m = update(t, m, statusLoadedMsg{dir: "C:/dev/repo", status: gitrepo.Status{Files: twoFiles(), HasCommits: true}})
+	m = update(t, m, logLoadedMsg{dir: "C:/dev/repo", commits: []gitrepo.Commit{
+		{Hash: strings.Repeat("1", 40)}, {Hash: strings.Repeat("2", 40)},
+	}})
+
+	m = update(t, m, tea.MouseClickMsg{X: 3, Y: 7, Button: tea.MouseLeft})
+
+	if m.view != viewLog || m.selectedCommit != 1 {
+		t.Fatalf("got view %d, selected commit %d, want the log focused on commit 1", m.view, m.selectedCommit)
+	}
 }
 
 func expandingACommitListsItsFilesUnderIt(t *testing.T) {

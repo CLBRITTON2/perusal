@@ -26,22 +26,24 @@ const (
 	headerHeight         = 1
 	footerHeight         = 1
 	minimumListWidth     = 20
-	maximumListPercent   = 25
-	logListPercent       = 40
+	listPercent          = 25
+	changesPercent       = 40
 	wheelScrollLines     = 3
 	maximumPopupWidth    = 72
 	descriptionHeight    = 5
 	maximumErrorLines    = 12
 	branchGlyph          = ""
+	folderGlyph          = ""
 	detachedBranchLabel  = "detached HEAD"
 	emptySummaryMessage  = "the summary is required"
 	commitRunningMessage = "committing..."
 	waitingMessage       = "waiting for a repository"
 	refusedMessage       = "refused the focused pane's directory"
+	appName              = "perusal"
 )
 
-// listFirstRowY is the screen row of the first list entry: below the header and the top border.
-const listFirstRowY = headerHeight + 1
+// changesFirstRowY is the screen row of the first changes entry: below the header and the top border.
+const changesFirstRowY = headerHeight + 1
 
 // commitRow is the selectedFile of a commit row in the log, as opposed to one of its files.
 const commitRow = -1
@@ -307,13 +309,20 @@ func (m Model) updateBrowsing(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 
 func (m Model) switchView() (tea.Model, tea.Cmd) {
 	if m.view == viewChanges {
-		m.view = viewLog
+		m = m.withFocus(viewLog)
 	} else {
-		m.view = viewChanges
+		m = m.withFocus(viewChanges)
 	}
-	m.diffView.SetYOffset(0)
-	m = m.withLayout()
 	return m, m.loadSelectedCommitDiff()
+}
+
+// withFocus gives view the keys, the selection bar and the diff pane.
+func (m Model) withFocus(view viewKind) Model {
+	if view != m.view {
+		m.diffView.SetYOffset(0)
+	}
+	m.view = view
+	return m.withLayout()
 }
 
 // withRepository shows repository, or rejection when no repository is allowed, and drops everything shown for the
@@ -570,30 +579,34 @@ func (m Model) commitMatches(commit gitrepo.Commit) bool {
 }
 
 func (m Model) clickList(mouse tea.Mouse) (tea.Model, tea.Cmd) {
-	row := mouse.Y - listFirstRowY
-	if mouse.X >= m.listOuterWidth() || row < 0 || row >= m.paneInnerHeight() {
+	if mouse.X >= m.listOuterWidth() {
 		return m, nil
 	}
-	if m.view == viewLog {
-		if m.logOffset+row >= len(m.visibleLogRows()) {
-			return m, nil
-		}
-		return m.selectLogRow(m.logOffset + row)
+	changesRow := mouse.Y - changesFirstRowY
+	logListRow := mouse.Y - m.logFirstRowY()
+	switch {
+	case changesRow >= 0 && changesRow < m.changesInnerHeight() && m.listOffset+changesRow < len(m.status.Files):
+		return m.withFocus(viewChanges).selectFile(m.listOffset + changesRow)
+	case logListRow >= 0 && logListRow < m.logInnerHeight() && m.logOffset+logListRow < len(m.visibleLogRows()):
+		return m.withFocus(viewLog).selectLogRow(m.logOffset + logListRow)
 	}
-	if m.listOffset+row >= len(m.status.Files) {
-		return m, nil
-	}
-	return m.selectFile(m.listOffset + row)
+	return m, nil
 }
 
-// scrollWheel moves the selection over the list and scrolls the diff over the diff pane.
+// scrollWheel moves the selection of the list under the pointer, which takes the focus, and scrolls the diff over the
+// diff pane.
 func (m Model) scrollWheel(mouse tea.Mouse) (tea.Model, tea.Cmd) {
 	overList := mouse.X < m.listOuterWidth()
+	overChanges := overList && mouse.Y < m.logFirstRowY()-1
 	switch {
+	case overChanges && mouse.Button == tea.MouseWheelDown:
+		return m.withFocus(viewChanges).moveSelection(1)
+	case overChanges && mouse.Button == tea.MouseWheelUp:
+		return m.withFocus(viewChanges).moveSelection(-1)
 	case overList && mouse.Button == tea.MouseWheelDown:
-		return m.moveSelection(1)
+		return m.withFocus(viewLog).moveSelection(1)
 	case overList && mouse.Button == tea.MouseWheelUp:
-		return m.moveSelection(-1)
+		return m.withFocus(viewLog).moveSelection(-1)
 	case mouse.Button == tea.MouseWheelDown:
 		m.diffView.ScrollDown(wheelScrollLines)
 	case mouse.Button == tea.MouseWheelUp:
@@ -675,11 +688,8 @@ func (m Model) diffLines() []string {
 }
 
 func (m Model) withListScrolled() Model {
-	if m.view == viewLog {
-		m.logOffset = scrolledOffset(m.logOffset, max(m.selectedLogRow(m.visibleLogRows()), 0), m.paneInnerHeight())
-	} else {
-		m.listOffset = scrolledOffset(m.listOffset, m.selected, m.paneInnerHeight())
-	}
+	m.logOffset = scrolledOffset(m.logOffset, max(m.selectedLogRow(m.visibleLogRows()), 0), m.logInnerHeight())
+	m.listOffset = scrolledOffset(m.listOffset, m.selected, m.changesInnerHeight())
 	return m
 }
 
@@ -695,36 +705,41 @@ func scrolledOffset(offset int, selected int, visibleRows int) int {
 	}
 }
 
-// listOuterWidth fits the longest file row within a minimum width and a share of the screen. The log takes a fixed,
-// wider share, since its rows are commit summaries.
+// listOuterWidth is the width of the left column, where the changes pane sits above the log pane.
 func (m Model) listOuterWidth() int {
-	if m.view == viewLog {
-		return max(m.width*logListPercent/100, minimumListWidth)
-	}
-	longestRow := lipgloss.Width(m.listTitle()) + 4
-	for _, file := range m.status.Files {
-		longestRow = max(longestRow, ansi.StringWidth(renderFileRow(file)))
-	}
-	return min(max(longestRow+3, minimumListWidth), m.width*maximumListPercent/100)
+	return max(m.width*listPercent/100, minimumListWidth)
 }
 
-func (m Model) listTitle() string {
-	switch {
-	case m.view == viewLog && m.logFilter != nil:
+func (m Model) logTitle() string {
+	if m.logFilter != nil {
 		return "log /" + sanitizeText(m.searchInput.Value())
-	case m.view == viewLog:
-		return "log"
-	default:
-		return "changes"
 	}
+	return "log"
 }
 
 func (m Model) diffInnerWidth() int {
 	return max(m.width-m.listOuterWidth()-2, 0)
 }
 
+func (m Model) columnHeight() int {
+	return max(m.height-headerHeight-footerHeight, 0)
+}
+
 func (m Model) paneInnerHeight() int {
-	return max(m.height-headerHeight-footerHeight-2, 0)
+	return max(m.columnHeight()-2, 0)
+}
+
+// changesInnerHeight fits the changes pane to its files, up to a share of the column, and the log pane gets the rest.
+func (m Model) changesInnerHeight() int {
+	return min(max(len(m.status.Files), 1), max(m.columnHeight()*changesPercent/100-2, 1))
+}
+
+func (m Model) logInnerHeight() int {
+	return max(m.columnHeight()-m.changesInnerHeight()-4, 0)
+}
+
+func (m Model) logFirstRowY() int {
+	return changesFirstRowY + m.changesInnerHeight() + 2
 }
 
 func (m Model) popupInnerWidth() int {
@@ -761,7 +776,7 @@ func (m Model) windowTitle() string {
 func (m Model) renderScreen() string {
 	return lipgloss.JoinVertical(lipgloss.Left,
 		m.renderHeader(),
-		lipgloss.JoinHorizontal(lipgloss.Top, m.renderList(), m.renderDiffPane()),
+		lipgloss.JoinHorizontal(lipgloss.Top, m.renderLists(), m.renderDiffPane()),
 		m.renderFooter(),
 	)
 }
@@ -774,16 +789,15 @@ func (m Model) branchLabel() string {
 }
 
 func (m Model) renderHeader() string {
-	appName := appNameStyle.Render("perusal") + " "
 	switch {
 	case m.rejection != "":
-		return fitToWidth(appName+errorStyle.Render(refusedMessage), m.width)
+		return fitToWidth(" "+errorStyle.Render(refusedMessage), m.width)
 	case m.repository.Dir == "":
-		return fitToWidth(appName+mutedStyle.Render(waitingMessage), m.width)
+		return fitToWidth(" "+mutedStyle.Render(waitingMessage), m.width)
 	}
-	left := appName + repositoryStyle.Render(sanitizeText(filepath.Base(m.repository.Dir))) + "  " +
+	left := " " + repositoryStyle.Render(folderGlyph+" "+sanitizeText(filepath.Base(m.repository.Dir))) + "  " +
 		branchStyle.Render(branchGlyph+" "+m.branchLabel()) + m.renderAheadBehind()
-	return spaceBetween(left, m.renderTabs(), m.width)
+	return fitToWidth(left, m.width)
 }
 
 // renderAheadBehind shows how far the branch has moved from its upstream, nothing when it tracks none or matches it.
@@ -798,19 +812,20 @@ func (m Model) renderAheadBehind() string {
 	return strings.Join(counts, "")
 }
 
-func (m Model) renderTabs() string {
-	if m.view == viewLog {
-		return inactiveTabStyle.Render("changes") + activeTabStyle.Render("log")
-	}
-	return activeTabStyle.Render("changes") + inactiveTabStyle.Render("log")
+func (m Model) renderLists() string {
+	innerWidth := m.listOuterWidth() - 2
+	changes := renderPane("changes", m.listTitleStyle(viewChanges), m.changesLabel(), m.fileRows(innerWidth), innerWidth,
+		m.changesInnerHeight())
+	log := renderPane(m.logTitle(), m.listTitleStyle(viewLog), m.logLabel(), m.renderLogRows(innerWidth), innerWidth,
+		m.logInnerHeight())
+	return lipgloss.JoinVertical(lipgloss.Left, changes, log)
 }
 
-func (m Model) renderList() string {
-	innerWidth := m.listOuterWidth() - 2
-	if m.view == viewLog {
-		return renderPane(m.listTitle(), m.logLabel(), m.renderLogRows(innerWidth), innerWidth, m.paneInnerHeight())
+func (m Model) listTitleStyle(view viewKind) lipgloss.Style {
+	if view == m.view {
+		return titleStyle
 	}
-	return renderPane(m.listTitle(), m.changesLabel(), m.fileRows(innerWidth), innerWidth, m.paneInnerHeight())
+	return unfocusedTitleStyle
 }
 
 func (m Model) fileRows(innerWidth int) []string {
@@ -818,9 +833,10 @@ func (m Model) fileRows(innerWidth int) []string {
 		return []string{mutedStyle.Render("working tree clean")}
 	}
 	rows := []string{}
-	end := min(m.listOffset+m.paneInnerHeight(), len(m.status.Files))
+	end := min(m.listOffset+m.changesInnerHeight(), len(m.status.Files))
 	for index := m.listOffset; index < end; index++ {
-		rows = append(rows, listRow(renderFileRow(m.status.Files[index]), index == m.selected, innerWidth))
+		rows = append(rows, listRow(renderFileRow(m.status.Files[index]), index == m.selected && m.view == viewChanges,
+			innerWidth))
 	}
 	return rows
 }
@@ -836,10 +852,10 @@ func (m Model) renderLogRows(innerWidth int) []string {
 	selected := m.selectedLogRow(rows)
 	graph := m.logGraph()
 	rendered := []string{}
-	end := min(m.logOffset+m.paneInnerHeight(), len(rows))
+	end := min(m.logOffset+m.logInnerHeight(), len(rows))
 	for index := m.logOffset; index < end; index++ {
 		rendered = append(rendered, listRow(m.renderLogRow(rows[index], graph[rows[index].commit], innerWidth-1),
-			index == selected, innerWidth))
+			index == selected && m.view == viewLog, innerWidth))
 	}
 	return rendered
 }
@@ -935,14 +951,14 @@ func (m Model) renderDiffPane() string {
 	switch {
 	case m.rejection != "":
 		reason := errorStyle.Render(lipgloss.Wrap(m.rejection, width, ""))
-		return renderPane("refused", "", strings.Split(reason, "\n"), width, height)
+		return renderPane("refused", titleStyle, "", strings.Split(reason, "\n"), width, height)
 	case m.view == viewLog && len(m.commits) > 0:
-		return renderPane(m.commitPaneTitle(), m.scrollLabel(), strings.Split(m.diffView.View(), "\n"), width, height)
+		return renderPane(m.commitPaneTitle(), titleStyle, m.scrollLabel(), strings.Split(m.diffView.View(), "\n"), width, height)
 	case m.view == viewChanges && len(m.status.Files) > 0:
-		return renderPane(sanitizeText(m.diffPath), m.scrollLabel(), strings.Split(m.diffView.View(), "\n"), width,
+		return renderPane(sanitizeText(m.diffPath), titleStyle, m.scrollLabel(), strings.Split(m.diffView.View(), "\n"), width,
 			height)
 	default:
-		return renderPane("diff", "", []string{}, width, height)
+		return renderPane("diff", titleStyle, "", []string{}, width, height)
 	}
 }
 
@@ -975,10 +991,15 @@ func (m Model) renderFooter() string {
 	case m.searching:
 		return spaceBetween(" "+m.searchInput.View(), m.help.ShortHelpView(searchHelp)+" ", m.width)
 	case m.view == viewLog:
-		return fitToWidth(" "+m.help.ShortHelpView(logHelp), m.width)
+		return m.renderHelpLine(logHelp)
 	default:
-		return fitToWidth(" "+m.help.ShortHelpView(changesHelp), m.width)
+		return m.renderHelpLine(changesHelp)
 	}
+}
+
+// renderHelpLine shows bindings with the app name at the right end, which a narrow screen drops first.
+func (m Model) renderHelpLine(bindings []key.Binding) string {
+	return spaceBetween(" "+m.help.ShortHelpView(bindings), mutedStyle.Render(appName)+" ", m.width)
 }
 
 func (m Model) overlayCommitPopup(screen string) string {

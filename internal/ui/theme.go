@@ -7,7 +7,6 @@ import (
 // Rosé Pine main variant, https://rosepinetheme.com/palette. Nothing sets a background for the whole screen, so the
 // terminal's own background and opacity show through.
 var (
-	colorBase         = lipgloss.Color("#191724")
 	colorOverlay      = lipgloss.Color("#26233a")
 	colorMuted        = lipgloss.Color("#6e6a86")
 	colorSubtle       = lipgloss.Color("#908caa")
@@ -24,31 +23,29 @@ var (
 )
 
 var (
-	borderStyle       = lipgloss.NewStyle().Foreground(colorHighlightMed)
-	popupStyle        = lipgloss.NewStyle().Border(lipgloss.RoundedBorder()).BorderForeground(colorRose).Padding(0, 1)
-	fieldStyle        = lipgloss.NewStyle().Border(lipgloss.RoundedBorder()).BorderForeground(colorHighlightMed)
-	focusedFieldStyle = lipgloss.NewStyle().Border(lipgloss.RoundedBorder()).BorderForeground(colorIris)
-	titleStyle        = lipgloss.NewStyle().Foreground(colorIris).Bold(true)
-	paneLabelStyle    = lipgloss.NewStyle().Foreground(colorSubtle)
-	mutedStyle        = lipgloss.NewStyle().Foreground(colorMuted)
-	textStyle         = lipgloss.NewStyle().Foreground(colorText)
-	appNameStyle      = lipgloss.NewStyle().Foreground(colorBase).Background(colorRose).Bold(true).Padding(0, 1)
-	repositoryStyle   = lipgloss.NewStyle().Foreground(colorIris).Bold(true)
-	branchStyle       = lipgloss.NewStyle().Foreground(colorFoam)
-	aheadStyle        = lipgloss.NewStyle().Foreground(colorGold)
-	behindStyle       = lipgloss.NewStyle().Foreground(colorLove)
-	activeTabStyle    = lipgloss.NewStyle().Foreground(colorBase).Background(colorIris).Bold(true).Padding(0, 1)
-	inactiveTabStyle  = lipgloss.NewStyle().Foreground(colorMuted).Padding(0, 1)
-	errorStyle        = lipgloss.NewStyle().Foreground(colorLove)
-	successStyle      = lipgloss.NewStyle().Foreground(colorFoam)
-	selectedRowStyle  = lipgloss.NewStyle().Foreground(colorText).Background(colorHighlightMed)
-	selectionBarStyle = lipgloss.NewStyle().Foreground(colorIris).Background(colorHighlightMed)
-	stagedMarkStyle   = lipgloss.NewStyle().Foreground(colorFoam).Bold(true)
-	unstagedMarkStyle = lipgloss.NewStyle().Foreground(colorLove).Bold(true)
-	untrackedStyle    = lipgloss.NewStyle().Foreground(colorGold).Bold(true)
-	hashStyle         = lipgloss.NewStyle().Foreground(colorGold)
-	refStyle          = lipgloss.NewStyle().Foreground(colorFoam).Bold(true)
-	laneStyles        = []lipgloss.Style{
+	borderStyle         = lipgloss.NewStyle().Foreground(colorHighlightMed)
+	popupStyle          = lipgloss.NewStyle().Border(lipgloss.RoundedBorder()).BorderForeground(colorRose).Padding(0, 1)
+	fieldStyle          = lipgloss.NewStyle().Border(lipgloss.RoundedBorder()).BorderForeground(colorHighlightMed)
+	focusedFieldStyle   = lipgloss.NewStyle().Border(lipgloss.RoundedBorder()).BorderForeground(colorIris)
+	titleStyle          = lipgloss.NewStyle().Foreground(colorIris).Bold(true)
+	unfocusedTitleStyle = lipgloss.NewStyle().Foreground(colorSubtle)
+	paneLabelStyle      = lipgloss.NewStyle().Foreground(colorSubtle)
+	mutedStyle          = lipgloss.NewStyle().Foreground(colorMuted)
+	textStyle           = lipgloss.NewStyle().Foreground(colorText)
+	repositoryStyle     = lipgloss.NewStyle().Foreground(colorRose).Bold(true)
+	branchStyle         = lipgloss.NewStyle().Foreground(colorFoam)
+	aheadStyle          = lipgloss.NewStyle().Foreground(colorGold)
+	behindStyle         = lipgloss.NewStyle().Foreground(colorLove)
+	errorStyle          = lipgloss.NewStyle().Foreground(colorLove)
+	successStyle        = lipgloss.NewStyle().Foreground(colorFoam)
+	selectedRowStyle    = lipgloss.NewStyle().Foreground(colorText).Background(colorHighlightMed)
+	selectionBarStyle   = lipgloss.NewStyle().Foreground(colorIris).Background(colorHighlightMed)
+	stagedMarkStyle     = lipgloss.NewStyle().Foreground(colorFoam).Bold(true)
+	unstagedMarkStyle   = lipgloss.NewStyle().Foreground(colorLove).Bold(true)
+	untrackedStyle      = lipgloss.NewStyle().Foreground(colorGold).Bold(true)
+	hashStyle           = lipgloss.NewStyle().Foreground(colorGold)
+	refStyle            = lipgloss.NewStyle().Foreground(colorFoam).Bold(true)
+	laneStyles          = []lipgloss.Style{
 		lipgloss.NewStyle().Foreground(colorIris),
 		lipgloss.NewStyle().Foreground(colorFoam),
 		lipgloss.NewStyle().Foreground(colorGold),
