@@ -18,6 +18,19 @@ func TestFocusSwitch(t *testing.T) {
 	t.Run("refocusingTheSameRepositoryKeepsTheSelection", refocusingTheSameRepositoryKeepsTheSelection)
 }
 
+func TestZoomedDiffCoversTheListsSoAClickThereSelectsNothing(t *testing.T) {
+	m := update(t, New(), tea.WindowSizeMsg{Width: 120, Height: 30})
+	m = update(t, m, RepositoryFocused{Repository: gitrepo.Repository{Dir: "C:/dev/repo"}})
+	m = update(t, m, statusLoadedMsg{dir: "C:/dev/repo", status: gitrepo.Status{Files: twoFiles()}})
+
+	m = update(t, m, tea.KeyPressMsg{Code: 'd', Text: "d"})
+	m = update(t, m, tea.MouseClickMsg{X: 3, Y: 3, Button: tea.MouseLeft})
+
+	if m.diffInnerWidth() != 118 || m.selected != 0 {
+		t.Fatalf("got diff width %d, selected file %d, want 118 and file 0", m.diffInnerWidth(), m.selected)
+	}
+}
+
 func TestLog(t *testing.T) {
 	t.Run("selectionFollowsTheCommitWhenNewOnesArriveAbove", selectionFollowsTheCommitWhenNewOnesArriveAbove)
 	t.Run("expandingACommitListsItsFilesUnderIt", expandingACommitListsItsFilesUnderIt)
