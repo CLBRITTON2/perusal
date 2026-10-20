@@ -4,6 +4,7 @@ import (
 	"maps"
 	"path/filepath"
 	"regexp"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -279,6 +280,15 @@ func (m Model) updateBrowsing(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 			return m, request.stage
 		}
 		return m, request.unstage
+	case key.Matches(msg, stageAllKey):
+		if m.view != viewChanges || len(m.status.Files) == 0 {
+			return m, nil
+		}
+		request := repositoryRequest{repository: m.repository}
+		if slices.ContainsFunc(m.status.Files, gitrepo.FileStatus.HasUnstagedChanges) {
+			return m, request.stageAll
+		}
+		return m, request.unstageAll
 	case key.Matches(msg, commitKey):
 		if m.repository.Dir == "" {
 			return m, nil
@@ -649,7 +659,6 @@ func (m Model) withDiffContent() Model {
 	return m
 }
 
-// diffLines is the content of the diff pane for the view on screen.
 func (m Model) diffLines() []string {
 	width := m.diffInnerWidth()
 	sections, loaded := m.commitFiles[m.selectedCommitHash()]
@@ -665,7 +674,6 @@ func (m Model) diffLines() []string {
 	}
 }
 
-// withListScrolled moves the list window of the view on screen so its selected entry is visible.
 func (m Model) withListScrolled() Model {
 	if m.view == viewLog {
 		m.logOffset = scrolledOffset(m.logOffset, max(m.selectedLogRow(m.visibleLogRows()), 0), m.paneInnerHeight())
@@ -715,7 +723,6 @@ func (m Model) diffInnerWidth() int {
 	return max(m.width-m.listOuterWidth()-2, 0)
 }
 
-// paneInnerHeight is the rows left for content inside a pane, after its borders.
 func (m Model) paneInnerHeight() int {
 	return max(m.height-headerHeight-footerHeight-2, 0)
 }
@@ -724,7 +731,6 @@ func (m Model) popupInnerWidth() int {
 	return max(min(m.width-4, maximumPopupWidth)-4, 0)
 }
 
-// fieldInnerWidth is the text width inside the border of a commit popup field.
 func (m Model) fieldInnerWidth() int {
 	return max(m.popupInnerWidth()-2, 0)
 }
@@ -891,7 +897,6 @@ func (m Model) logLabel() string {
 	return strconv.Itoa(position) + " of " + strconv.Itoa(matching)
 }
 
-// renderFileRow shows the index and worktree codes of git status, then the path.
 func renderFileRow(file gitrepo.FileStatus) string {
 	path := sanitizeText(file.Path)
 	if file.IsUntracked() {
@@ -901,7 +906,6 @@ func renderFileRow(file gitrepo.FileStatus) string {
 		" " + path
 }
 
-// renderCommitRow shows the short hash and summary, with the commit's age at the right edge.
 func renderCommitRow(commit gitrepo.Commit, now time.Time, width int) string {
 	age := compactAge(now.Sub(commit.AuthoredAt))
 	summaryWidth := max(width-len(age)-1, 0)

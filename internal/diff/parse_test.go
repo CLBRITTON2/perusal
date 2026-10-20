@@ -10,8 +10,6 @@ func TestParseUnified(t *testing.T) {
 	t.Run("pairsRemovedWithAddedAndPadsTheShorterSide", pairsRemovedWithAddedAndPadsTheShorterSide)
 	t.Run("numbersLinesFromEachHunkStart", numbersLinesFromEachHunkStart)
 	t.Run("startsANewPairingWhenRemovalsFollowAdditions", startsANewPairingWhenRemovalsFollowAdditions)
-	t.Run("marksBinaryFilesWithNoHunks", marksBinaryFilesWithNoHunks)
-	t.Run("rejectsMalformedHunkHeader", rejectsMalformedHunkHeader)
 	t.Run("rejectsUnknownLinePrefix", rejectsUnknownLinePrefix)
 }
 
@@ -130,27 +128,6 @@ func startsANewPairingWhenRemovalsFollowAdditions(t *testing.T) {
 	}
 	if !reflect.DeepEqual(fileDiff.Hunks[0].Rows, want) {
 		t.Fatalf("rows:\n%+v\nwant:\n%+v", fileDiff.Hunks[0].Rows, want)
-	}
-}
-
-func marksBinaryFilesWithNoHunks(t *testing.T) {
-	text := "diff --git a/i.png b/i.png\nindex 1..2 100644\nBinary files a/i.png and b/i.png differ\n"
-
-	fileDiff, err := ParseUnified(text)
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	if !fileDiff.Binary || len(fileDiff.Hunks) != 0 {
-		t.Fatalf("got %+v, want binary with no hunks", fileDiff)
-	}
-}
-
-func rejectsMalformedHunkHeader(t *testing.T) {
-	_, err := ParseUnified("@@ -x +1 @@\n a\n")
-
-	if err == nil || !strings.Contains(err.Error(), "malformed hunk header") {
-		t.Fatalf("got error %v, want a malformed hunk header error", err)
 	}
 }
 

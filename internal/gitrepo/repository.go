@@ -17,7 +17,6 @@ type Repository struct {
 	Dir string
 }
 
-// Commit is one entry of git log.
 type Commit struct {
 	Hash       string
 	ShortHash  string
@@ -139,6 +138,18 @@ func (r Repository) untrackedFileDiff(ctx context.Context, path string) (string,
 // Stage adds every change to file, including a deletion, to the index.
 func (r Repository) Stage(ctx context.Context, file FileStatus) error {
 	_, err := runGit(ctx, r.Dir, []string{"add", "--all", "--", file.Path})
+	return err
+}
+
+// StageAll adds every change in the working tree to the index, untracked files and deletions included.
+func (r Repository) StageAll(ctx context.Context) error {
+	_, err := runGit(ctx, r.Dir, []string{"add", "--all"})
+	return err
+}
+
+// UnstageAll resets the whole index to HEAD and leaves the working tree alone.
+func (r Repository) UnstageAll(ctx context.Context) error {
+	_, err := runGit(ctx, r.Dir, []string{"restore", "--staged", "--", "."})
 	return err
 }
 

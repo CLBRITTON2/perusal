@@ -78,6 +78,20 @@ func (r repositoryRequest) loadStatus() tea.Msg {
 	return statusLoadedMsg{dir: r.repository.Dir, status: status}
 }
 
+func (r repositoryRequest) stageAll() tea.Msg {
+	if err := r.repository.StageAll(context.Background()); err != nil {
+		return gitFailedMsg{err: err}
+	}
+	return indexChangedMsg{dir: r.repository.Dir}
+}
+
+func (r repositoryRequest) unstageAll() tea.Msg {
+	if err := r.repository.UnstageAll(context.Background()); err != nil {
+		return gitFailedMsg{err: err}
+	}
+	return indexChangedMsg{dir: r.repository.Dir}
+}
+
 func (r repositoryRequest) loadLog() tea.Msg {
 	commits, err := r.repository.Log(context.Background(), maximumLogCommits)
 	if err != nil {

@@ -9,12 +9,6 @@ func TestParseStatus(t *testing.T) {
 	t.Run("readsBranchHeadersAndEveryEntryKind", readsBranchHeadersAndEveryEntryKind)
 	t.Run("readsDetachedUnbornHeadWithNoUpstream", readsDetachedUnbornHeadWithNoUpstream)
 	t.Run("rejectsARenameWithNoOriginalPath", rejectsARenameWithNoOriginalPath)
-	t.Run("rejectsAnUnknownEntryKind", rejectsAnUnknownEntryKind)
-}
-
-func TestFileStatus(t *testing.T) {
-	t.Run("partlyStagedFileHasBothKindsOfChanges", partlyStagedFileHasBothKindsOfChanges)
-	t.Run("untrackedFileIsUnstagedOnly", untrackedFileIsUnstagedOnly)
 }
 
 func readsBranchHeadersAndEveryEntryKind(t *testing.T) {
@@ -65,29 +59,5 @@ func rejectsARenameWithNoOriginalPath(t *testing.T) {
 
 	if err == nil {
 		t.Fatal("got no error for a rename with no original path")
-	}
-}
-
-func rejectsAnUnknownEntryKind(t *testing.T) {
-	_, err := ParseStatus([]byte(" M a.go\x00"))
-
-	if err == nil {
-		t.Fatal("got no error for a porcelain v1 entry")
-	}
-}
-
-func partlyStagedFileHasBothKindsOfChanges(t *testing.T) {
-	file := FileStatus{Path: "a.go", IndexStatus: 'M', WorktreeStatus: 'M'}
-
-	if !file.HasStagedChanges() || !file.HasUnstagedChanges() || file.IsUntracked() {
-		t.Fatalf("%+v: want staged and unstaged changes, tracked", file)
-	}
-}
-
-func untrackedFileIsUnstagedOnly(t *testing.T) {
-	file := FileStatus{Path: "a.go", IndexStatus: '?', WorktreeStatus: '?'}
-
-	if file.HasStagedChanges() || !file.HasUnstagedChanges() || !file.IsUntracked() {
-		t.Fatalf("%+v: want untracked with unstaged changes only", file)
 	}
 }

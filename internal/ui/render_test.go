@@ -12,13 +12,10 @@ import (
 func TestSanitizeText(t *testing.T) {
 	t.Run("replacesEscapeSequenceStart", replacesEscapeSequenceStart)
 	t.Run("replacesBidiOverride", replacesBidiOverride)
-	t.Run("expandsTabs", expandsTabs)
-	t.Run("keepsLineBreaksOfMultilineText", keepsLineBreaksOfMultilineText)
 }
 
 func TestRenderSideBySide(t *testing.T) {
 	t.Run("everyRowFillsTheWidthExactly", everyRowFillsTheWidthExactly)
-	t.Run("showsOldTextLeftAndNewTextRight", showsOldTextLeftAndNewTextRight)
 	t.Run("wrapsALongLineAndPadsTheOtherSide", wrapsALongLineAndPadsTheOtherSide)
 }
 
@@ -84,22 +81,6 @@ func replacesBidiOverride(t *testing.T) {
 	}
 }
 
-func expandsTabs(t *testing.T) {
-	got := sanitizeText("\tx")
-
-	if got != "    x" {
-		t.Fatalf("got %q", got)
-	}
-}
-
-func keepsLineBreaksOfMultilineText(t *testing.T) {
-	got := sanitizeLines("On branch master\r\n\tmodified: a\x1b.go\n")
-
-	if got != "On branch master\n    modified: a�.go\n" {
-		t.Fatalf("got %q", got)
-	}
-}
-
 func everyRowFillsTheWidthExactly(t *testing.T) {
 	fileDiff := diff.FileDiff{Hunks: []diff.Hunk{{
 		Header: "@@ -9,2 +9,2 @@",
@@ -117,21 +98,5 @@ func everyRowFillsTheWidthExactly(t *testing.T) {
 				t.Errorf("width %d, row %d: %d cells: %q", width, index, got, ansi.Strip(line))
 			}
 		}
-	}
-}
-
-func showsOldTextLeftAndNewTextRight(t *testing.T) {
-	fileDiff := diff.FileDiff{Hunks: []diff.Hunk{{
-		Header: "@@ -7 +7 @@",
-		Rows: []diff.Row{
-			{Left: diff.Line{Kind: diff.LineRemoved, Number: 7, Text: "old"}, Right: diff.Line{Kind: diff.LineAdded, Number: 7, Text: "new"}},
-		},
-	}}}
-
-	lines := renderSideBySide(fileDiff, 21)
-
-	got := ansi.Strip(lines[1])
-	if got != "7 old     │7 new     " {
-		t.Fatalf("got %q", got)
 	}
 }

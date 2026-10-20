@@ -9,6 +9,7 @@ var (
 	downKey        = key.NewBinding(key.WithKeys("j", "down"), key.WithHelp("j/k", "select"))
 	upKey          = key.NewBinding(key.WithKeys("k", "up"))
 	stageKey       = key.NewBinding(key.WithKeys("space"), key.WithHelp("space", "stage"))
+	stageAllKey    = key.NewBinding(key.WithKeys("a"), key.WithHelp("a", "stage all"))
 	commitKey      = key.NewBinding(key.WithKeys("c"), key.WithHelp("c", "commit"))
 	switchViewKey  = key.NewBinding(key.WithKeys("tab"), key.WithHelp("tab", "changes/log"))
 	scrollDownKey  = key.NewBinding(key.WithKeys("ctrl+d", "pgdown"), key.WithHelp("^d/^u", "scroll"))
@@ -27,8 +28,9 @@ var (
 )
 
 var (
-	changesHelp = []key.Binding{downKey, stageKey, commitKey, switchViewKey, scrollDownKey, refreshKey, quitKey}
-	logHelp     = []key.Binding{downKey, expandKey, searchKey, commitKey, switchViewKey, scrollDownKey, refreshKey,
+	changesHelp = []key.Binding{downKey, stageKey, stageAllKey, commitKey, switchViewKey, scrollDownKey, refreshKey,
+		quitKey}
+	logHelp = []key.Binding{downKey, expandKey, searchKey, commitKey, switchViewKey, scrollDownKey, refreshKey,
 		quitKey}
 	searchHelp = []key.Binding{keepSearchKey, clearSearchKey}
 	commitHelp = []key.Binding{nextFieldKey, submitKey, cancelKey}

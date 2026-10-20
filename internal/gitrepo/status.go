@@ -31,7 +31,6 @@ func (f FileStatus) HasUnstagedChanges() bool {
 	return f.WorktreeStatus != ' '
 }
 
-// Status is the branch and changed files of a working tree.
 type Status struct {
 	// Branch is empty when HEAD is detached.
 	Branch string

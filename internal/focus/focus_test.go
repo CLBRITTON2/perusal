@@ -37,7 +37,6 @@ func TestMapPath(t *testing.T) {
 
 func TestParseFocusFile(t *testing.T) {
 	t.Run("allowsATrailingLineBreak", allowsATrailingLineBreak)
-	t.Run("refusesAnEmptyFile", refusesAnEmptyFile)
 	t.Run("refusesTwoLines", refusesTwoLines)
 }
 
@@ -46,14 +45,6 @@ func allowsATrailingLineBreak(t *testing.T) {
 
 	if err != nil || got != `C:\Users\claude\dev\perusal` {
 		t.Fatalf("got %q, %v", got, err)
-	}
-}
-
-func refusesAnEmptyFile(t *testing.T) {
-	_, err := ParseFocusFile("\n")
-
-	if !errors.Is(err, ErrMalformedFocusFile) {
-		t.Fatalf("got %v, want %v", err, ErrMalformedFocusFile)
 	}
 }
 

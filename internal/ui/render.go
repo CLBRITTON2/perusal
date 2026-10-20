@@ -58,7 +58,6 @@ func renderSideBySide(fileDiff diff.FileDiff, width int) []string {
 	return lines
 }
 
-// renderOneSide shows the side of each row that side picks, wrapped to the whole width.
 func renderOneSide(fileDiff diff.FileDiff, side func(diff.Row) diff.Line, width int) []string {
 	numberWidth := len(strconv.Itoa(maxLineNumber(fileDiff)))
 	lines := []string{}
@@ -137,7 +136,6 @@ func maxLineNumber(fileDiff diff.FileDiff) int {
 	return highest
 }
 
-// renderCommit lays out a commit's header, message and the diff of every file it changed, width cells wide.
 func renderCommit(commit gitrepo.Commit, sections []diff.FileSection, width int) []string {
 	lines := []string{
 		hashStyle.Render(fitToWidth(commit.Hash, width)),
@@ -219,7 +217,6 @@ func fitToWidth(text string, width int) string {
 	return truncated + strings.Repeat(" ", max(width-ansi.StringWidth(truncated), 0))
 }
 
-// fitLines returns exactly height lines, each fitted to width.
 func fitLines(lines []string, width int, height int) []string {
 	fitted := []string{}
 	for i := 0; i < height; i++ {
@@ -291,7 +288,6 @@ func sanitizeLines(text string) string {
 	return strings.Join(sanitized, "\n")
 }
 
-// singleLine joins multi-line git output into one line for the footer.
 func singleLine(text string) string {
 	lines := strings.FieldsFunc(text, isLineBreak)
 	return strings.Join(lines, " | ")
