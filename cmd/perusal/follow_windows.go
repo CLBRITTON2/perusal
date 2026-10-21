@@ -88,8 +88,17 @@ func repositoryLister(rules focus.Rules) ui.Lister {
 		for _, repository := range found.Repositories {
 			listed = append(listed, ui.ListedRepository{Name: repository.Name, Repository: repository.Repository})
 		}
-		return ui.Listing{Repositories: listed, Refusals: refusalReasons(found.Refusals)}, nil
+		return ui.Listing{Repositories: listed, Refusals: refusedRepositories(found.Refusals)}, nil
 	}
+}
+
+func refusedRepositories(refusals []focus.FoundRefusal) []ui.RefusedRepository {
+	refused := []ui.RefusedRepository{}
+	for _, refusal := range refusals {
+		refused = append(refused, ui.RefusedRepository{Name: refusal.Name, Summary: refusal.Summary(),
+			Reason: refusal.Err.Error()})
+	}
+	return refused
 }
 
 func refusalReasons(refusals []error) []string {

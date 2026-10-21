@@ -97,6 +97,31 @@ func TestEnterInTheOverviewReviewsTheSelectedRepositoryAndKeepsTheFocus(t *testi
 	}
 }
 
+func TestARefusedRepositoryIsAMutedRowWithItsSummaryAndEnterShowsTheReason(t *testing.T) {
+	list := func(context.Context) (Listing, error) {
+		return Listing{Repositories: []ListedRepository{}, Refusals: []RefusedRepository{
+			{Name: "notes", Summary: "access denied", Reason: "list C:/dev/notes: access denied"},
+			{Name: "agents", Summary: "not write-denied to the agent", Reason: "C:/dev/agents/.git has no deny"},
+		}}, nil
+	}
+	m := update(t, New(list), tea.WindowSizeMsg{Width: 120, Height: 30})
+	m = update(t, m, tea.KeyPressMsg{Code: 'o', Text: "o"})
+	m = update(t, m, overviewRequest{list: list}.load())
+	screen := ansi.Strip(m.renderScreen())
+
+	next, cmd := m.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
+	m = asModel(t, next)
+
+	want := folderGlyph + " agents  not write-denied to the agent"
+	if !strings.Contains(screen, want) || strings.Index(screen, "agents") > strings.Index(screen, "notes") {
+		t.Fatalf("got screen:\n%s\nwant agents before notes, as %q", screen, want)
+	}
+	if cmd != nil || !m.overview.open || m.footerText != "agents is refused: C:/dev/agents/.git has no deny" {
+		t.Fatalf("got command %v, open %t, footer %q, want the reason with the overview still open", cmd,
+			m.overview.open, m.footerText)
+	}
+}
+
 func TestPullInTheOverview(t *testing.T) {
 	t.Run("theRowShowsPullingUntilThePulledRowReplacesIt", theRowShowsPullingUntilThePulledRowReplacesIt)
 	t.Run("aRowWithNoUpstreamIsNotPulled", aRowWithNoUpstreamIsNotPulled)
@@ -214,7 +239,7 @@ func TestDiscardOpensOnTheSelectedFile(t *testing.T) {
 }
 
 func listNothing(context.Context) (Listing, error) {
-	return Listing{Repositories: []ListedRepository{}, Refusals: []string{}}, nil
+	return Listing{Repositories: []ListedRepository{}, Refusals: []RefusedRepository{}}, nil
 }
 
 func focusOn(dir string) RepositoriesFocused {

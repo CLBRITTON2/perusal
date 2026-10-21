@@ -23,6 +23,8 @@ glyphs.
 go install github.com/CLBRITTON2/perusal/cmd/perusal@latest
 ```
 
+From a clone, `make` installs it and `make test` vets and tests it for Windows, Linux and macOS.
+
 ## Use
 
 ```
@@ -91,10 +93,11 @@ working in, and switches as the agent moves between them. It reads
 
 The overview (`o`) lists every repository under `ownerDir` with its branch, its uncommitted file count, how far it is
 ahead of and behind its upstream, and how far it is behind `origin`'s default branch. The repositories the focus file
-names come first, marked `●`. `enter` reviews the selected one, `p` pulls it (fast-forward only, from its upstream
-rather than the default branch), and `esc` goes back. A branch is finished when it is clean, `origin`'s default branch
-holds all its commits, and it has no upstream or the remote deleted it. `p` then switches to the default branch and
-pulls that. A repository opened this way stays open until the focus file changes to a list that does not name it.
+names come first, marked `●`. One that fails a check below is listed muted, and `enter` on it shows why. `enter`
+reviews the selected one, `p` pulls it (fast-forward only, from its upstream rather than the default branch), and
+`esc` goes back. A branch is finished when it is clean, `origin`'s default branch holds all its commits, and it has
+no upstream or the remote deleted it. `p` then switches to the default branch and pulls that. A repository opened this
+way stays open until the focus file changes to a list that does not name it.
 
 perusal runs git as you in a repository the agent chose, and git runs that repository's hooks and config. So every
 `.git` under `ownerDir` needs an inherited deny of `(OI)(CI)(WD,AD,WEA,WA,DE,DC)` for the agent account, and perusal

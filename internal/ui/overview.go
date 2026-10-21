@@ -22,19 +22,27 @@ type ListedRepository struct {
 	Repository gitrepo.Repository
 }
 
+// Name is as in ListedRepository. Summary fits a list row, and Reason is the full refusal.
+type RefusedRepository struct {
+	Name    string
+	Summary string
+	Reason  string
+}
+
 // Refusals are the work trees that failed a check and the directories that could not be listed.
 type Listing struct {
 	Repositories []ListedRepository
-	Refusals     []string
+	Refusals     []RefusedRepository
 }
 
 type Lister func(context.Context) (Listing, error)
 
 // behindDefault counts the commits HEAD lacks from defaultBranch, and stays 0 when defaultBranch is the upstream, whose
 // count the status already holds. finished is a branch p leaves for the default branch: one that mayBeFinished and is
-// merged into defaultBranch.
+// merged into defaultBranch. refused is set on a row whose repository failed a check.
 type overviewRow struct {
 	listed        ListedRepository
+	refused       RefusedRepository
 	status        gitrepo.Status
 	defaultBranch string
 	behindDefault int
@@ -51,7 +59,7 @@ type overview struct {
 	pulling  map[string]bool
 }
 
-// problems are the refusals and the repositories git failed on, which get no row.
+// problems are the repositories git failed on, which get no row.
 type overviewLoadedMsg struct {
 	rows     []overviewRow
 	problems []string
@@ -118,7 +126,7 @@ func (r overviewRequest) load() tea.Msg {
 	}
 	group.Wait()
 	loaded := []overviewRow{}
-	problems := slices.Clone(listing.Refusals)
+	problems := []string{}
 	for index, row := range rows {
 		if failures[index] != nil {
 			problems = append(problems, failures[index].Error())
@@ -126,6 +134,10 @@ func (r overviewRequest) load() tea.Msg {
 			loaded = append(loaded, row)
 		}
 	}
+	for _, refused := range listing.Refusals {
+		loaded = append(loaded, overviewRow{listed: ListedRepository{Name: refused.Name}, refused: refused})
+	}
+	slices.SortFunc(loaded, func(a overviewRow, b overviewRow) int { return strings.Compare(a.listed.Name, b.listed.Name) })
 	return overviewLoadedMsg{rows: loaded, problems: problems}
 }
 
@@ -161,6 +173,10 @@ func loadOverviewRow(listed ListedRepository) (overviewRow, error) {
 	return row, nil
 }
 
+func (r overviewRow) isRefused() bool {
+	return r.refused.Reason != ""
+}
+
 func (m Model) openOverview() (tea.Model, tea.Cmd) {
 	m.overview = overview{open: true, rows: []overviewRow{}, pulling: m.overview.pulling}
 	return m, overviewRequest{list: m.list}.load
@@ -175,7 +191,7 @@ func (m Model) withOverviewLoaded(msg overviewLoadedMsg) Model {
 	m.overview.loaded = true
 	m.overview.rows = rows
 	m.overview.selected = max(slices.IndexFunc(rows, func(row overviewRow) bool {
-		return row.listed.Repository == m.repository
+		return !row.isRefused() && row.listed.Repository == m.repository
 	}), 0)
 	m.overview.offset = 0
 	m = m.withListScrolled()
@@ -221,6 +237,8 @@ func (m Model) pullOverviewRow() (tea.Model, tea.Cmd) {
 	listed := row.listed
 	var pull tea.Cmd
 	switch {
+	case row.isRefused():
+		return m.withRefusalShown(row), nil
 	case m.overview.pulling[listed.Repository.Dir]:
 		return m, nil
 	case row.finished:
@@ -284,12 +302,20 @@ func (m Model) openOverviewRow() (tea.Model, tea.Cmd) {
 	if len(m.overview.rows) == 0 {
 		return m, nil
 	}
-	repository := m.overview.rows[m.overview.selected].listed.Repository
+	row := m.overview.rows[m.overview.selected]
+	if row.isRefused() {
+		return m.withRefusalShown(row), nil
+	}
+	repository := row.listed.Repository
 	m.overview.open = false
 	if repository == m.repository {
 		return m, nil
 	}
 	return m.withFocusedRepository(repository)
+}
+
+func (m Model) withRefusalShown(row overviewRow) Model {
+	return m.withFooterError(row.listed.Name + " is refused: " + row.refused.Reason)
 }
 
 func (m Model) renderOverviewPane() string {
@@ -336,6 +362,12 @@ func (m Model) renderFocusMark(row overviewRow) string {
 }
 
 func renderOverviewCells(row overviewRow) []string {
+	if row.isRefused() {
+		return []string{
+			mutedStyle.Render(folderGlyph + " " + sanitizeText(row.listed.Name)),
+			mutedStyle.Render(sanitizeText(row.refused.Summary)),
+		}
+	}
 	return []string{
 		repositoryStyle.Render(folderGlyph + " " + sanitizeText(row.listed.Name)),
 		branchStyle.Render(branchGlyph + " " + branchLabel(row.status)),

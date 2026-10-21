@@ -175,7 +175,8 @@ func TestFindRepositories(t *testing.T) {
 	if err != nil || len(got.Repositories) != 1 || got.Repositories[0].Name != "org/repo" {
 		t.Fatalf("got %v, %v, want only org/repo", got, err)
 	}
-	if len(got.Refusals) != 1 || !errors.Is(got.Refusals[0], ErrGitDirUnprotected) {
+	if len(got.Refusals) != 1 || got.Refusals[0].Name != "plain" ||
+		got.Refusals[0].Summary() != "not write-denied to the agent" {
 		t.Fatalf("got refusals %v, want plain refused as %v", got.Refusals, ErrGitDirUnprotected)
 	}
 }
