@@ -57,9 +57,6 @@ const (
 	deleteBranchPopup
 )
 
-// A force push to these would rewrite history others build on.
-var protectedBranches = []string{"main", "master"}
-
 type Model struct {
 	list       Lister
 	overview   overview
@@ -587,18 +584,9 @@ func (m Model) openPushPopup() (tea.Model, tea.Cmd) {
 	case m.status.Behind == 0:
 		m.popup = pushPopup
 		return m, nil
-	case forcePushProtected(m.status):
-		return m.withFooterError("the branch and " + m.status.Upstream + " have diverged, and perusal never force " +
-			"pushes main or master"), nil
 	}
 	m.popup = forcePushPopup
 	return m, nil
-}
-
-// The upstream counts too, since a branch can track one under another name.
-func forcePushProtected(status gitrepo.Status) bool {
-	_, upstreamBranch, _ := strings.Cut(status.Upstream, "/")
-	return slices.Contains(protectedBranches, status.Branch) || slices.Contains(protectedBranches, upstreamBranch)
 }
 
 func (m Model) openAmendPopup() Model {

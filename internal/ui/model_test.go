@@ -228,24 +228,11 @@ func TestFullscreenDiffCoversTheListsSoAClickThereSelectsNothing(t *testing.T) {
 	}
 }
 
-func TestPushPopup(t *testing.T) {
-	t.Run("aDivergedBranchOffersAForcePush", aDivergedBranchOffersAForcePush)
-	t.Run("aDivergedMainIsNeverForcePushed", aDivergedMainIsNeverForcePushed)
-}
-
-func aDivergedBranchOffersAForcePush(t *testing.T) {
+func TestADivergedBranchOffersAForcePush(t *testing.T) {
 	m := pressPush(t, gitrepo.Status{Branch: "fix", Upstream: "origin/fix", Ahead: 2, Behind: 1})
 
 	if m.popup != forcePushPopup || !strings.Contains(m.renderForcePushPopup(), "replaces 1 commit on origin/fix with 2 commits") {
 		t.Fatalf("got popup %d:\n%s", m.popup, m.renderForcePushPopup())
-	}
-}
-
-func aDivergedMainIsNeverForcePushed(t *testing.T) {
-	m := pressPush(t, gitrepo.Status{Branch: "fix", Upstream: "origin/main", Ahead: 2, Behind: 1})
-
-	if m.popup != noPopup || !m.footerIsError {
-		t.Fatalf("got popup %d, footer %q, want a refusal", m.popup, m.footerText)
 	}
 }
 

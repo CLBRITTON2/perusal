@@ -61,7 +61,7 @@ Below `HEAD`, perusal refuses a merge commit, the root commit and any commit wit
 
 When the branch and its upstream have diverged, as after amending a pushed commit, the push popup offers a force push
 instead. It pushes with `--force-with-lease --force-if-includes`, so git refuses if the upstream moved since your last
-fetch. perusal never force pushes `main` or `master`.
+fetch.
 
 The branch list marks a branch merged when merging it into `origin`'s default branch would change nothing, which
 counts a squash merge. `D` deletes only such a branch, never the current or the default one, and `enter` refuses to
