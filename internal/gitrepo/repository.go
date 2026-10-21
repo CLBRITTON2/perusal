@@ -11,6 +11,8 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"github.com/CLBRITTON2/perusal/internal/diff"
 )
 
 // Dir is the working tree's top level.
@@ -131,6 +133,67 @@ func (r Repository) FileDiff(ctx context.Context, file FileStatus) (string, erro
 		return "", err
 	}
 	return string(output), nil
+}
+
+// StagedLineCounts sums the lines the staged changes add and remove, which is what a commit would record.
+func (r Repository) StagedLineCounts(ctx context.Context) (diff.LineCounts, error) {
+	output, err := runGit(ctx, r.Dir, []string{"diff", "--cached", "--numstat", "--no-color", "--no-ext-diff", "--find-renames"})
+	if err != nil {
+		return diff.LineCounts{}, err
+	}
+	return parseNumstat(output)
+}
+
+// A binary file's counts are "-", which adds nothing.
+func parseNumstat(output []byte) (diff.LineCounts, error) {
+	counts := diff.LineCounts{}
+	for line := range strings.Lines(string(output)) {
+		fields := strings.SplitN(strings.TrimSuffix(line, "\n"), "\t", 3)
+		if len(fields) != 3 {
+			return diff.LineCounts{}, fmt.Errorf("parse git diff --numstat line %q: want added, removed and a path", line)
+		}
+		if fields[0] == "-" && fields[1] == "-" {
+			continue
+		}
+		added, err := strconv.Atoi(fields[0])
+		if err != nil {
+			return diff.LineCounts{}, fmt.Errorf("parse git diff --numstat line %q: %w", line, err)
+		}
+		removed, err := strconv.Atoi(fields[1])
+		if err != nil {
+			return diff.LineCounts{}, fmt.Errorf("parse git diff --numstat line %q: %w", line, err)
+		}
+		counts.Added += added
+		counts.Removed += removed
+	}
+	return counts, nil
+}
+
+// DefaultBranch is origin's default branch as of the last fetch, such as origin/main. It is empty when origin/HEAD is
+// unset, as in a repository that was pushed to origin instead of cloned from it.
+func (r Repository) DefaultBranch(ctx context.Context) (string, error) {
+	output, err := runGit(ctx, r.Dir, []string{"symbolic-ref", "--quiet", "--short", "refs/remotes/origin/HEAD"})
+	var exitErr *exec.ExitError
+	switch {
+	case err == nil:
+		return strings.TrimSpace(string(output)), nil
+	case errors.As(err, &exitErr) && exitErr.ExitCode() == 1:
+		return "", nil
+	}
+	return "", err
+}
+
+// CommitsBehind counts the commits on ref that HEAD does not have.
+func (r Repository) CommitsBehind(ctx context.Context, ref string) (int, error) {
+	output, err := runGit(ctx, r.Dir, []string{"rev-list", "--count", "HEAD.." + ref})
+	if err != nil {
+		return 0, err
+	}
+	count, err := strconv.Atoi(strings.TrimSpace(string(output)))
+	if err != nil {
+		return 0, fmt.Errorf("parse the count of commits on %s missing from HEAD in %s: %w", ref, r.Dir, err)
+	}
+	return count, nil
 }
 
 // git diff --no-index exits 1 when the files differ, the normal result for an untracked file.

@@ -41,15 +41,16 @@ perusal -repo <dir>  # review the repository <dir> is in
 | `c` | anywhere | open the commit popup |
 | `P` | anywhere | open the push popup |
 | `A` | log | amend the selected commit with the staged changes |
-| `r` | anywhere | in follow mode, switch to the next focused repository with uncommitted changes |
+| `r` | anywhere | in follow mode, switch to the next focused repository |
+| `o` | anywhere | in follow mode, open the overview of every repository under `ownerDir` |
 | `enter` | log | expand the commit into its files |
 | `/` | log | search, `enter` keeps it, `esc` clears it |
 | `q` | anywhere | quit |
 
-In the commit popup, `tab` switches between summary and description, `enter` commits from the summary,
-`ctrl+enter` commits from either field, and `esc` cancels. The mouse works too: click a row to select it, click the
-folded pane to open it, right-click a commit to amend it. The wheel moves the selection over a list and scrolls the
-diff anywhere else.
+In the commit popup, `tab` switches between summary and description, `enter` commits from the summary, `ctrl+enter`
+commits from either field, and `esc` cancels. The changes pane shows how many lines the staged changes add and
+remove. The mouse works too: click a row to select it, click the folded pane to open it, right-click a commit to
+amend it. The wheel moves the selection over a list and scrolls the diff anywhere else.
 
 Amend folds only the staged changes into the commit and keeps its message. An older commit gets a fixup commit and an
 autosquash rebase, so every commit above it is rewritten, and a rebase that stops is aborted and the fixup undone.
@@ -77,11 +78,16 @@ working in, and switches as the agent moves between them. It reads
 - `agentAccount` is the Windows account the agent runs as.
 - `focusFile` holds one absolute path per line, the directories the agent is working in, and is rewritten whenever
   they change. Something on the agent side has to write it, such as a herdr plugin. perusal opens the first
-  repository with uncommitted changes, or the first one when all are clean, and `r` cycles through the ones with
-  changes. The header shows the position, such as `(2 of 3)`. A new list that still names the repository under
+  repository with uncommitted changes, or the first one when all are clean, and `r` cycles through all of them. The
+  header shows the position, such as `(2 of 3)`. A new list that still names the repository under
   review keeps it open, and a path that fails a check below is shown in the footer.
 - `agentDir` and `ownerDir` are one directory as the agent and you reach it. perusal maps a path under `agentDir`
   to the same path under `ownerDir`, and refuses anything outside it.
+
+The overview (`o`) lists every repository under `ownerDir` with its branch, its uncommitted file count, how far it is
+ahead of and behind its upstream, and how far it is behind `origin`'s default branch. `enter` reviews the selected
+one, and `esc` goes back. A repository opened this way stays open until the focus file changes to a list that does not
+name it.
 
 perusal runs git as you in a repository the agent chose, and git runs that repository's hooks and config. So every
 `.git` under `ownerDir` needs an inherited deny of `(OI)(CI)(WD,AD,WEA,WA,DE,DC)` for the agent account, and perusal

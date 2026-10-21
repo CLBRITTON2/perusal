@@ -58,24 +58,27 @@ const (
 var protectedBranches = []string{"main", "master"}
 
 type Model struct {
+	list       Lister
+	overview   overview
 	repository gitrepo.Repository
 	// focused lists the repositories the focus named, and uncommitted maps each Dir to whether it has changes.
-	focused        []gitrepo.Repository
-	uncommitted    map[string]bool
-	rejection      string
-	view           viewKind
-	diffFullscreen bool
-	status         gitrepo.Status
-	selected       int
-	listOffset     int
-	diffPath       string
-	fileDiff       diff.FileDiff
-	commits        []gitrepo.Commit
-	graph          []graphRow
-	logLimit       int
-	logLoadedAt    time.Time
-	selectedCommit int
-	selectedFile   int
+	focused          []gitrepo.Repository
+	uncommitted      map[string]bool
+	rejection        string
+	view             viewKind
+	diffFullscreen   bool
+	status           gitrepo.Status
+	stagedLineCounts diff.LineCounts
+	selected         int
+	listOffset       int
+	diffPath         string
+	fileDiff         diff.FileDiff
+	commits          []gitrepo.Commit
+	graph            []graphRow
+	logLimit         int
+	logLoadedAt      time.Time
+	selectedCommit   int
+	selectedFile     int
 	// logOffset counts rows of the log tree, commit and file rows alike.
 	logOffset          int
 	commitFiles        map[string][]diff.FileSection
@@ -100,7 +103,7 @@ type Model struct {
 	height             int
 }
 
-func New() Model {
+func New(list Lister) Model {
 	summaryInput := textinput.New()
 	summaryInput.Placeholder = "Summary (required)"
 	summaryInput.Prompt = ""
@@ -117,6 +120,8 @@ func New() Model {
 	helpView.Styles.ShortSeparator = helpSepStyle
 	helpView.Styles.Ellipsis = helpSepStyle
 	return Model{
+		list:           list,
+		overview:       overview{rows: []overviewRow{}},
 		focused:        []gitrepo.Repository{},
 		uncommitted:    map[string]bool{},
 		status:         gitrepo.Status{Files: []gitrepo.FileStatus{}},
@@ -167,6 +172,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if msg.dir != m.repository.Dir {
 			return m, nil
 		}
+		m.stagedLineCounts = msg.stagedLineCounts
 		return m.withStatus(msg.status)
 	case diffLoadedMsg:
 		if msg.dir != m.repository.Dir || msg.path != m.selectedPath() {
@@ -222,6 +228,14 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.popupRunning = false
 		m.popupError = sanitizeLines(msg.err.Error())
 		return m, nil
+	case overviewLoadedMsg:
+		if !m.overview.open {
+			return m, nil
+		}
+		return m.withOverviewLoaded(msg), nil
+	case overviewFailedMsg:
+		m.overview.open = false
+		return m.withFooterError(msg.err.Error()), nil
 	case gitFailedMsg:
 		return m.withFooterError(msg.err.Error()), nil
 	case tea.KeyPressMsg:
@@ -236,13 +250,15 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m.updateConfirmPopup(msg, pushRequest{repository: m.repository, upstream: m.status.Upstream}.forcePush)
 		case m.popup == amendPopup:
 			return m.updateConfirmPopup(msg, amendRequest{repository: m.repository, commit: m.amendTarget}.amend)
+		case m.overview.open:
+			return m.updateOverview(msg)
 		case m.searching:
 			return m.updateSearch(msg)
 		}
 		return m.updateBrowsing(msg)
 	case tea.MouseClickMsg:
 		switch {
-		case m.popup != noPopup:
+		case m.popup != noPopup, m.overview.open:
 			return m, nil
 		case msg.Button == tea.MouseLeft:
 			return m.clickList(msg.Mouse())
@@ -251,7 +267,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		return m, nil
 	case tea.MouseWheelMsg:
-		if m.popup != noPopup {
+		if m.popup != noPopup || m.overview.open {
 			return m, nil
 		}
 		return m.scrollWheel(msg.Mouse())
@@ -338,6 +354,8 @@ func (m Model) updateBrowsing(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		return m.openAmendPopup(), nil
 	case key.Matches(msg, nextRepositoryKey):
 		return m.cycleRepository()
+	case key.Matches(msg, overviewKey):
+		return m.openOverview()
 	}
 	return m, nil
 }
@@ -354,7 +372,8 @@ func (m Model) switchView() (tea.Model, tea.Cmd) {
 }
 
 func (m Model) withRepository(repository gitrepo.Repository, rejection string) Model {
-	next := New()
+	next := New(m.list)
+	next.overview = m.overview
 	next.repository = repository
 	next.rejection = rejection
 	next.view = m.view
@@ -411,19 +430,11 @@ func (m Model) firstToReview() gitrepo.Repository {
 	return m.focused[0]
 }
 
-// The cycle is the focused repositories with uncommitted changes, plus the one under review.
-func (m Model) repositoryCycle() []gitrepo.Repository {
-	return slices.DeleteFunc(slices.Clone(m.focused), func(repository gitrepo.Repository) bool {
-		return repository != m.repository && !m.uncommitted[repository.Dir]
-	})
-}
-
 func (m Model) cycleRepository() (tea.Model, tea.Cmd) {
-	cycle := m.repositoryCycle()
-	if len(cycle) < 2 {
-		return m.withFooterError("no other focused repository has uncommitted changes"), nil
+	if len(m.focused) < 2 {
+		return m.withFooterError("the focus names no other repository"), nil
 	}
-	return m.withFocusedRepository(cycle[(slices.Index(cycle, m.repository)+1)%len(cycle)])
+	return m.withFocusedRepository(m.focused[(slices.Index(m.focused, m.repository)+1)%len(m.focused)])
 }
 
 func (m Model) withFooterNotice(text string) Model {
@@ -829,6 +840,7 @@ func (m Model) diffLines() []string {
 func (m Model) withListScrolled() Model {
 	m.logOffset = scrolledOffset(m.logOffset, max(m.selectedLogRow(m.visibleLogRows()), 0), m.listInnerHeight())
 	m.listOffset = scrolledOffset(m.listOffset, m.selected, m.listInnerHeight())
+	m.overview.offset = scrolledOffset(m.overview.offset, m.overview.selected, m.paneInnerHeight())
 	return m
 }
 
@@ -931,17 +943,20 @@ func (m Model) renderScreen() string {
 }
 
 func (m Model) renderColumns() string {
-	if m.diffFullscreen {
+	switch {
+	case m.overview.open:
+		return m.renderOverviewPane()
+	case m.diffFullscreen:
 		return m.renderDiffPane()
 	}
 	return lipgloss.JoinHorizontal(lipgloss.Top, m.renderLists(), m.renderDiffPane())
 }
 
-func (m Model) branchLabel() string {
-	if m.status.Branch == "" {
+func branchLabel(status gitrepo.Status) string {
+	if status.Branch == "" {
 		return "detached HEAD"
 	}
-	return sanitizeText(m.status.Branch)
+	return sanitizeText(status.Branch)
 }
 
 func (m Model) renderHeader() string {
@@ -952,27 +967,27 @@ func (m Model) renderHeader() string {
 		return fitToWidth(" "+mutedStyle.Render("waiting for a repository"), m.width)
 	}
 	left := " " + repositoryStyle.Render(folderGlyph+" "+sanitizeText(filepath.Base(m.repository.Dir))) +
-		m.renderCyclePosition() + "  " + branchStyle.Render(branchGlyph+" "+m.branchLabel()) + m.renderAheadBehind()
+		m.renderCyclePosition() + "  " + branchStyle.Render(branchGlyph+" "+branchLabel(m.status)) + " " + renderAheadBehind(m.status)
 	return fitToWidth(left, m.width)
 }
 
 func (m Model) renderCyclePosition() string {
-	cycle := m.repositoryCycle()
-	if len(cycle) < 2 {
+	position := slices.Index(m.focused, m.repository)
+	if len(m.focused) < 2 || position < 0 {
 		return ""
 	}
-	return mutedStyle.Render(" (" + strconv.Itoa(slices.Index(cycle, m.repository)+1) + " of " + strconv.Itoa(len(cycle)) + ")")
+	return mutedStyle.Render(" (" + strconv.Itoa(position+1) + " of " + strconv.Itoa(len(m.focused)) + ")")
 }
 
-func (m Model) renderAheadBehind() string {
+func renderAheadBehind(status gitrepo.Status) string {
 	counts := []string{}
-	if m.status.Ahead > 0 {
-		counts = append(counts, " "+aheadStyle.Render("↑"+strconv.Itoa(m.status.Ahead)))
+	if status.Ahead > 0 {
+		counts = append(counts, aheadStyle.Render("↑"+strconv.Itoa(status.Ahead)))
 	}
-	if m.status.Behind > 0 {
-		counts = append(counts, " "+behindStyle.Render("↓"+strconv.Itoa(m.status.Behind)))
+	if status.Behind > 0 {
+		counts = append(counts, behindStyle.Render("↓"+strconv.Itoa(status.Behind)))
 	}
-	return strings.Join(counts, "")
+	return strings.Join(counts, " ")
 }
 
 func (m Model) renderLists() string {
@@ -983,7 +998,7 @@ func (m Model) renderLists() string {
 			renderPane(m.logTitle(), "", m.logLabel(), m.renderLogRows(innerWidth), innerWidth, m.listInnerHeight()))
 	}
 	return lipgloss.JoinVertical(lipgloss.Left,
-		renderPane("changes", "", m.changesLabel(), m.fileRows(innerWidth), innerWidth, m.listInnerHeight()),
+		renderPane("changes", m.changesLineCounts(), m.changesLabel(), m.fileRows(innerWidth), innerWidth, m.listInnerHeight()),
 		renderFoldedPane(m.logTitle(), m.logLabel(), innerWidth))
 }
 
@@ -1065,6 +1080,13 @@ func (m Model) changesLabel() string {
 		}
 	}
 	return strconv.Itoa(m.stagedFileCount()) + " staged · " + strconv.Itoa(unstaged) + " unstaged"
+}
+
+func (m Model) changesLineCounts() string {
+	if m.stagedFileCount() == 0 {
+		return ""
+	}
+	return renderLineCounts(m.stagedLineCounts)
 }
 
 func (m Model) stagedFileCount() int {
@@ -1181,27 +1203,29 @@ func (m Model) renderFooter() string {
 		return fitToWidth(errorStyle.Render("✗ "+m.footerText), m.width)
 	case m.footerText != "":
 		return fitToWidth(successStyle.Render("✓ "+m.footerText), m.width)
+	case m.overview.open:
+		return m.renderHelpLine(overviewHelp)
 	case m.searching && m.searchError != "":
 		return fitToWidth(" "+m.searchInput.View()+"  "+errorStyle.Render(m.searchError), m.width)
 	case m.searching:
 		return spaceBetween(" "+m.searchInput.View(), m.help.ShortHelpView(searchHelp)+" ", m.width)
 	case m.view == viewLog:
-		return m.renderHelpLine(logHelp)
+		return m.renderHelpLine(m.withCycleHelp(logHelp))
 	default:
-		return m.renderHelpLine(changesHelp)
+		return m.renderHelpLine(m.withCycleHelp(changesHelp))
 	}
 }
 
 func (m Model) renderHelpLine(bindings []key.Binding) string {
-	return spaceBetween(" "+m.help.ShortHelpView(m.withCycleHelp(bindings)), mutedStyle.Render(appName)+" ", m.width)
+	return spaceBetween(" "+m.help.ShortHelpView(bindings), mutedStyle.Render(appName)+" ", m.width)
 }
 
-// The cycle key goes before quit, the last binding of every help line.
+// The cycle key goes after j/k, the first binding of every help line, since a narrow pane cuts the line's end off.
 func (m Model) withCycleHelp(bindings []key.Binding) []key.Binding {
-	if len(m.repositoryCycle()) < 2 {
+	if len(m.focused) < 2 {
 		return bindings
 	}
-	return slices.Insert(slices.Clone(bindings), len(bindings)-1, nextRepositoryKey)
+	return slices.Insert(slices.Clone(bindings), 1, nextRepositoryKey)
 }
 
 func (m Model) overlayPopup(screen string, popup string) string {
@@ -1212,7 +1236,7 @@ func (m Model) overlayPopup(screen string, popup string) string {
 
 func (m Model) renderCommitPopup() string {
 	return m.renderPopup([]string{
-		titleStyle.Render("commit to " + m.branchLabel()),
+		titleStyle.Render("commit to " + branchLabel(m.status)),
 		renderField(m.summaryInput.View(), !m.descriptionFocused, m.fieldInnerWidth(), 1),
 		renderField(m.descriptionBox.View(), m.descriptionFocused, m.fieldInnerWidth(), descriptionHeight),
 	}, "committing...", commitHelp)
@@ -1220,7 +1244,7 @@ func (m Model) renderCommitPopup() string {
 
 func (m Model) renderPushPopup() string {
 	return m.renderPopup([]string{
-		titleStyle.Render("push " + m.branchLabel() + " to " + sanitizeText(m.status.Upstream)),
+		titleStyle.Render("push " + branchLabel(m.status) + " to " + sanitizeText(m.status.Upstream)),
 		textStyle.Render(commitCount(m.status.Ahead)),
 	}, "pushing...", pushHelp)
 }
@@ -1228,7 +1252,7 @@ func (m Model) renderPushPopup() string {
 func (m Model) renderForcePushPopup() string {
 	upstream := sanitizeText(m.status.Upstream)
 	return m.renderPopup([]string{
-		titleStyle.Render("force push " + m.branchLabel() + " to " + upstream),
+		titleStyle.Render("force push " + branchLabel(m.status) + " to " + upstream),
 		textStyle.Render("replaces " + commitCount(m.status.Behind) + " on " + upstream + " with " +
 			commitCount(m.status.Ahead)),
 	}, "force pushing...", forcePushHelp)

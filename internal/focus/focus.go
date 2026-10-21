@@ -42,6 +42,19 @@ type Focus struct {
 	Refusals     []error
 }
 
+// Name is the work tree's path below the owner directory, with forward slashes.
+type FoundRepository struct {
+	Name       string
+	Repository gitrepo.Repository
+}
+
+// Repositories are in path order. Refusals are the work trees that failed a check and the directories that could not
+// be listed.
+type Found struct {
+	Repositories []FoundRepository
+	Refusals     []error
+}
+
 type Result struct {
 	Focus Focus
 	Err   error
@@ -138,7 +151,6 @@ func Resolve(ctx context.Context, rules Rules, focusFile string) (Focus, error) 
 	return Focus{Repositories: repositories, Refusals: refusals}, nil
 }
 
-// The owner's git runs the config and hooks of a .git, so one the agent could write is refused.
 func resolvePath(ctx context.Context, rules Rules, agentPath string) (gitrepo.Repository, error) {
 	ownerPath, err := MapPath(agentPath, rules.AgentDir, rules.OwnerDir)
 	if err != nil {
@@ -148,7 +160,52 @@ func resolvePath(ctx context.Context, rules Rules, agentPath string) (gitrepo.Re
 	if err != nil {
 		return gitrepo.Repository{}, err
 	}
-	if err := VerifyGitDir(filepath.Join(workTree, ".git"), rules.AgentSID); err != nil {
+	return openWorkTree(ctx, rules.AgentSID, workTree)
+}
+
+// FindRepositories lists every work tree under the owner directory, checked as Resolve checks a focused one. It does
+// not look inside a work tree, so a nested one is not listed.
+func FindRepositories(ctx context.Context, rules Rules) (Found, error) {
+	found := Found{Repositories: []FoundRepository{}, Refusals: []error{}}
+	err := filepath.WalkDir(rules.OwnerDir, func(path string, entry fs.DirEntry, err error) error {
+		switch {
+		case entry == nil:
+			return fmt.Errorf("list owner directory %s: %w", rules.OwnerDir, err)
+		case err != nil:
+			found.Refusals = append(found.Refusals, fmt.Errorf("list %s: %w", path, err))
+			return filepath.SkipDir
+		case !entry.IsDir():
+			return nil
+		}
+		_, err = os.Lstat(filepath.Join(path, ".git"))
+		switch {
+		case errors.Is(err, fs.ErrNotExist):
+			return nil
+		case err != nil:
+			found.Refusals = append(found.Refusals, fmt.Errorf("look for .git in %s: %w", path, err))
+			return filepath.SkipDir
+		}
+		repository, err := openWorkTree(ctx, rules.AgentSID, path)
+		if err != nil {
+			found.Refusals = append(found.Refusals, err)
+			return filepath.SkipDir
+		}
+		name, err := filepath.Rel(rules.OwnerDir, path)
+		if err != nil {
+			return fmt.Errorf("name work tree %s below %s: %w", path, rules.OwnerDir, err)
+		}
+		found.Repositories = append(found.Repositories, FoundRepository{Name: filepath.ToSlash(name), Repository: repository})
+		return filepath.SkipDir
+	})
+	if err != nil {
+		return Found{}, err
+	}
+	return found, nil
+}
+
+// The owner's git runs the config and hooks of a .git, so one the agent could write is refused.
+func openWorkTree(ctx context.Context, agentSID string, workTree string) (gitrepo.Repository, error) {
+	if err := VerifyGitDir(filepath.Join(workTree, ".git"), agentSID); err != nil {
 		return gitrepo.Repository{}, err
 	}
 	repository, err := gitrepo.Open(ctx, workTree)
@@ -161,7 +218,7 @@ func resolvePath(ctx context.Context, rules Rules, agentPath string) (gitrepo.Re
 		return gitrepo.Repository{}, err
 	}
 	if !same {
-		return gitrepo.Repository{}, fmt.Errorf("%w: %s resolved to %s instead of %s", ErrWorkTreeMismatch, ownerPath, repository.Dir, workTree)
+		return gitrepo.Repository{}, fmt.Errorf("%w: git opened %s as %s", ErrWorkTreeMismatch, workTree, repository.Dir)
 	}
 	return repository, nil
 }

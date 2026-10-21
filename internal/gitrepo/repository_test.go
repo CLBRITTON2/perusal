@@ -9,6 +9,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/CLBRITTON2/perusal/internal/diff"
 )
 
 func TestRunGit(t *testing.T) {
@@ -72,6 +74,86 @@ func sendsTheBranchToItsUpstream(t *testing.T) {
 	head, headErr := runGit(context.Background(), work, []string{"rev-parse", "HEAD"})
 	if err != nil || revParseErr != nil || headErr != nil || string(pushed) != string(head) {
 		t.Fatalf("got push error %v, remote main %q (%v), want local HEAD %q (%v)", err, pushed, revParseErr, head, headErr)
+	}
+}
+
+func TestStagedLineCounts(t *testing.T) {
+	t.Run("countsOnlyTheStagedChanges", countsOnlyTheStagedChanges)
+	t.Run("countsAnUnbornBranch", countsAnUnbornBranch)
+}
+
+func countsOnlyTheStagedChanges(t *testing.T) {
+	work := repositoryWithHistory(t, []string{"1\n2\n3"})
+	writeFile(t, filepath.Join(work, "b.txt"), "moved\nwhole\n")
+	runSteps(t, work, [][]string{{"-C", work, "add", "b.txt"}, {"-C", work, "commit", "--message", "Add b"}})
+	writeFile(t, filepath.Join(work, "a.txt"), "1\ntwo\n3\n")
+	writeFile(t, filepath.Join(work, "staged.txt"), "s\n")
+	writeFile(t, filepath.Join(work, "binary.bin"), "\x00\x01\n\n")
+	runSteps(t, work, [][]string{
+		{"-C", work, "add", "a.txt", "staged.txt", "binary.bin"},
+		{"-C", work, "mv", "b.txt", "c.txt"},
+	})
+	writeFile(t, filepath.Join(work, "a.txt"), "1\ntwo\n3\nunstaged\n")
+	writeFile(t, filepath.Join(work, "untracked.txt"), "u1\nu2\n")
+
+	got, err := Repository{Dir: work}.StagedLineCounts(context.Background())
+
+	if err != nil || got != (diff.LineCounts{Added: 2, Removed: 1}) {
+		t.Fatalf("got %+v, %v, want +2 -1 from a.txt and staged.txt", got, err)
+	}
+}
+
+func countsAnUnbornBranch(t *testing.T) {
+	useTestIdentity(t)
+	work := t.TempDir()
+	runSteps(t, work, [][]string{{"init", "--initial-branch=main", work}})
+	writeFile(t, filepath.Join(work, "staged.txt"), "a\nb\n")
+	runSteps(t, work, [][]string{{"-C", work, "add", "staged.txt"}})
+	writeFile(t, filepath.Join(work, "staged.txt"), "a\nb\nc\n")
+
+	got, err := Repository{Dir: work}.StagedLineCounts(context.Background())
+
+	if err != nil || got != (diff.LineCounts{Added: 2, Removed: 0}) {
+		t.Fatalf("got %+v, %v, want +2 -0", got, err)
+	}
+}
+
+func TestDefaultBranch(t *testing.T) {
+	t.Run("countsTheCommitsHeadLacksFromOriginsDefaultBranch", countsTheCommitsHeadLacksFromOriginsDefaultBranch)
+	t.Run("isEmptyWithoutOriginHead", isEmptyWithoutOriginHead)
+}
+
+func countsTheCommitsHeadLacksFromOriginsDefaultBranch(t *testing.T) {
+	remote, _ := pushedClone(t)
+	parent := t.TempDir()
+	work := filepath.Join(parent, "work")
+	other := filepath.Join(parent, "other")
+	runSteps(t, parent, [][]string{
+		{"clone", remote, work},
+		{"clone", remote, other},
+		{"-C", other, "commit", "--allow-empty", "--message", "One"},
+		{"-C", other, "commit", "--allow-empty", "--message", "Two"},
+		{"-C", other, "push"},
+		{"-C", work, "switch", "--create", "feature"},
+		{"-C", work, "fetch"},
+	})
+	repository := Repository{Dir: work}
+
+	branch, branchErr := repository.DefaultBranch(context.Background())
+	behind, behindErr := repository.CommitsBehind(context.Background(), branch)
+
+	if branchErr != nil || behindErr != nil || branch != "origin/main" || behind != 2 {
+		t.Fatalf("got %q (%v), %d behind (%v), want origin/main, 2 behind", branch, branchErr, behind, behindErr)
+	}
+}
+
+func isEmptyWithoutOriginHead(t *testing.T) {
+	_, work := pushedClone(t)
+
+	branch, err := Repository{Dir: work}.DefaultBranch(context.Background())
+
+	if err != nil || branch != "" {
+		t.Fatalf("got %q, %v, want no default branch for a clone of an empty repository", branch, err)
 	}
 }
 

@@ -59,7 +59,7 @@ func follow(rules focus.Rules, focusFile string) error {
 	if err != nil {
 		return err
 	}
-	program := tea.NewProgram(ui.New())
+	program := tea.NewProgram(ui.New(repositoryLister(rules)))
 	go forwardResults(program, results, focusFile)
 	if _, err := program.Run(); err != nil {
 		return fmt.Errorf("run perusal following %s: %w", focusFile, err)
@@ -76,6 +76,20 @@ func forwardResults(program *tea.Program, results <-chan focus.Result, focusFile
 		}
 	}
 	program.Send(ui.FocusRejected{Reason: "stopped watching focus file " + focusFile})
+}
+
+func repositoryLister(rules focus.Rules) ui.Lister {
+	return func(ctx context.Context) (ui.Listing, error) {
+		found, err := focus.FindRepositories(ctx, rules)
+		if err != nil {
+			return ui.Listing{}, err
+		}
+		listed := []ui.ListedRepository{}
+		for _, repository := range found.Repositories {
+			listed = append(listed, ui.ListedRepository{Name: repository.Name, Repository: repository.Repository})
+		}
+		return ui.Listing{Repositories: listed, Refusals: refusalReasons(found.Refusals)}, nil
+	}
 }
 
 func refusalReasons(refusals []error) []string {

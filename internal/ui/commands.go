@@ -38,8 +38,9 @@ func nextPoll() tea.Cmd {
 // The messages below carry dir, the repository they came from, so a result that lands after a switch is dropped.
 
 type statusLoadedMsg struct {
-	dir    string
-	status gitrepo.Status
+	dir              string
+	status           gitrepo.Status
+	stagedLineCounts diff.LineCounts
 }
 
 type diffLoadedMsg struct {
@@ -107,7 +108,11 @@ func (r repositoryRequest) loadStatus() tea.Msg {
 	if err != nil {
 		return gitFailedMsg{err: err}
 	}
-	return statusLoadedMsg{dir: r.repository.Dir, status: status}
+	stagedLineCounts, err := r.repository.StagedLineCounts(context.Background())
+	if err != nil {
+		return gitFailedMsg{err: err}
+	}
+	return statusLoadedMsg{dir: r.repository.Dir, status: status, stagedLineCounts: stagedLineCounts}
 }
 
 func (r repositoryRequest) stageAll() tea.Msg {

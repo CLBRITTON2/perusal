@@ -160,6 +160,26 @@ func refusesAWorkTreeGitSkipsPast(t *testing.T) {
 	}
 }
 
+func TestFindRepositories(t *testing.T) {
+	devDir := t.TempDir()
+	gitInit(t, filepath.Join(devDir, "org", "repo"))
+	denyGuests(t, filepath.Join(devDir, "org", "repo", ".git"), deniedWriteMask)
+	gitInit(t, filepath.Join(devDir, "org", "repo", "vendored"))
+	denyGuests(t, filepath.Join(devDir, "org", "repo", "vendored", ".git"), deniedWriteMask)
+	gitInit(t, filepath.Join(devDir, "plain"))
+	mustMkdir(t, filepath.Join(devDir, "notes"))
+	rules := Rules{AgentDir: agentDevDir, OwnerDir: devDir, AgentSID: guestsSID}
+
+	got, err := FindRepositories(context.Background(), rules)
+
+	if err != nil || len(got.Repositories) != 1 || got.Repositories[0].Name != "org/repo" {
+		t.Fatalf("got %v, %v, want only org/repo", got, err)
+	}
+	if len(got.Refusals) != 1 || !errors.Is(got.Refusals[0], ErrGitDirUnprotected) {
+		t.Fatalf("got refusals %v, want plain refused as %v", got.Refusals, ErrGitDirUnprotected)
+	}
+}
+
 func gitInit(t *testing.T, dir string) {
 	t.Helper()
 	output, err := exec.Command("git", "init", dir).CombinedOutput()

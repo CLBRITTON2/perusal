@@ -21,6 +21,9 @@ var (
 	scrollDownKey     = key.NewBinding(key.WithKeys("ctrl+d", "pgdown"), key.WithHelp("^d/^u", "scroll"))
 	scrollUpKey       = key.NewBinding(key.WithKeys("ctrl+u", "pgup"))
 	fullscreenKey     = key.NewBinding(key.WithKeys("d"), key.WithHelp("d", "fullscreen"))
+	overviewKey       = key.NewBinding(key.WithKeys("o"), key.WithHelp("o", "overview"))
+	openRepositoryKey = key.NewBinding(key.WithKeys("enter"), key.WithHelp("enter", "open"))
+	closeOverviewKey  = key.NewBinding(key.WithKeys("esc", "o"), key.WithHelp("esc", "close"))
 	quitKey           = key.NewBinding(key.WithKeys("q"), key.WithHelp("q", "quit"))
 	forceQuitKey      = key.NewBinding(key.WithKeys("ctrl+c"))
 	nextFieldKey      = key.NewBinding(key.WithKeys("tab", "shift+tab"), key.WithHelp("tab", "next field"))
@@ -34,8 +37,9 @@ var (
 )
 
 var (
-	changesHelp   = []key.Binding{downKey, stageKey, stageAllKey, commitKey, pushKey, switchViewKey, scrollDownKey, fullscreenKey, quitKey}
-	logHelp       = []key.Binding{downKey, expandKey, searchKey, amendKey, commitKey, pushKey, switchViewKey, scrollDownKey, fullscreenKey, quitKey}
+	changesHelp   = []key.Binding{downKey, stageKey, stageAllKey, commitKey, pushKey, switchViewKey, scrollDownKey, fullscreenKey, overviewKey, quitKey}
+	logHelp       = []key.Binding{downKey, expandKey, searchKey, amendKey, commitKey, pushKey, switchViewKey, scrollDownKey, fullscreenKey, overviewKey, quitKey}
+	overviewHelp  = []key.Binding{downKey, openRepositoryKey, closeOverviewKey, quitKey}
 	searchHelp    = []key.Binding{keepSearchKey, clearSearchKey}
 	commitHelp    = []key.Binding{nextFieldKey, submitKey, cancelKey}
 	pushHelp      = []key.Binding{confirmPushKey, cancelKey}
