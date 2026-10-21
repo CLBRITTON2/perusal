@@ -13,6 +13,7 @@ import (
 func TestDeleteBranch(t *testing.T) {
 	t.Run("aMergedBranchIsDeletedAfterAConfirmAndTheListReloadsInPlace",
 		aMergedBranchIsDeletedAfterAConfirmAndTheListReloadsInPlace)
+	t.Run("anUnmergedBranchIsDeletedAfterAWarning", anUnmergedBranchIsDeletedAfterAWarning)
 	for name, test := range map[string]struct {
 		moves         int
 		defaultBranch string
@@ -22,11 +23,8 @@ func TestDeleteBranch(t *testing.T) {
 		"refusesTheDefaultBranch": {
 			moves: 1, defaultBranch: "origin/main", want: "main is the default branch, which perusal never deletes",
 		},
-		"refusesABranchWithChangesTheDefaultBranchLacks": {
-			moves: 3, defaultBranch: "origin/main", want: "wip has changes origin/main lacks, so perusal keeps it",
-		},
-		"refusesAMergedBranchWhenTheDefaultBranchIsUnknown": {
-			moves: 2, want: "origin's default branch is unknown, so perusal cannot tell whether done is merged",
+		"refusesABranchWhenTheDefaultBranchIsUnknown": {
+			moves: 2, want: "origin's default branch is unknown, so perusal cannot rule out that done is it",
 		},
 	} {
 		t.Run(name, func(t *testing.T) {
@@ -63,6 +61,19 @@ func aMergedBranchIsDeletedAfterAConfirmAndTheListReloadsInPlace(t *testing.T) {
 		m.branches.rows[m.branches.selected].branch.Name != "wip" {
 		t.Fatalf("got delete %v, reload %v, popup %d, footer %q, selected %d, want wip selected after the delete",
 			deleting, reloading, m.popup, m.footerText, m.branches.selected)
+	}
+}
+
+func anUnmergedBranchIsDeletedAfterAWarning(t *testing.T) {
+	m := selectBranch(t, branchesOf(t, gitrepo.Status{}, "origin/main"), 3)
+	m = update(t, m, tea.KeyPressMsg{Code: 'D', Text: "D"})
+	popup := ansi.Strip(m.renderDeleteBranchPopup())
+
+	_, deleting := m.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
+
+	if !strings.Contains(popup, "delete wip") || !strings.Contains(popup, "origin/main lacks some of its changes") ||
+		deleting == nil {
+		t.Fatalf("got popup:\n%s\ndelete %v, want a warning and then the delete", popup, deleting)
 	}
 }
 

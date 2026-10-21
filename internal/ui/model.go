@@ -99,7 +99,7 @@ type Model struct {
 	amendTarget        gitrepo.Commit
 	amendTargetPushed  bool
 	discardTarget      gitrepo.FileStatus
-	deleteBranchTarget string
+	deleteBranchTarget branchRow
 	footerText         string
 	footerIsError      bool
 	width              int
@@ -161,8 +161,8 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if m.repository.Dir == "" {
 			return m, tea.Sequence(m.loadUncommitted(), nextPoll())
 		}
-		// The next tick waits for these, so a slow git never stacks up polls.
-		return m, tea.Sequence(repositoryRequest{repository: m.repository}.loadStatus, m.loadUncommitted(), nextPoll())
+		// The next tick waits for the status, so a slow git never stacks up polls.
+		return m, tea.Sequence(repositoryRequest{repository: m.repository}.loadStatus, nextPoll())
 	case uncommittedLoadedMsg:
 		if !slices.Equal(msg.focused, m.focused) {
 			return m, nil
@@ -289,8 +289,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		case m.popup == discardAllPopup:
 			return m.updateConfirmPopup(msg, repositoryRequest{repository: m.repository}.discardAll)
 		case m.popup == deleteBranchPopup:
-			return m.updateConfirmPopup(msg, branchRequest{repository: m.repository, branch: m.deleteBranchTarget,
-				defaultBranch: m.branches.defaultBranch}.delete)
+			return m.updateConfirmPopup(msg, branchRequest{repository: m.repository, branch: m.deleteBranchTarget.branch.Name}.delete)
 		case m.overview.open:
 			return m.updateOverview(msg)
 		case m.branches.open:
@@ -408,8 +407,6 @@ func (m Model) updateBrowsing(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		return m.openPushPopup()
 	case key.Matches(msg, amendKey) && m.view == viewLog:
 		return m.openAmendPopup(), nil
-	case key.Matches(msg, nextRepositoryKey):
-		return m.cycleRepository()
 	case key.Matches(msg, branchesKey):
 		return m.openBranches()
 	case key.Matches(msg, overviewKey):
@@ -486,13 +483,6 @@ func (m Model) firstToReview() gitrepo.Repository {
 		}
 	}
 	return m.focused[0]
-}
-
-func (m Model) cycleRepository() (tea.Model, tea.Cmd) {
-	if len(m.focused) < 2 {
-		return m.withFooterError("the focus names no other repository"), nil
-	}
-	return m.withFocusedRepository(m.focused[(slices.Index(m.focused, m.repository)+1)%len(m.focused)])
 }
 
 func (m Model) withFooterNotice(text string) Model {
@@ -1025,16 +1015,8 @@ func (m Model) renderHeader() string {
 		return fitToWidth(" "+mutedStyle.Render("waiting for a repository"), m.width)
 	}
 	left := " " + repositoryStyle.Render(folderGlyph+" "+sanitizeText(filepath.Base(m.repository.Dir))) +
-		m.renderCyclePosition() + "  " + branchStyle.Render(branchGlyph+" "+branchLabel(m.status)) + " " + renderAheadBehind(m.status.Ahead, m.status.Behind)
+		"  " + branchStyle.Render(branchGlyph+" "+branchLabel(m.status)) + " " + renderAheadBehind(m.status.Ahead, m.status.Behind)
 	return fitToWidth(left, m.width)
-}
-
-func (m Model) renderCyclePosition() string {
-	position := slices.Index(m.focused, m.repository)
-	if len(m.focused) < 2 || position < 0 {
-		return ""
-	}
-	return mutedStyle.Render(" (" + strconv.Itoa(position+1) + " of " + strconv.Itoa(len(m.focused)) + ")")
 }
 
 func renderAheadBehind(ahead int, behind int) string {
@@ -1270,22 +1252,14 @@ func (m Model) renderFooter() string {
 	case m.searching:
 		return spaceBetween(" "+m.searchInput.View(), m.help.ShortHelpView(searchHelp)+" ", m.width)
 	case m.view == viewLog:
-		return m.renderHelpLine(m.withCycleHelp(logHelp))
+		return m.renderHelpLine(logHelp)
 	default:
-		return m.renderHelpLine(m.withCycleHelp(changesHelp))
+		return m.renderHelpLine(changesHelp)
 	}
 }
 
 func (m Model) renderHelpLine(bindings []key.Binding) string {
 	return spaceBetween(" "+m.help.ShortHelpView(bindings), mutedStyle.Render(appName)+" ", m.width)
-}
-
-// The cycle key goes after j/k, the first binding of every help line, since a narrow pane cuts the line's end off.
-func (m Model) withCycleHelp(bindings []key.Binding) []key.Binding {
-	if len(m.focused) < 2 {
-		return bindings
-	}
-	return slices.Insert(slices.Clone(bindings), 1, nextRepositoryKey)
 }
 
 func (m Model) overlayPopup(screen string, popup string) string {

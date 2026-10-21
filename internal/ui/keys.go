@@ -20,7 +20,6 @@ var (
 	amendKey          = key.NewBinding(key.WithKeys("A"), key.WithHelp("A", "amend"))
 	confirmAmendKey   = key.NewBinding(key.WithKeys("enter"), key.WithHelp("enter", "amend"))
 	switchViewKey     = key.NewBinding(key.WithKeys("tab"), key.WithHelp("tab", "changes/log"))
-	nextRepositoryKey = key.NewBinding(key.WithKeys("r"), key.WithHelp("r", "next repo"))
 	scrollDownKey     = key.NewBinding(key.WithKeys("ctrl+d", "pgdown"), key.WithHelp("^d/^u", "scroll"))
 	scrollUpKey       = key.NewBinding(key.WithKeys("ctrl+u", "pgup"))
 	fullscreenKey     = key.NewBinding(key.WithKeys("d"), key.WithHelp("d", "fullscreen"))

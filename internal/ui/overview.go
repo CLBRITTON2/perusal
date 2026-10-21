@@ -1,6 +1,7 @@
 package ui
 
 import (
+	"cmp"
 	"context"
 	"maps"
 	"slices"
@@ -165,11 +166,15 @@ func (m Model) openOverview() (tea.Model, tea.Cmd) {
 	return m, overviewRequest{list: m.list}.load
 }
 
-// Selects the repository under review, so enter right away keeps it.
+// Lists the focused repositories first and selects the one under review, so enter right away keeps it.
 func (m Model) withOverviewLoaded(msg overviewLoadedMsg) Model {
+	rows := slices.Clone(msg.rows)
+	slices.SortStableFunc(rows, func(a overviewRow, b overviewRow) int {
+		return cmp.Compare(m.focusRank(a), m.focusRank(b))
+	})
 	m.overview.loaded = true
-	m.overview.rows = msg.rows
-	m.overview.selected = max(slices.IndexFunc(msg.rows, func(row overviewRow) bool {
+	m.overview.rows = rows
+	m.overview.selected = max(slices.IndexFunc(rows, func(row overviewRow) bool {
 		return row.listed.Repository == m.repository
 	}), 0)
 	m.overview.offset = 0
@@ -178,6 +183,13 @@ func (m Model) withOverviewLoaded(msg overviewLoadedMsg) Model {
 		return m
 	}
 	return m.withFooterError("skipped " + strings.Join(msg.problems, ", "))
+}
+
+func (m Model) focusRank(row overviewRow) int {
+	if slices.Contains(m.focused, row.listed.Repository) {
+		return 0
+	}
+	return 1
 }
 
 func (m Model) updateOverview(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
@@ -301,7 +313,7 @@ func (m Model) overviewLines(innerWidth int) []string {
 	}
 	cells := [][]string{}
 	for _, row := range m.overview.rows {
-		rowCells := renderOverviewCells(row)
+		rowCells := append([]string{m.renderFocusMark(row)}, renderOverviewCells(row)...)
 		if m.overview.pulling[row.listed.Repository.Dir] {
 			rowCells = append(rowCells, mutedStyle.Render("pulling..."))
 		}
@@ -314,6 +326,13 @@ func (m Model) overviewLines(innerWidth int) []string {
 		lines = append(lines, listRow(aligned[index], index == m.overview.selected, innerWidth))
 	}
 	return lines
+}
+
+func (m Model) renderFocusMark(row overviewRow) string {
+	if !slices.Contains(m.focused, row.listed.Repository) {
+		return ""
+	}
+	return aheadStyle.Render("●")
 }
 
 func renderOverviewCells(row overviewRow) []string {

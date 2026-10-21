@@ -2,7 +2,6 @@ package gitrepo
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"strconv"
 	"strings"
@@ -17,8 +16,6 @@ type Branch struct {
 	Ahead        int
 	Behind       int
 }
-
-var ErrBranchNotMerged = errors.New("branch is not merged")
 
 // Branches lists the local branches by name.
 func (r Repository) Branches(ctx context.Context) ([]Branch, error) {
@@ -75,16 +72,8 @@ func branchWithTrack(branch Branch, track string) (Branch, error) {
 	return branch, nil
 }
 
-// DeleteMergedBranch deletes branch only when MergedInto finds it merged into ref, so it deletes a squash merged branch
-// that git branch --delete refuses.
-func (r Repository) DeleteMergedBranch(ctx context.Context, branch string, ref string) error {
-	merged, err := r.MergedInto(ctx, "refs/heads/"+branch, ref)
-	if err != nil {
-		return err
-	}
-	if !merged {
-		return fmt.Errorf("delete %s in %s: %w into %s", branch, r.Dir, ErrBranchNotMerged, ref)
-	}
-	_, err = runGit(ctx, r.Dir, []string{"branch", "--delete", "--force", branch})
+// DeleteBranch deletes branch whether or not it is merged, since plain --delete refuses a squash merged branch.
+func (r Repository) DeleteBranch(ctx context.Context, branch string) error {
+	_, err := runGit(ctx, r.Dir, []string{"branch", "--delete", "--force", branch})
 	return err
 }

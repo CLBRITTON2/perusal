@@ -2,7 +2,6 @@ package gitrepo
 
 import (
 	"context"
-	"errors"
 	"path/filepath"
 	"reflect"
 	"slices"
@@ -32,33 +31,13 @@ func TestBranchesListsEachLocalBranchWithItsUpstream(t *testing.T) {
 	}
 }
 
-func TestDeleteMergedBranch(t *testing.T) {
-	t.Run("deletesASquashMergedBranch", deletesASquashMergedBranch)
-	t.Run("keepsABranchWithChangesTheRefLacks", keepsABranchWithChangesTheRefLacks)
-}
-
-func deletesASquashMergedBranch(t *testing.T) {
+func TestDeleteBranchDeletesABranchWithChangesTheDefaultBranchLacks(t *testing.T) {
 	work := withFeatureBranch(t)
-	runSteps(t, work, [][]string{
-		{"-C", work, "merge", "--squash", "feature"},
-		{"-C", work, "commit", "--message", "Squashed"},
-		{"-C", work, "push"},
-	})
 
-	err := Repository{Dir: work}.DeleteMergedBranch(context.Background(), "feature", "origin/main")
+	err := Repository{Dir: work}.DeleteBranch(context.Background(), "feature")
 
 	if err != nil || slices.Contains(branchNames(t, work), "feature") {
 		t.Fatalf("got %v, want feature deleted", err)
-	}
-}
-
-func keepsABranchWithChangesTheRefLacks(t *testing.T) {
-	work := withFeatureBranch(t)
-
-	err := Repository{Dir: work}.DeleteMergedBranch(context.Background(), "feature", "origin/main")
-
-	if !errors.Is(err, ErrBranchNotMerged) || !slices.Contains(branchNames(t, work), "feature") {
-		t.Fatalf("got %v, want ErrBranchNotMerged and feature kept", err)
 	}
 }
 

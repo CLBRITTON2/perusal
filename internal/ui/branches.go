@@ -85,9 +85,8 @@ func (r branchesRequest) load() tea.Msg {
 }
 
 type branchRequest struct {
-	repository    gitrepo.Repository
-	branch        string
-	defaultBranch string
+	repository gitrepo.Repository
+	branch     string
 }
 
 func (r branchRequest) switchTo() tea.Msg {
@@ -98,7 +97,7 @@ func (r branchRequest) switchTo() tea.Msg {
 }
 
 func (r branchRequest) delete() tea.Msg {
-	if err := r.repository.DeleteMergedBranch(context.Background(), r.branch, r.defaultBranch); err != nil {
+	if err := r.repository.DeleteBranch(context.Background(), r.branch); err != nil {
 		return popupFailedMsg{dir: r.repository.Dir, err: err}
 	}
 	return branchDeletedMsg{dir: r.repository.Dir, branch: r.branch}
@@ -175,20 +174,17 @@ func (m Model) openDeleteBranchPopup() Model {
 	}
 	row := m.branches.rows[m.branches.selected]
 	name := sanitizeSingleLine(row.branch.Name)
-	defaultBranch := sanitizeSingleLine(m.branches.defaultBranch)
 	switch {
 	case row.branch.Current:
 		return m.withFooterError(name + " is checked out, so it cannot be deleted")
 	case m.branches.defaultBranch == "":
-		return m.withFooterError("origin's default branch is unknown, so perusal cannot tell whether " + name +
-			" is merged")
+		return m.withFooterError("origin's default branch is unknown, so perusal cannot rule out that " + name +
+			" is it")
 	case row.branch.Name == localBranch(m.branches.defaultBranch):
 		return m.withFooterError(name + " is the default branch, which perusal never deletes")
-	case !row.merged:
-		return m.withFooterError(name + " has changes " + defaultBranch + " lacks, so perusal keeps it")
 	}
 	m.popup = deleteBranchPopup
-	m.deleteBranchTarget = row.branch.Name
+	m.deleteBranchTarget = row
 	return m
 }
 
@@ -205,9 +201,17 @@ func (m Model) withBranchDeleted(msg branchDeletedMsg) (tea.Model, tea.Cmd) {
 
 func (m Model) renderDeleteBranchPopup() string {
 	return m.renderPopup([]string{
-		titleStyle.Render("delete " + sanitizeText(m.deleteBranchTarget)),
-		textStyle.Render(sanitizeText(m.branches.defaultBranch) + " has all its changes"),
+		titleStyle.Render("delete " + sanitizeText(m.deleteBranchTarget.branch.Name)),
+		m.renderDeleteTargetMerged(),
 	}, "deleting...", deleteBranchHelp)
+}
+
+func (m Model) renderDeleteTargetMerged() string {
+	defaultBranch := sanitizeText(m.branches.defaultBranch)
+	if m.deleteBranchTarget.merged {
+		return textStyle.Render(defaultBranch + " has all its changes")
+	}
+	return warningStyle.Render(defaultBranch + " lacks some of its changes")
 }
 
 func (m Model) renderBranchesPane() string {

@@ -42,8 +42,7 @@ perusal -repo <dir>  # review the repository <dir> is in
 | `c` | anywhere | open the commit popup |
 | `P` | anywhere | open the push popup |
 | `A` | log | amend the selected commit with the staged changes |
-| `b` | anywhere | list the local branches, `enter` switches to one, `D` deletes a merged one after a confirm |
-| `r` | anywhere | in follow mode, switch to the next focused repository |
+| `b` | anywhere | list the local branches, `enter` switches to one, `D` deletes one after a confirm |
 | `o` | anywhere | in follow mode, open the overview of every repository under `ownerDir` |
 | `p` | overview | fast-forward the selected repository to its upstream, or a finished branch to the default one |
 | `enter` | log | expand the commit into its files |
@@ -64,8 +63,8 @@ instead. It pushes with `--force-with-lease --force-if-includes`, so git refuses
 fetch.
 
 The branch list marks a branch merged when merging it into `origin`'s default branch would change nothing, which
-counts a squash merge. `D` deletes only such a branch, never the current or the default one, and `enter` refuses to
-switch while the work tree has uncommitted changes.
+counts a squash merge. `D` deletes any branch but the current and the default one, and its confirm warns when the
+branch is not merged. `enter` refuses to switch while the work tree has uncommitted changes.
 
 ## Follow mode (Windows)
 
@@ -85,18 +84,17 @@ working in, and switches as the agent moves between them. It reads
 - `agentAccount` is the Windows account the agent runs as.
 - `focusFile` holds one absolute path per line, the directories the agent is working in, and is rewritten whenever
   they change. Something on the agent side has to write it, such as a herdr plugin. perusal opens the first
-  repository with uncommitted changes, or the first one when all are clean, and `r` cycles through all of them. The
-  header shows the position, such as `(2 of 3)`. A new list that still names the repository under
-  review keeps it open, and a path that fails a check below is shown in the footer.
+  repository with uncommitted changes, or the first one when all are clean. A new list that still names the
+  repository under review keeps it open, and a path that fails a check below is shown in the footer.
 - `agentDir` and `ownerDir` are one directory as the agent and you reach it. perusal maps a path under `agentDir`
   to the same path under `ownerDir`, and refuses anything outside it.
 
 The overview (`o`) lists every repository under `ownerDir` with its branch, its uncommitted file count, how far it is
-ahead of and behind its upstream, and how far it is behind `origin`'s default branch. `enter` reviews the selected
-one, `p` pulls it (fast-forward only, from its upstream rather than the default branch), and `esc` goes back. A
-branch is finished when it is clean, `origin`'s default branch holds all its commits, and it has no upstream or the
-remote deleted it. `p` then switches to the default branch and pulls that. A repository opened this way stays open
-until the focus file changes to a list that does not name it.
+ahead of and behind its upstream, and how far it is behind `origin`'s default branch. The repositories the focus file
+names come first, marked `●`. `enter` reviews the selected one, `p` pulls it (fast-forward only, from its upstream
+rather than the default branch), and `esc` goes back. A branch is finished when it is clean, `origin`'s default branch
+holds all its commits, and it has no upstream or the remote deleted it. `p` then switches to the default branch and
+pulls that. A repository opened this way stays open until the focus file changes to a list that does not name it.
 
 perusal runs git as you in a repository the agent chose, and git runs that repository's hooks and config. So every
 `.git` under `ownerDir` needs an inherited deny of `(OI)(CI)(WD,AD,WEA,WA,DE,DC)` for the agent account, and perusal

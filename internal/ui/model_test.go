@@ -23,20 +23,26 @@ func TestFocusSwitch(t *testing.T) {
 		aFocusThatStillNamesTheReviewedRepositoryKeepsItAndShowsTheRefusals)
 }
 
-func TestRCyclesThroughEveryFocusedRepositoryCleanOrNot(t *testing.T) {
+func TestTheOverviewListsTheFocusedRepositoriesFirstAndMarksThem(t *testing.T) {
 	m := focusOnSeveral(t, map[string]bool{"C:/dev/cwd": false, "C:/dev/first": true, "C:/dev/second": false})
-	header := ansi.Strip(m.renderHeader())
-	helpLine := ansi.Strip(m.renderFooter())
+	m = update(t, m, tea.KeyPressMsg{Code: 'o', Text: "o"})
 
-	m = update(t, m, tea.KeyPressMsg{Code: 'r', Text: "r"})
-	afterOne := m.repository.Dir
-	m = update(t, m, tea.KeyPressMsg{Code: 'r', Text: "r"})
+	m = update(t, m, overviewLoadedMsg{rows: []overviewRow{
+		{listed: ListedRepository{Name: "elsewhere", Repository: gitrepo.Repository{Dir: "C:/dev/elsewhere"}}},
+		{listed: ListedRepository{Name: "first", Repository: gitrepo.Repository{Dir: "C:/dev/first"}}},
+		{listed: ListedRepository{Name: "second", Repository: gitrepo.Repository{Dir: "C:/dev/second"}}},
+	}, problems: []string{}})
 
-	if !strings.Contains(header, "first (2 of 3)") || !strings.Contains(helpLine, "r next repo") {
-		t.Fatalf("got header %q and help %q, want first (2 of 3) and r next repo", header, helpLine)
+	lines := m.overviewLines(118)
+	got := []string{}
+	for _, line := range lines {
+		got = append(got, strings.Join(strings.Fields(ansi.Strip(line)), " "))
 	}
-	if afterOne != "C:/dev/second" || m.repository.Dir != "C:/dev/cwd" {
-		t.Fatalf("got %s, then %s, want second, then cwd", afterOne, m.repository.Dir)
+	branch := " " + branchGlyph + " detached HEAD clean"
+	want := []string{"▌● " + folderGlyph + " first" + branch, "● " + folderGlyph + " second" + branch,
+		folderGlyph + " elsewhere" + branch}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("got %q, want %q", got, want)
 	}
 }
 
