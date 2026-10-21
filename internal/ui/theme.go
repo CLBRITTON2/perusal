@@ -19,6 +19,9 @@ var (
 	// love and foam, each blended 15% over base
 	colorRemovedBackground = lipgloss.Color("#382434")
 	colorAddedBackground   = lipgloss.Color("#2d333f")
+	// love and foam, each blended 35% over base, for the changed part of a line
+	colorRemovedChanged = lipgloss.Color("#62364a")
+	colorAddedChanged   = lipgloss.Color("#475763")
 )
 
 var (
@@ -61,20 +64,22 @@ var (
 		lipgloss.NewStyle().Foreground(lipgloss.Color("#786168")),
 		lipgloss.NewStyle().Foreground(lipgloss.Color("#783f56")),
 	}
-	authorStyle       = lipgloss.NewStyle().Foreground(colorFoam)
-	fileHeaderStyle   = lipgloss.NewStyle().Foreground(colorRose).Background(colorOverlay).Bold(true)
-	hunkHeaderStyle   = lipgloss.NewStyle().Foreground(colorIris).Background(colorOverlay)
-	separatorStyle    = lipgloss.NewStyle().Foreground(colorHighlightMed)
-	contextTextStyle  = lipgloss.NewStyle().Foreground(colorSubtle)
-	removedTextStyle  = lipgloss.NewStyle().Foreground(colorText).Background(colorRemovedBackground)
-	addedTextStyle    = lipgloss.NewStyle().Foreground(colorText).Background(colorAddedBackground)
-	removedGutter     = lipgloss.NewStyle().Foreground(colorLove).Background(colorRemovedBackground)
-	addedGutter       = lipgloss.NewStyle().Foreground(colorFoam).Background(colorAddedBackground)
-	addedMarkStyle    = lipgloss.NewStyle().Foreground(colorFoam).Bold(true)
-	deletedMarkStyle  = lipgloss.NewStyle().Foreground(colorLove).Bold(true)
-	renamedMarkStyle  = lipgloss.NewStyle().Foreground(colorIris).Bold(true)
-	modifiedMarkStyle = lipgloss.NewStyle().Foreground(colorGold).Bold(true)
-	helpKeyStyle      = lipgloss.NewStyle().Foreground(colorRose).Bold(true)
-	helpDescStyle     = lipgloss.NewStyle().Foreground(colorSubtle)
-	helpSepStyle      = lipgloss.NewStyle().Foreground(colorHighlightMed)
+	authorStyle         = lipgloss.NewStyle().Foreground(colorFoam)
+	fileHeaderStyle     = lipgloss.NewStyle().Foreground(colorRose).Background(colorOverlay).Bold(true)
+	hunkHeaderStyle     = lipgloss.NewStyle().Foreground(colorIris).Background(colorOverlay)
+	separatorStyle      = lipgloss.NewStyle().Foreground(colorHighlightMed)
+	contextTextStyle    = lipgloss.NewStyle().Foreground(colorSubtle)
+	removedTextStyle    = lipgloss.NewStyle().Foreground(colorText).Background(colorRemovedBackground)
+	addedTextStyle      = lipgloss.NewStyle().Foreground(colorText).Background(colorAddedBackground)
+	removedChangedStyle = lipgloss.NewStyle().Foreground(colorText).Background(colorRemovedChanged)
+	addedChangedStyle   = lipgloss.NewStyle().Foreground(colorText).Background(colorAddedChanged)
+	removedGutter       = lipgloss.NewStyle().Foreground(colorLove).Background(colorRemovedBackground)
+	addedGutter         = lipgloss.NewStyle().Foreground(colorFoam).Background(colorAddedBackground)
+	addedMarkStyle      = lipgloss.NewStyle().Foreground(colorFoam).Bold(true)
+	deletedMarkStyle    = lipgloss.NewStyle().Foreground(colorLove).Bold(true)
+	renamedMarkStyle    = lipgloss.NewStyle().Foreground(colorIris).Bold(true)
+	modifiedMarkStyle   = lipgloss.NewStyle().Foreground(colorGold).Bold(true)
+	helpKeyStyle        = lipgloss.NewStyle().Foreground(colorRose).Bold(true)
+	helpDescStyle       = lipgloss.NewStyle().Foreground(colorSubtle)
+	helpSepStyle        = lipgloss.NewStyle().Foreground(colorHighlightMed)
 )

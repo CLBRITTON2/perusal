@@ -3,9 +3,11 @@ package gitrepo
 import (
 	"context"
 	"errors"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"reflect"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -217,6 +219,224 @@ func runSteps(t *testing.T, dir string, steps [][]string) {
 		if _, err := runGit(context.Background(), dir, step); err != nil {
 			t.Fatal(err)
 		}
+	}
+}
+
+func TestDiscard(t *testing.T) {
+	t.Run("discardsOnlyTheGivenFiles", discardsOnlyTheGivenFiles)
+	t.Run("discardAllKeepsIgnoredFiles", discardAllKeepsIgnoredFiles)
+}
+
+func discardsOnlyTheGivenFiles(t *testing.T) {
+	work := changedWorkTree(t)
+	repository := Repository{Dir: work}
+	status, err := repository.Status(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	for _, file := range status.Files {
+		if file.Path == "kept.txt" {
+			continue
+		}
+		if err := repository.Discard(context.Background(), file); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	after, err := repository.Status(context.Background())
+	content, readErr := os.ReadFile(filepath.Join(work, "a.txt"))
+	if err != nil || len(after.Files) != 1 || after.Files[0].Path != "kept.txt" {
+		t.Fatalf("got %+v, %v, want only kept.txt left", after.Files, err)
+	}
+	if readErr != nil || string(content) != "1\n" {
+		t.Fatalf("got a.txt %q, %v, want HEAD's 1", content, readErr)
+	}
+}
+
+func discardAllKeepsIgnoredFiles(t *testing.T) {
+	work := changedWorkTree(t)
+	repository := Repository{Dir: work}
+
+	err := repository.DiscardAll(context.Background())
+
+	after, statusErr := repository.Status(context.Background())
+	_, ignoredErr := os.Stat(filepath.Join(work, "build.log"))
+	_, untrackedDirErr := os.Stat(filepath.Join(work, "dir"))
+	if err != nil || statusErr != nil || len(after.Files) != 0 {
+		t.Fatalf("got %+v, %v, %v, want a clean work tree", after.Files, err, statusErr)
+	}
+	if ignoredErr != nil || !errors.Is(untrackedDirErr, fs.ErrNotExist) {
+		t.Fatalf("got ignored file %v, untracked dir %v, want the ignored file kept and the dir gone", ignoredErr,
+			untrackedDirErr)
+	}
+}
+
+// A staged edit, a staged rename, an untracked file in an untracked directory, a second untracked file, and an
+// ignored one.
+func changedWorkTree(t *testing.T) string {
+	t.Helper()
+	work := repositoryWithHistory(t, []string{"1"})
+	writeFile(t, filepath.Join(work, "b.txt"), "b\n")
+	writeFile(t, filepath.Join(work, ".gitignore"), "*.log\n")
+	runSteps(t, work, [][]string{{"-C", work, "add", "b.txt", ".gitignore"}, {"-C", work, "commit", "--message", "Add b"}})
+	writeFile(t, filepath.Join(work, "a.txt"), "changed\n")
+	runSteps(t, work, [][]string{{"-C", work, "add", "a.txt"}, {"-C", work, "mv", "b.txt", "c.txt"}})
+	if err := os.Mkdir(filepath.Join(work, "dir"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	writeFile(t, filepath.Join(work, "dir", "new.txt"), "new\n")
+	writeFile(t, filepath.Join(work, "kept.txt"), "kept\n")
+	writeFile(t, filepath.Join(work, "build.log"), "ignored\n")
+	return work
+}
+
+func TestPull(t *testing.T) {
+	t.Run("fastForwardsToTheUpstream", fastForwardsToTheUpstream)
+	t.Run("refusesADivergedBranch", refusesADivergedBranch)
+}
+
+func fastForwardsToTheUpstream(t *testing.T) {
+	work, other := cloneBehindOther(t)
+
+	err := Repository{Dir: work}.Pull(context.Background())
+
+	if err != nil || revParse(t, work, "HEAD") != revParse(t, other, "HEAD") {
+		t.Fatalf("got %v, want HEAD at the pushed commit", err)
+	}
+}
+
+func refusesADivergedBranch(t *testing.T) {
+	work, _ := cloneBehindOther(t)
+	runSteps(t, work, [][]string{{"-C", work, "commit", "--allow-empty", "--message", "Local"}})
+	before := revParse(t, work, "HEAD")
+
+	err := Repository{Dir: work}.Pull(context.Background())
+
+	if err == nil || revParse(t, work, "HEAD") != before {
+		t.Fatalf("got %v, want an error and HEAD unmoved", err)
+	}
+}
+
+// other has pushed a commit work has not fetched.
+func cloneBehindOther(t *testing.T) (string, string) {
+	t.Helper()
+	remote, work := pushedClone(t)
+	other := filepath.Join(t.TempDir(), "other")
+	runSteps(t, work, [][]string{
+		{"clone", remote, other},
+		{"-C", other, "commit", "--allow-empty", "--message", "Pushed"},
+		{"-C", other, "push"},
+	})
+	return work, other
+}
+
+func TestABranchMergedAndDeletedOnTheRemote(t *testing.T) {
+	t.Run("hasItsUpstreamGone", hasItsUpstreamGone)
+	t.Run("isMergedIntoTheDefaultBranchUntilItChangesAFile", isMergedIntoTheDefaultBranchUntilItChangesAFile)
+	t.Run("switchesToTheDefaultBranchCreatedFromOriginsSoPullFastForwardsIt",
+		switchesToTheDefaultBranchCreatedFromOriginsSoPullFastForwardsIt)
+}
+
+func hasItsUpstreamGone(t *testing.T) {
+	work, _ := mergedAndDeletedOnTheRemote(t)
+
+	status, err := Repository{Dir: work}.Status(context.Background())
+
+	if err != nil || status.Upstream != "origin/feature" || !status.UpstreamGone {
+		t.Fatalf("got %+v, %v, want origin/feature gone", status, err)
+	}
+}
+
+func isMergedIntoTheDefaultBranchUntilItChangesAFile(t *testing.T) {
+	work, _ := mergedAndDeletedOnTheRemote(t)
+	repository := Repository{Dir: work}
+
+	merged, mergedErr := repository.MergedInto(context.Background(), "HEAD", "origin/main")
+	writeFile(t, filepath.Join(work, "local.txt"), "local\n")
+	runSteps(t, work, [][]string{{"-C", work, "add", "local.txt"}, {"-C", work, "commit", "--message", "Local"}})
+	mergedAfter, mergedAfterErr := repository.MergedInto(context.Background(), "HEAD", "origin/main")
+
+	if mergedErr != nil || mergedAfterErr != nil || !merged || mergedAfter {
+		t.Fatalf("got %t (%v) then %t (%v), want merged until the local commit", merged, mergedErr, mergedAfter,
+			mergedAfterErr)
+	}
+}
+
+func switchesToTheDefaultBranchCreatedFromOriginsSoPullFastForwardsIt(t *testing.T) {
+	work, other := mergedAndDeletedOnTheRemote(t)
+	repository := Repository{Dir: work}
+
+	switchErr := repository.Switch(context.Background(), "main")
+	pullErr := repository.Pull(context.Background())
+
+	status, err := repository.Status(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if switchErr != nil || pullErr != nil || status.Branch != "main" ||
+		revParse(t, work, "HEAD") != revParse(t, other, "HEAD") {
+		t.Fatalf("got switch %v, pull %v, branch %q, want main at other's commit", switchErr, pullErr, status.Branch)
+	}
+}
+
+// work is on feature, which origin's main took before feature was deleted there, and has no local main. other then
+// pushed onto main.
+func mergedAndDeletedOnTheRemote(t *testing.T) (string, string) {
+	t.Helper()
+	remote, work := pushedClone(t)
+	other := filepath.Join(t.TempDir(), "other")
+	runSteps(t, work, [][]string{
+		{"-C", work, "switch", "--create", "feature"},
+		{"-C", work, "commit", "--allow-empty", "--message", "Feature"},
+		{"-C", work, "push", "--set-upstream", "origin", "feature"},
+		{"-C", work, "push", "origin", "feature:main"},
+		{"-C", work, "push", "origin", "--delete", "feature"},
+		{"-C", work, "branch", "--delete", "--force", "main"},
+		{"clone", remote, other},
+		{"-C", other, "commit", "--allow-empty", "--message", "After"},
+		{"-C", other, "push"},
+	})
+	return work, other
+}
+
+func TestMergedIntoCountsASquashMergeWhoseContextChangedFirst(t *testing.T) {
+	remote, work := pushedClone(t)
+	other := filepath.Join(t.TempDir(), "other")
+	lines := []string{"1", "2", "3", "4", "5", "6", "7", "8", "9", "10"}
+	withLine := func(index int, text string) string {
+		changed := slices.Clone(lines)
+		changed[index] = text
+		return strings.Join(changed, "\n") + "\n"
+	}
+	writeFile(t, filepath.Join(work, "a.txt"), withLine(0, "1"))
+	runSteps(t, work, [][]string{
+		{"-C", work, "add", "a.txt"},
+		{"-C", work, "commit", "--message", "Add a"},
+		{"-C", work, "push"},
+		{"-C", work, "switch", "--create", "feature"},
+	})
+	writeFile(t, filepath.Join(work, "a.txt"), withLine(8, "nine"))
+	runSteps(t, work, [][]string{{"-C", work, "commit", "--all", "--message", "Nine"}})
+	writeFile(t, filepath.Join(work, "a.txt"), withLine(8, "NINE"))
+	runSteps(t, work, [][]string{
+		{"-C", work, "commit", "--all", "--message", "Louder"},
+		{"-C", work, "push", "--set-upstream", "origin", "feature"},
+		{"clone", remote, other},
+	})
+	writeFile(t, filepath.Join(other, "a.txt"), withLine(6, "seven"))
+	runSteps(t, other, [][]string{
+		{"-C", other, "commit", "--all", "--message", "Context"},
+		{"-C", other, "merge", "--squash", "origin/feature"},
+		{"-C", other, "commit", "--message", "Squashed"},
+		{"-C", other, "push"},
+		{"-C", work, "fetch"},
+	})
+
+	merged, err := Repository{Dir: work}.MergedInto(context.Background(), "HEAD", "origin/main")
+
+	if err != nil || !merged {
+		t.Fatalf("got %t, %v, want the squash merge counted", merged, err)
 	}
 }
 

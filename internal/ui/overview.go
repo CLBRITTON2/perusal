@@ -2,6 +2,7 @@ package ui
 
 import (
 	"context"
+	"maps"
 	"slices"
 	"strconv"
 	"strings"
@@ -29,20 +30,24 @@ type Listing struct {
 type Lister func(context.Context) (Listing, error)
 
 // behindDefault counts the commits HEAD lacks from defaultBranch, and stays 0 when defaultBranch is the upstream, whose
-// count the status already holds.
+// count the status already holds. finished is a branch p leaves for the default branch: one that mayBeFinished and is
+// merged into defaultBranch.
 type overviewRow struct {
 	listed        ListedRepository
 	status        gitrepo.Status
 	defaultBranch string
 	behindDefault int
+	finished      bool
 }
 
+// pulling holds the Dir of each repository a pull is running in, and outlives closing the overview.
 type overview struct {
 	open     bool
 	loaded   bool
 	rows     []overviewRow
 	selected int
 	offset   int
+	pulling  map[string]bool
 }
 
 // problems are the refusals and the repositories git failed on, which get no row.
@@ -53,6 +58,44 @@ type overviewLoadedMsg struct {
 
 type overviewFailedMsg struct {
 	err error
+}
+
+// row is reloaded after the pull.
+type overviewPulledMsg struct {
+	row overviewRow
+}
+
+type overviewPullFailedMsg struct {
+	dir string
+	err error
+}
+
+type pullRequest struct {
+	listed ListedRepository
+}
+
+func (r pullRequest) pull() tea.Msg {
+	dir := r.listed.Repository.Dir
+	if err := r.listed.Repository.Pull(context.Background()); err != nil {
+		return overviewPullFailedMsg{dir: dir, err: err}
+	}
+	row, err := loadOverviewRow(r.listed)
+	if err != nil {
+		return overviewPullFailedMsg{dir: dir, err: err}
+	}
+	return overviewPulledMsg{row: row}
+}
+
+type switchRequest struct {
+	listed ListedRepository
+	branch string
+}
+
+func (r switchRequest) switchAndPull() tea.Msg {
+	if err := r.listed.Repository.Switch(context.Background(), r.branch); err != nil {
+		return overviewPullFailedMsg{dir: r.listed.Repository.Dir, err: err}
+	}
+	return pullRequest{listed: r.listed}.pull()
 }
 
 type overviewRequest struct {
@@ -96,7 +139,17 @@ func loadOverviewRow(listed ListedRepository) (overviewRow, error) {
 		return overviewRow{}, err
 	}
 	row := overviewRow{listed: listed, status: status, defaultBranch: defaultBranch}
-	if defaultBranch == "" || defaultBranch == status.Upstream || !status.HasCommits {
+	if defaultBranch == "" || !status.HasCommits {
+		return row, nil
+	}
+	if mayBeFinished(status, defaultBranch) {
+		merged, err := listed.Repository.MergedInto(ctx, "HEAD", defaultBranch)
+		if err != nil {
+			return overviewRow{}, err
+		}
+		row.finished = merged
+	}
+	if defaultBranch == status.Upstream {
 		return row, nil
 	}
 	behind, err := listed.Repository.CommitsBehind(ctx, defaultBranch)
@@ -108,7 +161,7 @@ func loadOverviewRow(listed ListedRepository) (overviewRow, error) {
 }
 
 func (m Model) openOverview() (tea.Model, tea.Cmd) {
-	m.overview = overview{open: true, rows: []overviewRow{}}
+	m.overview = overview{open: true, rows: []overviewRow{}, pulling: m.overview.pulling}
 	return m, overviewRequest{list: m.list}.load
 }
 
@@ -141,8 +194,70 @@ func (m Model) updateOverview(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		return m.selectOverviewRow(m.overview.selected - 1), nil
 	case key.Matches(msg, openRepositoryKey):
 		return m.openOverviewRow()
+	case key.Matches(msg, pullKey):
+		return m.pullOverviewRow()
 	}
 	return m, nil
+}
+
+// Pulls the selected row's upstream, or switches a finished branch to the default branch and pulls that.
+func (m Model) pullOverviewRow() (tea.Model, tea.Cmd) {
+	if len(m.overview.rows) == 0 {
+		return m, nil
+	}
+	row := m.overview.rows[m.overview.selected]
+	listed := row.listed
+	var pull tea.Cmd
+	switch {
+	case m.overview.pulling[listed.Repository.Dir]:
+		return m, nil
+	case row.finished:
+		pull = switchRequest{listed: listed, branch: localBranch(row.defaultBranch)}.switchAndPull
+	case row.status.Upstream == "":
+		return m.withFooterError(listed.Name + " tracks no upstream, so there is nothing to pull"), nil
+	case row.status.UpstreamGone:
+		return m.withFooterError(listed.Name + " tracks " + sanitizeSingleLine(row.status.Upstream) +
+			", which was deleted from the remote, so there is nothing to pull"), nil
+	default:
+		pull = pullRequest{listed: listed}.pull
+	}
+	pulling := maps.Clone(m.overview.pulling)
+	pulling[listed.Repository.Dir] = true
+	m.overview.pulling = pulling
+	return m, pull
+}
+
+// A clean branch other than the default one, with no upstream left to pull, is finished once it is merged.
+func mayBeFinished(status gitrepo.Status, defaultBranch string) bool {
+	return len(status.Files) == 0 && (status.Upstream == "" || status.UpstreamGone) &&
+		status.Branch != localBranch(defaultBranch)
+}
+
+// defaultBranch is origin's, as DefaultBranch names it.
+func localBranch(defaultBranch string) string {
+	return strings.TrimPrefix(defaultBranch, "origin/")
+}
+
+func (m Model) withOverviewPulled(msg overviewPulledMsg) (tea.Model, tea.Cmd) {
+	repository := msg.row.listed.Repository
+	m.overview.pulling = withoutKey(m.overview.pulling, repository.Dir)
+	rows := slices.Clone(m.overview.rows)
+	index := slices.IndexFunc(rows, func(row overviewRow) bool { return row.listed.Repository == repository })
+	if index >= 0 {
+		rows[index] = msg.row
+	}
+	m.overview.rows = rows
+	m = m.withFooterNotice("pulled " + msg.row.listed.Name)
+	if repository != m.repository {
+		return m, nil
+	}
+	return m, repositoryRequest{repository: m.repository}.loadStatus
+}
+
+func withoutKey(set map[string]bool, dir string) map[string]bool {
+	without := maps.Clone(set)
+	delete(without, dir)
+	return without
 }
 
 func (m Model) selectOverviewRow(index int) Model {
@@ -186,7 +301,11 @@ func (m Model) overviewLines(innerWidth int) []string {
 	}
 	cells := [][]string{}
 	for _, row := range m.overview.rows {
-		cells = append(cells, renderOverviewCells(row))
+		rowCells := renderOverviewCells(row)
+		if m.overview.pulling[row.listed.Repository.Dir] {
+			rowCells = append(rowCells, mutedStyle.Render("pulling..."))
+		}
+		cells = append(cells, rowCells)
 	}
 	aligned := alignColumns(cells)
 	lines := []string{}
@@ -202,7 +321,7 @@ func renderOverviewCells(row overviewRow) []string {
 		repositoryStyle.Render(folderGlyph + " " + sanitizeText(row.listed.Name)),
 		branchStyle.Render(branchGlyph + " " + branchLabel(row.status)),
 		renderChangedCount(len(row.status.Files)),
-		renderAheadBehind(row.status),
+		renderAheadBehind(row.status.Ahead, row.status.Behind),
 		renderBehindDefault(row),
 	}
 }

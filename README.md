@@ -6,7 +6,7 @@ writes the code and you read every line before it lands: a slimmed-down lazygit 
 ## What it does
 
 - Lists the working tree's changed files and shows each as a side-by-side diff, or one-sided for an added or deleted
-  file.
+  file. In a block that removes and adds as many lines, each pair marks the part that changed.
 - Stages, unstages, commits, amends and pushes.
 - Browses the log with a commit graph, expands a commit into its files, and searches by hash, author, ref or message.
 - Refreshes every 2 seconds, so the review keeps up with edits as they happen.
@@ -37,12 +37,15 @@ perusal -repo <dir>  # review the repository <dir> is in
 | `ctrl+d` `ctrl+u`, page keys | anywhere | scroll the diff |
 | `space` | changes | stage or unstage the file |
 | `a` | changes | stage or unstage everything |
+| `x` `X` | changes | discard the file or every change, after a confirm. Untracked files are deleted, ignored ones stay |
 | `d` | anywhere | show the diff fullscreen, `d` again brings the lists back |
 | `c` | anywhere | open the commit popup |
 | `P` | anywhere | open the push popup |
 | `A` | log | amend the selected commit with the staged changes |
+| `b` | anywhere | list the local branches, `enter` switches to one, `D` deletes a merged one after a confirm |
 | `r` | anywhere | in follow mode, switch to the next focused repository |
 | `o` | anywhere | in follow mode, open the overview of every repository under `ownerDir` |
+| `p` | overview | fast-forward the selected repository to its upstream, or a finished branch to the default one |
 | `enter` | log | expand the commit into its files |
 | `/` | log | search, `enter` keeps it, `esc` clears it |
 | `q` | anywhere | quit |
@@ -59,6 +62,10 @@ Below `HEAD`, perusal refuses a merge commit, the root commit and any commit wit
 When the branch and its upstream have diverged, as after amending a pushed commit, the push popup offers a force push
 instead. It pushes with `--force-with-lease --force-if-includes`, so git refuses if the upstream moved since your last
 fetch. perusal never force pushes `main` or `master`.
+
+The branch list marks a branch merged when merging it into `origin`'s default branch would change nothing, which
+counts a squash merge. `D` deletes only such a branch, never the current or the default one, and `enter` refuses to
+switch while the work tree has uncommitted changes.
 
 ## Follow mode (Windows)
 
@@ -86,8 +93,10 @@ working in, and switches as the agent moves between them. It reads
 
 The overview (`o`) lists every repository under `ownerDir` with its branch, its uncommitted file count, how far it is
 ahead of and behind its upstream, and how far it is behind `origin`'s default branch. `enter` reviews the selected
-one, and `esc` goes back. A repository opened this way stays open until the focus file changes to a list that does not
-name it.
+one, `p` pulls it (fast-forward only, from its upstream rather than the default branch), and `esc` goes back. A
+branch is finished when it is clean, `origin`'s default branch holds all its commits, and it has no upstream or the
+remote deleted it. `p` then switches to the default branch and pulls that. A repository opened this way stays open
+until the focus file changes to a list that does not name it.
 
 perusal runs git as you in a repository the agent chose, and git runs that repository's hooks and config. So every
 `.git` under `ownerDir` needs an inherited deny of `(OI)(CI)(WD,AD,WEA,WA,DE,DC)` for the agent account, and perusal

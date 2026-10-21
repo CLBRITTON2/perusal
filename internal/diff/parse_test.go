@@ -105,6 +105,51 @@ func namesEachFileOfACommitAndWhatHappenedToIt(t *testing.T) {
 	}
 }
 
+func TestChangedSpan(t *testing.T) {
+	t.Run("marksWhatLiesBetweenTheCommonPrefixAndSuffix", marksWhatLiesBetweenTheCommonPrefixAndSuffix)
+	t.Run("neverSplitsACharacter", neverSplitsACharacter)
+	t.Run("marksNothingInAnUnevenBlockOrBetweenUnrelatedLines", marksNothingInAnUnevenBlockOrBetweenUnrelatedLines)
+}
+
+func marksWhatLiesBetweenTheCommonPrefixAndSuffix(t *testing.T) {
+	row := onlyRow(t, "@@ -1 +1 @@\n-\tcall(a, b)\n+\tcall(a, bc)\n")
+
+	if row.Left.Changed != (Span{Start: 10, End: 10}) || row.Right.Changed != (Span{Start: 10, End: 11}) {
+		t.Fatalf("got %+v and %+v, want the empty span before ) and the inserted c", row.Left.Changed, row.Right.Changed)
+	}
+}
+
+func neverSplitsACharacter(t *testing.T) {
+	row := onlyRow(t, "@@ -1 +1 @@\n-café\n+cafè\n")
+
+	if row.Left.Changed != (Span{Start: 3, End: 5}) || row.Right.Changed != (Span{Start: 3, End: 5}) {
+		t.Fatalf("got %+v and %+v, want the whole two-byte é and è", row.Left.Changed, row.Right.Changed)
+	}
+}
+
+func marksNothingInAnUnevenBlockOrBetweenUnrelatedLines(t *testing.T) {
+	uneven, err := ParseUnified("@@ -1,2 +1 @@\n-same a\n-same b\n+same c\n")
+	if err != nil {
+		t.Fatal(err)
+	}
+	unrelated := onlyRow(t, "@@ -1 +1 @@\n-abc\n+xyz\n")
+
+	for _, row := range append(uneven.Hunks[0].Rows, unrelated) {
+		if row.Left.Changed != (Span{}) || row.Right.Changed != (Span{}) {
+			t.Fatalf("got %+v, want nothing marked", row)
+		}
+	}
+}
+
+func onlyRow(t *testing.T, text string) Row {
+	t.Helper()
+	fileDiff, err := ParseUnified(text)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return fileDiff.Hunks[0].Rows[0]
+}
+
 func pairsRemovedWithAddedAndPadsTheShorterSide(t *testing.T) {
 	text := strings.Join([]string{
 		"diff --git a/f.go b/f.go",

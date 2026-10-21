@@ -89,6 +89,12 @@ type pushedMsg struct {
 	upstream string
 }
 
+// discarded names what went, a path or "all changes".
+type discardedMsg struct {
+	dir       string
+	discarded string
+}
+
 // popupFailedMsg is the failure of the git run an open popup started.
 type popupFailedMsg struct {
 	dir string
@@ -121,6 +127,13 @@ func (r repositoryRequest) stageAll() tea.Msg {
 
 func (r repositoryRequest) unstageAll() tea.Msg {
 	return indexChanged(r.repository.Dir, r.repository.UnstageAll(context.Background()))
+}
+
+func (r repositoryRequest) discardAll() tea.Msg {
+	if err := r.repository.DiscardAll(context.Background()); err != nil {
+		return popupFailedMsg{dir: r.repository.Dir, err: err}
+	}
+	return discardedMsg{dir: r.repository.Dir, discarded: "all changes"}
 }
 
 func indexChanged(dir string, err error) tea.Msg {
@@ -213,6 +226,13 @@ func (r fileRequest) stage() tea.Msg {
 
 func (r fileRequest) unstage() tea.Msg {
 	return indexChanged(r.repository.Dir, r.repository.Unstage(context.Background(), r.file))
+}
+
+func (r fileRequest) discard() tea.Msg {
+	if err := r.repository.Discard(context.Background(), r.file); err != nil {
+		return popupFailedMsg{dir: r.repository.Dir, err: err}
+	}
+	return discardedMsg{dir: r.repository.Dir, discarded: r.file.Path}
 }
 
 type commitDiffRequest struct {

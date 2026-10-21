@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"errors"
 	"fmt"
+	"slices"
 	"strconv"
 	"strings"
 )
@@ -32,12 +33,14 @@ func (f FileStatus) HasUnstagedChanges() bool {
 type Status struct {
 	// Branch is empty when HEAD is detached.
 	Branch string
-	// Upstream is empty when the branch tracks nothing, and then Ahead and Behind are 0.
-	Upstream   string
-	Ahead      int
-	Behind     int
-	HasCommits bool
-	Files      []FileStatus
+	// Upstream is empty when the branch tracks nothing. Ahead and Behind are 0 then, and when UpstreamGone.
+	Upstream string
+	// UpstreamGone is true when the ref Upstream names is missing, as after its remote branch was deleted and pruned.
+	UpstreamGone bool
+	Ahead        int
+	Behind       int
+	HasCommits   bool
+	Files        []FileStatus
 }
 
 // ParseStatus reads the NUL-separated output of git status --porcelain=v2 --branch -z.
@@ -79,7 +82,13 @@ func ParseStatus(output []byte) (Status, error) {
 			return Status{}, fmt.Errorf("parse git status entry %q: unknown entry kind %q", entry, kind)
 		}
 	}
+	status.UpstreamGone = status.Upstream != "" && !hasAheadBehind(fields)
 	return status, nil
+}
+
+// git omits the branch.ab header when the upstream ref is missing.
+func hasAheadBehind(fields [][]byte) bool {
+	return slices.ContainsFunc(fields, func(field []byte) bool { return bytes.HasPrefix(field, []byte("# branch.ab ")) })
 }
 
 func statusWithHeader(status Status, header string) (Status, error) {

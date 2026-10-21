@@ -24,6 +24,17 @@ func TestRenderFileDiff(t *testing.T) {
 	t.Run("showsANewFileAcrossTheWholeWidth", showsANewFileAcrossTheWholeWidth)
 }
 
+func TestTheChangedPartKeepsItsHighlightPastATabAndAWrap(t *testing.T) {
+	line := diff.Line{Kind: diff.LineAdded, Number: 1, Text: "\tkeep CHANGED tail", Changed: diff.Span{Start: 6, End: 13}}
+
+	lines := wrapSide(line, 1, 12)
+
+	if len(lines) != 3 || !strings.Contains(lines[0], addedChangedStyle.Render("C")) ||
+		!strings.Contains(lines[1], addedChangedStyle.Render("HANGED")) || strings.Contains(lines[1], addedChangedStyle.Render("HANGED ")) {
+		t.Fatalf("got %q, want C highlighted at the end of the first segment and HANGED at the start of the second", lines)
+	}
+}
+
 func TestBorderLine(t *testing.T) {
 	t.Run("cutsALongTitleToKeepTheLineCounts", cutsALongTitleToKeepTheLineCounts)
 }

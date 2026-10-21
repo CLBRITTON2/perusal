@@ -91,6 +91,122 @@ func TestEnterInTheOverviewReviewsTheSelectedRepositoryAndKeepsTheFocus(t *testi
 	}
 }
 
+func TestPullInTheOverview(t *testing.T) {
+	t.Run("theRowShowsPullingUntilThePulledRowReplacesIt", theRowShowsPullingUntilThePulledRowReplacesIt)
+	t.Run("aRowWithNoUpstreamIsNotPulled", aRowWithNoUpstreamIsNotPulled)
+	t.Run("aRowWhoseUpstreamWasDeletedIsExplained", aRowWhoseUpstreamWasDeletedIsExplained)
+	t.Run("aFinishedRowIsSwitchedThoughItTracksNoUpstream", aFinishedRowIsSwitchedThoughItTracksNoUpstream)
+}
+
+func theRowShowsPullingUntilThePulledRowReplacesIt(t *testing.T) {
+	m := overviewOfTwo(t)
+	next, cmd := m.Update(tea.KeyPressMsg{Code: 'p', Text: "p"})
+	m = asModel(t, next)
+	pulling := ansi.Strip(m.renderScreen())
+	pulled := overviewRow{
+		listed: m.overview.rows[0].listed,
+		status: gitrepo.Status{Branch: "main", Upstream: "origin/main", HasCommits: true},
+	}
+
+	m = update(t, m, overviewPulledMsg{row: pulled})
+
+	if cmd == nil || !strings.Contains(pulling, "pulling...") {
+		t.Fatalf("got command %v and screen %q, want a pull running and shown", cmd, pulling)
+	}
+	if m.overview.rows[0].status.Behind != 0 || len(m.overview.pulling) != 0 || m.footerText != "pulled first" {
+		t.Fatalf("got row %+v, pulling %v, footer %q, want the pulled row in place", m.overview.rows[0],
+			m.overview.pulling, m.footerText)
+	}
+}
+
+func aRowWithNoUpstreamIsNotPulled(t *testing.T) {
+	m := update(t, overviewOfTwo(t), tea.KeyPressMsg{Code: 'j', Text: "j"})
+	next, cmd := m.Update(tea.KeyPressMsg{Code: 'p', Text: "p"})
+	m = asModel(t, next)
+
+	if cmd != nil || len(m.overview.pulling) != 0 || !m.footerIsError {
+		t.Fatalf("got command %v, pulling %v, footer %q, want a refusal", cmd, m.overview.pulling, m.footerText)
+	}
+}
+
+func aRowWhoseUpstreamWasDeletedIsExplained(t *testing.T) {
+	m := update(t, overviewOfTwo(t), overviewLoadedMsg{rows: []overviewRow{{
+		listed: ListedRepository{Name: "first", Repository: gitrepo.Repository{Dir: "C:/dev/first"}},
+		status: gitrepo.Status{Branch: "fix", Upstream: "origin/fix", UpstreamGone: true, HasCommits: true},
+	}}, problems: []string{}})
+	next, cmd := m.Update(tea.KeyPressMsg{Code: 'p', Text: "p"})
+	m = asModel(t, next)
+
+	if cmd != nil || m.footerText != "first tracks origin/fix, which was deleted from the remote, so there is nothing to pull" {
+		t.Fatalf("got command %v, footer %q, want the deleted upstream named", cmd, m.footerText)
+	}
+}
+
+func aFinishedRowIsSwitchedThoughItTracksNoUpstream(t *testing.T) {
+	m := update(t, overviewOfTwo(t), overviewLoadedMsg{rows: []overviewRow{{
+		listed:        ListedRepository{Name: "first", Repository: gitrepo.Repository{Dir: "C:/dev/first"}},
+		status:        gitrepo.Status{Branch: "fix", HasCommits: true, Files: []gitrepo.FileStatus{}},
+		defaultBranch: "origin/main",
+		finished:      true,
+	}}, problems: []string{}})
+	next, cmd := m.Update(tea.KeyPressMsg{Code: 'p', Text: "p"})
+	m = asModel(t, next)
+
+	if cmd == nil || !m.overview.pulling["C:/dev/first"] || m.footerIsError {
+		t.Fatalf("got command %v, pulling %v, footer %q, want the switch running", cmd, m.overview.pulling, m.footerText)
+	}
+}
+
+func TestMayBeFinished(t *testing.T) {
+	changed := []gitrepo.FileStatus{{Path: "a.go", IndexStatus: ' ', WorktreeStatus: 'M'}}
+	for name, test := range map[string]struct {
+		status gitrepo.Status
+		want   bool
+	}{
+		"aBranchWhoseUpstreamWasDeleted": {
+			status: gitrepo.Status{Branch: "fix", Upstream: "origin/fix", UpstreamGone: true}, want: true,
+		},
+		"aBranchThatNeverHadAnUpstream":     {status: gitrepo.Status{Branch: "fix"}, want: true},
+		"aBranchWhoseUpstreamStillExists":   {status: gitrepo.Status{Branch: "fix", Upstream: "origin/fix"}},
+		"aBranchWithChanges":                {status: gitrepo.Status{Branch: "fix", Files: changed}},
+		"theDefaultBranchWithItsRemoteGone": {status: gitrepo.Status{Branch: "main", Upstream: "origin/main", UpstreamGone: true}},
+	} {
+		t.Run(name, func(t *testing.T) {
+			if got := mayBeFinished(test.status, "origin/main"); got != test.want {
+				t.Fatalf("got %t, want %t", got, test.want)
+			}
+		})
+	}
+}
+
+// first is 2 behind origin/main, and org/elsewhere tracks no upstream.
+func overviewOfTwo(t *testing.T) Model {
+	t.Helper()
+	m := focusOnSeveral(t, map[string]bool{"C:/dev/cwd": false, "C:/dev/first": true, "C:/dev/second": false})
+	m = update(t, m, tea.KeyPressMsg{Code: 'o', Text: "o"})
+	return update(t, m, overviewLoadedMsg{rows: []overviewRow{
+		{
+			listed: ListedRepository{Name: "first", Repository: gitrepo.Repository{Dir: "C:/dev/first"}},
+			status: gitrepo.Status{Branch: "main", Upstream: "origin/main", Behind: 2, HasCommits: true},
+		},
+		{listed: ListedRepository{Name: "org/elsewhere", Repository: gitrepo.Repository{Dir: "C:/dev/org/elsewhere"}}},
+	}, problems: []string{}})
+}
+
+func TestDiscardOpensOnTheSelectedFile(t *testing.T) {
+	m := update(t, New(listNothing), tea.WindowSizeMsg{Width: 120, Height: 30})
+	m = update(t, m, focusOn("C:/dev/repo"))
+	m = update(t, m, statusLoadedMsg{dir: "C:/dev/repo", status: gitrepo.Status{Files: twoFiles()}})
+	m = update(t, m, tea.KeyPressMsg{Code: 'j', Text: "j"})
+
+	m = update(t, m, tea.KeyPressMsg{Code: 'x', Text: "x"})
+
+	popup := ansi.Strip(m.renderDiscardPopup())
+	if m.popup != discardPopup || !strings.Contains(popup, "discard b.go") || !strings.Contains(popup, "back to HEAD") {
+		t.Fatalf("got popup %d:\n%s", m.popup, popup)
+	}
+}
+
 func listNothing(context.Context) (Listing, error) {
 	return Listing{Repositories: []ListedRepository{}, Refusals: []string{}}, nil
 }

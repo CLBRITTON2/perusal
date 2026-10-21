@@ -196,6 +196,25 @@ func (r Repository) CommitsBehind(ctx context.Context, ref string) (int, error) 
 	return count, nil
 }
 
+// MergedInto is true when merging revision into ref would change nothing, as after a merge or a squash merge. It
+// compares trees, since ancestry misses a squash and patch-ids miss one whose context lines changed on ref first.
+func (r Repository) MergedInto(ctx context.Context, revision string, ref string) (bool, error) {
+	args := []string{"merge-tree", "--write-tree", "--no-messages", "--allow-unrelated-histories", ref, revision}
+	output, err := runGit(ctx, r.Dir, args)
+	var exitErr *exec.ExitError
+	switch {
+	case errors.As(err, &exitErr) && exitErr.ExitCode() == 1:
+		return false, nil
+	case err != nil:
+		return false, err
+	}
+	refTree, err := runGit(ctx, r.Dir, []string{"rev-parse", "--verify", ref + "^{tree}"})
+	if err != nil {
+		return false, err
+	}
+	return strings.TrimSpace(string(output)) == strings.TrimSpace(string(refTree)), nil
+}
+
 // git diff --no-index exits 1 when the files differ, the normal result for an untracked file.
 func (r Repository) untrackedFileDiff(ctx context.Context, path string) (string, error) {
 	args := []string{"diff", "--no-index", "--no-color", "--no-ext-diff", "--", "/dev/null", path}
@@ -228,6 +247,42 @@ func (r Repository) Unstage(ctx context.Context, file FileStatus) error {
 		args = append(args, file.OriginalPath)
 	}
 	_, err := runGit(ctx, r.Dir, args)
+	return err
+}
+
+// Discard puts a tracked file back to HEAD, staged and unstaged changes alike, and deletes an untracked one. A
+// renamed file gets its original path back.
+func (r Repository) Discard(ctx context.Context, file FileStatus) error {
+	if file.IsUntracked() {
+		_, err := runGit(ctx, r.Dir, []string{"clean", "--force", "--", file.Path})
+		return err
+	}
+	args := []string{"restore", "--source=HEAD", "--staged", "--worktree", "--", file.Path}
+	if file.OriginalPath != "" {
+		args = append(args, file.OriginalPath)
+	}
+	_, err := runGit(ctx, r.Dir, args)
+	return err
+}
+
+// DiscardAll leaves the work tree as HEAD has it, except for ignored files and nested repositories.
+func (r Repository) DiscardAll(ctx context.Context) error {
+	if _, err := runGit(ctx, r.Dir, []string{"restore", "--source=HEAD", "--staged", "--worktree", "--", "."}); err != nil {
+		return err
+	}
+	_, err := runGit(ctx, r.Dir, []string{"clean", "--force", "-d", "--", "."})
+	return err
+}
+
+// Pull fast-forwards the branch to its upstream, and fails instead of merging or rebasing when they have diverged.
+func (r Repository) Pull(ctx context.Context) error {
+	_, err := runGit(ctx, r.Dir, []string{"pull", "--ff-only", "--no-rebase"})
+	return err
+}
+
+// Switch creates branch from the remote branch of that name when it exists only there.
+func (r Repository) Switch(ctx context.Context, branch string) error {
+	_, err := runGit(ctx, r.Dir, []string{"switch", branch})
 	return err
 }
 

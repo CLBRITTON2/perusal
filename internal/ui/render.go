@@ -83,8 +83,15 @@ func wrapSide(line diff.Line, numberWidth int, width int) []string {
 	}
 	textWidth := width - gutterWidth
 	gutter, text := lineStyles(line.Kind)
-	segments := strings.Split(ansi.Hardwrap(sanitizeText(line.Text), textWidth, true), "\n")
+	// sanitizeText maps each rune on its own, so the Changed span carries over piece by piece.
+	before := sanitizeText(line.Text[:line.Changed.Start])
+	changed := sanitizeText(line.Text[line.Changed.Start:line.Changed.End])
+	after := sanitizeText(line.Text[line.Changed.End:])
+	emphasis := diff.Span{Start: len(before), End: len(before) + len(changed)}
+	// Hardwrap keeping spaces only inserts newlines, so the segments add up to the text byte for byte.
+	segments := strings.Split(ansi.Hardwrap(before+changed+after, textWidth, true), "\n")
 	rendered := []string{}
+	offset := 0
 	for index, segment := range segments {
 		var number string
 		if index == 0 {
@@ -92,9 +99,20 @@ func wrapSide(line diff.Line, numberWidth int, width int) []string {
 		} else {
 			number = strings.Repeat(" ", gutterWidth)
 		}
-		rendered = append(rendered, gutter.Render(number)+text.Render(fitToWidth(segment, textWidth)))
+		rendered = append(rendered, gutter.Render(number)+renderSegment(segment, offset, emphasis, text,
+			changedTextStyle(line.Kind), textWidth))
+		offset += len(segment)
 	}
 	return rendered
+}
+
+// offset is where segment starts in the line, and emphasis a byte range of the whole line.
+func renderSegment(segment string, offset int, emphasis diff.Span, plain lipgloss.Style, emphasized lipgloss.Style,
+	width int) string {
+	start := min(max(emphasis.Start-offset, 0), len(segment))
+	end := min(max(emphasis.End-offset, 0), len(segment))
+	padding := strings.Repeat(" ", max(width-ansi.StringWidth(segment), 0))
+	return plain.Render(segment[:start]) + emphasized.Render(segment[start:end]) + plain.Render(segment[end:]+padding)
 }
 
 func segmentOrFiller(segments []string, index int, kind diff.LineKind, width int) string {
@@ -115,6 +133,17 @@ func lineStyles(kind diff.LineKind) (lipgloss.Style, lipgloss.Style) {
 		return mutedStyle, contextTextStyle
 	default:
 		return lipgloss.NewStyle(), lipgloss.NewStyle()
+	}
+}
+
+func changedTextStyle(kind diff.LineKind) lipgloss.Style {
+	switch kind {
+	case diff.LineRemoved:
+		return removedChangedStyle
+	case diff.LineAdded:
+		return addedChangedStyle
+	default:
+		return lipgloss.NewStyle()
 	}
 }
 

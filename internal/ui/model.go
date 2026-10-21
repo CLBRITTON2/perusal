@@ -52,6 +52,9 @@ const (
 	pushPopup
 	forcePushPopup
 	amendPopup
+	discardPopup
+	discardAllPopup
+	deleteBranchPopup
 )
 
 // A force push to these would rewrite history others build on.
@@ -60,6 +63,7 @@ var protectedBranches = []string{"main", "master"}
 type Model struct {
 	list       Lister
 	overview   overview
+	branches   branchList
 	repository gitrepo.Repository
 	// focused lists the repositories the focus named, and uncommitted maps each Dir to whether it has changes.
 	focused          []gitrepo.Repository
@@ -97,6 +101,8 @@ type Model struct {
 	popupError         string
 	amendTarget        gitrepo.Commit
 	amendTargetPushed  bool
+	discardTarget      gitrepo.FileStatus
+	deleteBranchTarget string
 	footerText         string
 	footerIsError      bool
 	width              int
@@ -121,7 +127,8 @@ func New(list Lister) Model {
 	helpView.Styles.Ellipsis = helpSepStyle
 	return Model{
 		list:           list,
-		overview:       overview{rows: []overviewRow{}},
+		overview:       overview{rows: []overviewRow{}, pulling: map[string]bool{}},
+		branches:       branchList{rows: []branchRow{}},
 		focused:        []gitrepo.Repository{},
 		uncommitted:    map[string]bool{},
 		status:         gitrepo.Status{Files: []gitrepo.FileStatus{}},
@@ -221,6 +228,36 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		return m.withPopupClosed().withFooterNotice("pushed to " + msg.upstream),
 			repositoryRequest{repository: m.repository}.loadStatus
+	case discardedMsg:
+		if msg.dir != m.repository.Dir {
+			return m.withFooterNotice("discarded " + msg.discarded + " in " + msg.dir), nil
+		}
+		return m.withPopupClosed().withFooterNotice("discarded " + msg.discarded),
+			repositoryRequest{repository: m.repository}.loadStatus
+	case branchesLoadedMsg:
+		if msg.dir != m.repository.Dir || !m.branches.open {
+			return m, nil
+		}
+		return m.withBranchesLoaded(msg), nil
+	case branchesFailedMsg:
+		if msg.dir == m.repository.Dir {
+			m.branches.open = false
+		}
+		return m.withFooterError(msg.err.Error()), nil
+	case branchSwitchedMsg:
+		if msg.dir != m.repository.Dir {
+			return m.withFooterNotice("switched " + msg.dir + " to " + sanitizeSingleLine(msg.branch)), nil
+		}
+		m.branches.open = false
+		return m.withFooterNotice("switched to " + sanitizeSingleLine(msg.branch)),
+			repositoryRequest{repository: m.repository}.loadStatus
+	case branchDeletedMsg:
+		return m.withBranchDeleted(msg)
+	case overviewPulledMsg:
+		return m.withOverviewPulled(msg)
+	case overviewPullFailedMsg:
+		m.overview.pulling = withoutKey(m.overview.pulling, msg.dir)
+		return m.withFooterError(msg.err.Error()), nil
 	case popupFailedMsg:
 		if msg.dir != m.repository.Dir || m.popup == noPopup {
 			return m.withFooterError(msg.err.Error()), nil
@@ -250,15 +287,24 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m.updateConfirmPopup(msg, pushRequest{repository: m.repository, upstream: m.status.Upstream}.forcePush)
 		case m.popup == amendPopup:
 			return m.updateConfirmPopup(msg, amendRequest{repository: m.repository, commit: m.amendTarget}.amend)
+		case m.popup == discardPopup:
+			return m.updateConfirmPopup(msg, fileRequest{repository: m.repository, file: m.discardTarget}.discard)
+		case m.popup == discardAllPopup:
+			return m.updateConfirmPopup(msg, repositoryRequest{repository: m.repository}.discardAll)
+		case m.popup == deleteBranchPopup:
+			return m.updateConfirmPopup(msg, branchRequest{repository: m.repository, branch: m.deleteBranchTarget,
+				defaultBranch: m.branches.defaultBranch}.delete)
 		case m.overview.open:
 			return m.updateOverview(msg)
+		case m.branches.open:
+			return m.updateBranches(msg)
 		case m.searching:
 			return m.updateSearch(msg)
 		}
 		return m.updateBrowsing(msg)
 	case tea.MouseClickMsg:
 		switch {
-		case m.popup != noPopup, m.overview.open:
+		case m.popup != noPopup, m.overview.open, m.branches.open:
 			return m, nil
 		case msg.Button == tea.MouseLeft:
 			return m.clickList(msg.Mouse())
@@ -267,7 +313,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		return m, nil
 	case tea.MouseWheelMsg:
-		if m.popup != noPopup || m.overview.open {
+		if m.popup != noPopup || m.overview.open || m.branches.open {
 			return m, nil
 		}
 		return m.scrollWheel(msg.Mouse())
@@ -341,6 +387,19 @@ func (m Model) updateBrowsing(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 			return m, request.stageAll
 		}
 		return m, request.unstageAll
+	case key.Matches(msg, discardKey):
+		if m.view != viewChanges || len(m.status.Files) == 0 {
+			return m, nil
+		}
+		m.popup = discardPopup
+		m.discardTarget = m.status.Files[m.selected]
+		return m, nil
+	case key.Matches(msg, discardAllKey):
+		if m.view != viewChanges || len(m.status.Files) == 0 {
+			return m, nil
+		}
+		m.popup = discardAllPopup
+		return m, nil
 	case key.Matches(msg, commitKey):
 		if m.repository.Dir == "" {
 			return m, nil
@@ -354,6 +413,8 @@ func (m Model) updateBrowsing(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		return m.openAmendPopup(), nil
 	case key.Matches(msg, nextRepositoryKey):
 		return m.cycleRepository()
+	case key.Matches(msg, branchesKey):
+		return m.openBranches()
 	case key.Matches(msg, overviewKey):
 		return m.openOverview()
 	}
@@ -841,6 +902,7 @@ func (m Model) withListScrolled() Model {
 	m.logOffset = scrolledOffset(m.logOffset, max(m.selectedLogRow(m.visibleLogRows()), 0), m.listInnerHeight())
 	m.listOffset = scrolledOffset(m.listOffset, m.selected, m.listInnerHeight())
 	m.overview.offset = scrolledOffset(m.overview.offset, m.overview.selected, m.paneInnerHeight())
+	m.branches.offset = scrolledOffset(m.branches.offset, m.branches.selected, m.paneInnerHeight())
 	return m
 }
 
@@ -922,6 +984,12 @@ func (m Model) View() tea.View {
 		view = tea.NewView(m.overlayPopup(m.renderScreen(), m.renderForcePushPopup()))
 	case m.popup == amendPopup:
 		view = tea.NewView(m.overlayPopup(m.renderScreen(), m.renderAmendPopup()))
+	case m.popup == discardPopup:
+		view = tea.NewView(m.overlayPopup(m.renderScreen(), m.renderDiscardPopup()))
+	case m.popup == discardAllPopup:
+		view = tea.NewView(m.overlayPopup(m.renderScreen(), m.renderDiscardAllPopup()))
+	case m.popup == deleteBranchPopup:
+		view = tea.NewView(m.overlayPopup(m.renderScreen(), m.renderDeleteBranchPopup()))
 	default:
 		view = tea.NewView(m.renderScreen())
 	}
@@ -946,6 +1014,8 @@ func (m Model) renderColumns() string {
 	switch {
 	case m.overview.open:
 		return m.renderOverviewPane()
+	case m.branches.open:
+		return m.renderBranchesPane()
 	case m.diffFullscreen:
 		return m.renderDiffPane()
 	}
@@ -967,7 +1037,7 @@ func (m Model) renderHeader() string {
 		return fitToWidth(" "+mutedStyle.Render("waiting for a repository"), m.width)
 	}
 	left := " " + repositoryStyle.Render(folderGlyph+" "+sanitizeText(filepath.Base(m.repository.Dir))) +
-		m.renderCyclePosition() + "  " + branchStyle.Render(branchGlyph+" "+branchLabel(m.status)) + " " + renderAheadBehind(m.status)
+		m.renderCyclePosition() + "  " + branchStyle.Render(branchGlyph+" "+branchLabel(m.status)) + " " + renderAheadBehind(m.status.Ahead, m.status.Behind)
 	return fitToWidth(left, m.width)
 }
 
@@ -979,13 +1049,13 @@ func (m Model) renderCyclePosition() string {
 	return mutedStyle.Render(" (" + strconv.Itoa(position+1) + " of " + strconv.Itoa(len(m.focused)) + ")")
 }
 
-func renderAheadBehind(status gitrepo.Status) string {
+func renderAheadBehind(ahead int, behind int) string {
 	counts := []string{}
-	if status.Ahead > 0 {
-		counts = append(counts, aheadStyle.Render("↑"+strconv.Itoa(status.Ahead)))
+	if ahead > 0 {
+		counts = append(counts, aheadStyle.Render("↑"+strconv.Itoa(ahead)))
 	}
-	if status.Behind > 0 {
-		counts = append(counts, behindStyle.Render("↓"+strconv.Itoa(status.Behind)))
+	if behind > 0 {
+		counts = append(counts, behindStyle.Render("↓"+strconv.Itoa(behind)))
 	}
 	return strings.Join(counts, " ")
 }
@@ -1205,6 +1275,8 @@ func (m Model) renderFooter() string {
 		return fitToWidth(successStyle.Render("✓ "+m.footerText), m.width)
 	case m.overview.open:
 		return m.renderHelpLine(overviewHelp)
+	case m.branches.open:
+		return m.renderHelpLine(branchesHelp)
 	case m.searching && m.searchError != "":
 		return fitToWidth(" "+m.searchInput.View()+"  "+errorStyle.Render(m.searchError), m.width)
 	case m.searching:
@@ -1272,6 +1344,28 @@ func (m Model) renderAmendPopup() string {
 			" already, so the next push is a force push"))
 	}
 	return m.renderPopup(lines, "amending...", amendHelp)
+}
+
+func (m Model) renderDiscardPopup() string {
+	var effect string
+	if m.discardTarget.IsUntracked() {
+		effect = "deletes it"
+	} else {
+		effect = "puts it back to HEAD, staged and unstaged changes alike"
+	}
+	return m.renderPopup([]string{
+		titleStyle.Render("discard " + sanitizeText(m.discardTarget.Path)),
+		textStyle.Render(effect),
+		warningStyle.Render("this cannot be undone"),
+	}, "discarding...", discardHelp)
+}
+
+func (m Model) renderDiscardAllPopup() string {
+	return m.renderPopup([]string{
+		titleStyle.Render("discard " + fileCount(len(m.status.Files))),
+		textStyle.Render("deletes untracked files and puts the rest back to HEAD"),
+		warningStyle.Render("this cannot be undone"),
+	}, "discarding...", discardHelp)
 }
 
 func (m Model) renderPopup(lines []string, runningText string, bindings []key.Binding) string {

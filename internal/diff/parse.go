@@ -5,6 +5,7 @@ import (
 	"regexp"
 	"strconv"
 	"strings"
+	"unicode/utf8"
 )
 
 type LineKind int
@@ -17,10 +18,18 @@ const (
 	LineAdded
 )
 
+// Changed is the part of Text that differs from the line paired with it, empty when none is marked.
 type Line struct {
-	Kind   LineKind
-	Number int
-	Text   string
+	Kind    LineKind
+	Number  int
+	Text    string
+	Changed Span
+}
+
+// Span is a byte range of a line's Text, End excluded.
+type Span struct {
+	Start int
+	End   int
 }
 
 type Row struct {
@@ -266,12 +275,63 @@ type changeBlock struct {
 	added   []Line
 }
 
+// Only a block with as many removals as additions has its changes marked, since otherwise the pairs are a guess.
 func (b changeBlock) pairRows() []Row {
 	rows := []Row{}
 	for i := 0; i < max(len(b.removed), len(b.added)); i++ {
-		rows = append(rows, Row{Left: lineOrBlank(b.removed, i), Right: lineOrBlank(b.added, i)})
+		left := lineOrBlank(b.removed, i)
+		right := lineOrBlank(b.added, i)
+		if len(b.removed) == len(b.added) {
+			rows = append(rows, markedRow(left, right))
+		} else {
+			rows = append(rows, Row{Left: left, Right: right})
+		}
 	}
 	return rows
+}
+
+// Marks what lies between the lines' common prefix and suffix, and nothing when they share neither.
+func markedRow(removed Line, added Line) Row {
+	prefix := commonPrefixLength(removed.Text, added.Text)
+	suffix := commonSuffixLength(removed.Text[prefix:], added.Text[prefix:])
+	if prefix+suffix == 0 {
+		return Row{Left: removed, Right: added}
+	}
+	return Row{
+		Left:  withChanged(removed, Span{Start: prefix, End: len(removed.Text) - suffix}),
+		Right: withChanged(added, Span{Start: prefix, End: len(added.Text) - suffix}),
+	}
+}
+
+func withChanged(line Line, changed Span) Line {
+	return Line{Kind: line.Kind, Number: line.Number, Text: line.Text, Changed: changed}
+}
+
+// Backs off to a rune start, so a span never splits a character.
+func commonPrefixLength(first string, second string) int {
+	length := 0
+	for length < len(first) && length < len(second) && first[length] == second[length] {
+		length++
+	}
+	for length > 0 && (splitsRune(first, length) || splitsRune(second, length)) {
+		length--
+	}
+	return length
+}
+
+func commonSuffixLength(first string, second string) int {
+	length := 0
+	for length < len(first) && length < len(second) && first[len(first)-1-length] == second[len(second)-1-length] {
+		length++
+	}
+	for length > 0 && splitsRune(first, len(first)-length) {
+		length--
+	}
+	return length
+}
+
+func splitsRune(text string, index int) bool {
+	return index < len(text) && !utf8.RuneStart(text[index])
 }
 
 func lineOrBlank(lines []Line, index int) Line {
