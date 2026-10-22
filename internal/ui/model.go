@@ -186,9 +186,10 @@ func (m Model) Init() tea.Cmd {
 func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
 	case tea.WindowSizeMsg:
+		previous := m.diffLines()
 		m.width = msg.Width
 		m.height = msg.Height
-		return m.withLayout(), nil
+		return m.withPaneSizes().withDiffKeptInPlace(previous).withListScrolled(), nil
 	case focus.Focus:
 		return m.withFocus(msg)
 	case FocusRejection:
@@ -391,14 +392,16 @@ func (m Model) updateBrowsing(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	case key.Matches(msg, switchViewKey):
 		return m.switchView()
 	case key.Matches(msg, fullscreenKey):
+		previous := m.diffLines()
 		m.fullscreenDiff = !m.fullscreenDiff
-		return m.withLayout(), nil
+		return m.withPaneSizes().withDiffKeptInPlace(previous).withListScrolled(), nil
 	case key.Matches(msg, wholeFileKey):
 		m.wholeFile = !m.wholeFile
 		return m, tea.Batch(m.loadSelectedDiff(), m.loadSelectedCommitDiff())
 	case key.Matches(msg, unifiedKey):
+		previous := m.diffLines()
 		m.unified = !m.unified
-		return m.withDiffContent(), nil
+		return m.withDiffKeptInPlace(previous), nil
 	case key.Matches(msg, expandKey) && m.view == viewLog:
 		return m.toggleExpanded()
 	case key.Matches(msg, searchKey) && m.view == viewLog:
@@ -947,6 +950,10 @@ func (m Model) selectedCommitDiff() ([]diff.FileSection, bool) {
 }
 
 func (m Model) withLayout() Model {
+	return m.withPaneSizes().withDiffContent().withListScrolled()
+}
+
+func (m Model) withPaneSizes() Model {
 	m.diffView.SetWidth(m.diffInnerWidth())
 	m.diffView.SetHeight(m.paneInnerHeight())
 	m.help.SetWidth(m.width)
@@ -955,7 +962,7 @@ func (m Model) withLayout() Model {
 	m.searchInput.SetWidth(max(m.width/2, 0))
 	m.descriptionBox.SetWidth(m.fieldInnerWidth())
 	m.descriptionBox.SetHeight(descriptionHeight)
-	return m.withDiffContent().withListScrolled()
+	return m
 }
 
 func (m Model) withDiffContent() Model {

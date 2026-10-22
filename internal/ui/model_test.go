@@ -249,8 +249,9 @@ func TestWholeFile(t *testing.T) {
 }
 
 func keepsTheTopLineOnScreenBothWays(t *testing.T) {
-	hunks := diff.FileDiff{Hunks: []diff.Hunk{contextHunk(10, 24), contextHunk(40, 54), contextHunk(70, 84)}}
-	wholeFile := diff.FileDiff{Hunks: []diff.Hunk{contextHunk(1, 100)}}
+	hunks := diff.FileDiff{
+		Hunks: []diff.Hunk{contextHunk(10, 24, "line"), contextHunk(40, 54, "line"), contextHunk(70, 84, "line")}}
+	wholeFile := diff.FileDiff{Hunks: []diff.Hunk{contextHunk(1, 100, "line")}}
 	m := reviewingRepository(t, gitrepo.Status{Files: twoFiles()})
 	m = update(t, m, tea.WindowSizeMsg{Width: 120, Height: 16})
 	m = update(t, m, diffMsg{dir: "C:/dev/repo", path: "a.go", contextLines: hunkContext, fileDiff: hunks})
@@ -267,10 +268,31 @@ func keepsTheTopLineOnScreenBothWays(t *testing.T) {
 	}
 }
 
-func contextHunk(first int, last int) diff.Hunk {
+func TestARewrapKeepsTheTopDiffLineOnScreen(t *testing.T) {
+	longLines := diff.FileDiff{Hunks: []diff.Hunk{contextHunk(1, 60, strings.Repeat("word ", 30))}}
+	m := reviewingRepository(t, gitrepo.Status{Files: twoFiles()})
+	m = update(t, m, tea.WindowSizeMsg{Width: 120, Height: 16})
+	m = update(t, m, diffMsg{dir: "C:/dev/repo", path: "a.go", contextLines: hunkContext, fileDiff: longLines})
+	m.diffView.SetYOffset(firstReaching(m.diffLines(), sourceLine{section: 0, oldNumber: 0, newNumber: 20}))
+	m = update(t, m, tea.KeyPressMsg{Code: 'u', Text: "u"})
+	afterUnified := topLineNumber(m)
+	m = update(t, m, tea.WindowSizeMsg{Width: 80, Height: 16})
+	afterResize := topLineNumber(m)
+	m = update(t, m, tea.KeyPressMsg{Code: 'd', Text: "d"})
+
+	if afterUnified != 20 || afterResize != 20 || topLineNumber(m) != 20 {
+		t.Fatalf("got top lines %d, %d, %d, want line 20 throughout", afterUnified, afterResize, topLineNumber(m))
+	}
+}
+
+func topLineNumber(m Model) int {
+	return m.diffLines()[m.diffView.YOffset()].source.newNumber
+}
+
+func contextHunk(first int, last int, text string) diff.Hunk {
 	hunk := diff.Hunk{Header: fmt.Sprintf("@@ -%d +%d @@", first, first)}
 	for number := first; number <= last; number++ {
-		line := diff.Line{Kind: diff.LineContext, Number: number, Text: "line"}
+		line := diff.Line{Kind: diff.LineContext, Number: number, Text: text}
 		hunk.Rows = append(hunk.Rows, diff.Row{Old: line, New: line})
 	}
 	return hunk
