@@ -1,19 +1,14 @@
 # perusal
 
-A small terminal git client for reviewing and committing changes. It is built for the loop where an AI coding agent
-writes the code and you read every line before it lands: a slimmed-down lazygit where the diff gets most of the screen.
+A small terminal git client for reading diffs, like a stripped-down lazygit. The diff gets most of the screen, and it
+refreshes every couple of seconds so you can watch changes land. It also stages, commits, amends, pushes, browses the
+log and switches branches.
 
-## What it does
+I use it to manage repos on Windows with an LLM running as its own user account, which is what follow mode is for.
+lazygit, gitui and tig cover most of the same ground and more.
 
-- Lists the working tree's changed files and shows each as a side-by-side or unified diff, or one-sided for an added
-  or deleted file. In a block that removes and adds as many lines, each pair marks the part that changed.
-- Highlights the code's syntax in every diff, picking the language by file name.
-- Stages, unstages, commits, amends and pushes.
-- Browses the log with a commit graph, expands a commit into its files, and searches by hash, author, ref or message.
-- Refreshes every 2 seconds, so the review keeps up with edits as they happen.
-
-perusal runs your local `git` for everything. There is no GitHub API and no login. A push uses whatever credentials
-git already has, and fails instead of prompting when it has none.
+perusal runs your local `git` for everything. There is no GitHub API and no login: a push uses whatever credentials
+git already has.
 
 ## Install
 
