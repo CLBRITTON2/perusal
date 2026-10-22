@@ -80,8 +80,10 @@ type rewording struct {
 	draftDescription string
 }
 
+// dir is the repository the popup acts on, which an overview push makes one other than the one under review.
 type popupState struct {
 	kind         popupKind
+	dir          string
 	confirmation confirmation
 	rewording    rewording
 	running      bool
@@ -273,11 +275,11 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.descriptionBox.Reset()
 		return m, m.reloadStatus()
 	case popupSuccessMsg:
-		if msg.dir != m.repository.Dir {
+		if msg.dir != m.popup.dir {
 			return m.withFooterNotice(msg.notice + " in " + msg.dir), nil
 		}
 		m = m.withPopupClosed().withFooterNotice(msg.notice)
-		return m, tea.Batch(m.reloadStatus(), m.reloadBranches())
+		return m, tea.Batch(m.reloadStatus(), m.reloadBranches(), m.reloadOverviewRow(msg.dir))
 	case branchesMsg:
 		if msg.dir != m.repository.Dir || m.mode != modeBranches {
 			return m, nil
@@ -296,11 +298,13 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, m.reloadStatus()
 	case pullMsg:
 		return m.withOverviewPulled(msg)
+	case overviewRowMsg:
+		return m.withOverviewRow(msg.row), nil
 	case syncFailureMsg:
 		m.pulling = withoutDir(m.pulling, msg.dir)
 		return m.withFooterError(msg.err.Error()), nil
 	case popupFailureMsg:
-		if msg.dir != m.repository.Dir || m.popup.kind == noPopup {
+		if msg.dir != m.popup.dir {
 			return m.withFooterError(msg.err.Error()), nil
 		}
 		m.popup.running = false
@@ -453,21 +457,21 @@ func (m Model) updateBrowsing(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		return m, request.unstageAll
 	case key.Matches(msg, discardKey) && onFile:
 		file := m.status.Files[m.selectedChange]
-		return m.withConfirmation(discardConfirmation(sanitizeText(file.Path), discardEffect(file),
+		return m.withConfirmation(m.repository.Dir, discardConfirmation(sanitizeText(file.Path), discardEffect(file),
 			fileRequest{repository: m.repository, file: file}.discard)), nil
 	case key.Matches(msg, discardAllKey) && onFile:
-		return m.withConfirmation(discardConfirmation(pluralize(len(m.status.Files), "file"),
+		return m.withConfirmation(m.repository.Dir, discardConfirmation(pluralize(len(m.status.Files), "file"),
 			"deletes untracked files and puts the rest back to HEAD",
 			repositoryRequest{repository: m.repository}.discardAll)), nil
 	case key.Matches(msg, commitKey):
 		if m.repository.Dir == "" {
 			return m, nil
 		}
-		m.popup = popupState{kind: commitPopup}
+		m.popup = popupState{kind: commitPopup, dir: m.repository.Dir}
 		m.editingDescription = false
 		return m, m.summaryInput.Focus()
 	case key.Matches(msg, pushKey):
-		return m.openPushPopup()
+		return m.openPushPopup(m.repository, m.status)
 	case key.Matches(msg, amendKey) && m.view == viewLog:
 		return m.openAmendPopup(), nil
 	case key.Matches(msg, rewordKey) && m.view == viewLog:
@@ -646,37 +650,37 @@ func (m Model) withPopupClosed() Model {
 	return m
 }
 
-func (m Model) withConfirmation(c confirmation) Model {
-	m.popup = popupState{kind: confirmPopup, confirmation: c}
+func (m Model) withConfirmation(dir string, c confirmation) Model {
+	m.popup = popupState{kind: confirmPopup, dir: dir, confirmation: c}
 	return m
 }
 
-func (m Model) openPushPopup() (tea.Model, tea.Cmd) {
-	request := pushRequest{repository: m.repository, upstream: m.status.Upstream}
-	upstream := sanitizeText(m.status.Upstream)
+func (m Model) openPushPopup(repository gitrepo.Repository, status gitrepo.Status) (tea.Model, tea.Cmd) {
+	request := pushRequest{repository: repository, upstream: status.Upstream}
+	upstream := sanitizeText(status.Upstream)
 	switch {
-	case m.repository.Dir == "":
+	case repository.Dir == "":
 		return m, nil
-	case m.status.Upstream == "":
+	case status.Upstream == "":
 		return m.withFooterError("the branch tracks no upstream, so there is nowhere to push"), nil
-	case m.status.Ahead == 0:
+	case status.Ahead == 0:
 		return m.withFooterError("nothing to push"), nil
-	case m.status.Behind == 0:
-		return m.withConfirmation(confirmation{
+	case status.Behind == 0:
+		return m.withConfirmation(repository.Dir, confirmation{
 			lines: []string{
-				titleStyle.Render("push " + headName(m.status) + " to " + upstream),
-				textStyle.Render(pluralize(m.status.Ahead, "commit")),
+				titleStyle.Render("push " + headName(status) + " to " + upstream),
+				textStyle.Render(pluralize(status.Ahead, "commit")),
 			},
 			confirmKey:  confirmPushKey,
 			run:         request.push,
 			runningText: "pushing...",
 		}), nil
 	}
-	return m.withConfirmation(confirmation{
+	return m.withConfirmation(repository.Dir, confirmation{
 		lines: []string{
-			titleStyle.Render("force push " + headName(m.status) + " to " + upstream),
-			textStyle.Render("replaces " + pluralize(m.status.Behind, "commit") + " on " + upstream + " with " +
-				pluralize(m.status.Ahead, "commit")),
+			titleStyle.Render("force push " + headName(status) + " to " + upstream),
+			textStyle.Render("replaces " + pluralize(status.Behind, "commit") + " on " + upstream + " with " +
+				pluralize(status.Ahead, "commit")),
 		},
 		confirmKey:  confirmForceKey,
 		run:         request.forcePush,
@@ -697,7 +701,7 @@ func (m Model) openAmendPopup() Model {
 		textStyle.Render(sanitizeText(target.Summary)),
 		textStyle.Render("with " + pluralize(m.stagedFileCount(), "file") + " staged"),
 	}
-	return m.withConfirmation(confirmation{
+	return m.withConfirmation(m.repository.Dir, confirmation{
 		lines:       slices.Concat(lines, m.rewriteWarnings()),
 		confirmKey:  confirmAmendKey,
 		run:         amendRequest{repository: m.repository, commit: target}.amend,
@@ -711,7 +715,7 @@ func (m Model) openRewordPopup() (tea.Model, tea.Cmd) {
 	}
 	target := m.commits[m.selectedCommit]
 	title := titleStyle.Render("reword " + sanitizeText(target.ShortHash))
-	m.popup = popupState{kind: rewordPopup, rewording: rewording{
+	m.popup = popupState{kind: rewordPopup, dir: m.repository.Dir, rewording: rewording{
 		commit:           target,
 		lines:            append([]string{title}, m.rewriteWarnings()...),
 		draftSummary:     m.summaryInput.Value(),

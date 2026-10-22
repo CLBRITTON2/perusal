@@ -189,13 +189,22 @@ func (r Repository) DefaultBranch(ctx context.Context) (string, error) {
 }
 
 func (r Repository) CommitsBehind(ctx context.Context, ref string) (int, error) {
-	output, err := r.git(ctx, "rev-list", "--count", "HEAD.."+ref)
+	return r.countCommits(ctx, []string{"HEAD.." + ref})
+}
+
+// CommitsOnNoRemote counts the commits in HEAD that no remote-tracking branch holds.
+func (r Repository) CommitsOnNoRemote(ctx context.Context) (int, error) {
+	return r.countCommits(ctx, []string{"HEAD", "--not", "--remotes"})
+}
+
+func (r Repository) countCommits(ctx context.Context, revisions []string) (int, error) {
+	output, err := r.git(ctx, slices.Concat([]string{"rev-list", "--count"}, revisions)...)
 	if err != nil {
 		return 0, err
 	}
 	count, err := strconv.Atoi(strings.TrimSpace(string(output)))
 	if err != nil {
-		return 0, fmt.Errorf("parse the count of commits on %s missing from HEAD in %s: %w", ref, r.Dir, err)
+		return 0, fmt.Errorf("parse the commit count of %s in %s: %w", strings.Join(revisions, " "), r.Dir, err)
 	}
 	return count, nil
 }
@@ -281,6 +290,11 @@ func (r Repository) Commit(ctx context.Context, message string) (string, error) 
 
 func (r Repository) Push(ctx context.Context) error {
 	return r.run(ctx, "push")
+}
+
+// Publish pushes branch to the same name on origin and makes that its upstream.
+func (r Repository) Publish(ctx context.Context, branch string) error {
+	return r.run(ctx, "push", "--set-upstream", "origin", "refs/heads/"+branch)
 }
 
 // git refuses unless the remote branch is still where it was last fetched and that tip is in the local reflog,

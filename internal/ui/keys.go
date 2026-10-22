@@ -63,7 +63,7 @@ var (
 	reviewHelp   = []key.Binding{commitKey, pushKey, switchViewKey, keyListKey, quitKey}
 	changesHelp  = slices.Concat(changesKeys, reviewHelp)
 	logHelp      = slices.Concat(logKeys, reviewHelp)
-	overviewHelp = []key.Binding{downKey, openRepositoryKey, pullKey, closeOverviewKey, quitKey}
+	overviewHelp = []key.Binding{downKey, openRepositoryKey, pullKey, pushKey, closeOverviewKey, quitKey}
 	branchesHelp = []key.Binding{downKey, switchBranchKey, deleteBranchKey, closeBranchesKey, quitKey}
 	searchHelp   = []key.Binding{keepSearchKey, clearSearchKey}
 	commitHelp   = []key.Binding{nextFieldKey, submitKey, cancelKey}

@@ -177,6 +177,16 @@ func (r pushRequest) forcePush() tea.Msg {
 	return popupResult(r.repository.Dir, r.repository.ForcePush(context.Background()), "pushed to "+r.upstream)
 }
 
+type publishRequest struct {
+	repository gitrepo.Repository
+	branch     string
+}
+
+func (r publishRequest) publish() tea.Msg {
+	return popupResult(r.repository.Dir, r.repository.Publish(context.Background(), r.branch),
+		"published "+r.branch+" to origin")
+}
+
 type amendRequest struct {
 	repository gitrepo.Repository
 	commit     gitrepo.Commit

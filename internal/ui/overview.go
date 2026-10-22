@@ -25,12 +25,14 @@ type overviewRow interface {
 }
 
 // commitsBehindDefault counts the commits HEAD lacks from defaultBranch, and stays 0 when defaultBranch is the
-// upstream, whose count the status already holds. finished is a branch p leaves for the default branch.
+// upstream, whose count the status already holds. commitsOnNoRemote is counted only for a branch with no upstream.
+// finished is a branch p leaves for the default branch.
 type repositoryRow struct {
 	focus.FoundRepository
 	status               gitrepo.Status
 	defaultBranch        string
 	commitsBehindDefault int
+	commitsOnNoRemote    int
 	finished             bool
 }
 
@@ -49,6 +51,10 @@ type overviewFailureMsg struct {
 }
 
 type pullMsg struct {
+	row repositoryRow
+}
+
+type overviewRowMsg struct {
 	row repositoryRow
 }
 
@@ -71,6 +77,18 @@ func (r pullRequest) pull() tea.Msg {
 		return syncFailureMsg{dir: dir, err: err}
 	}
 	return pullMsg{row: row}
+}
+
+type overviewRowRequest struct {
+	found focus.FoundRepository
+}
+
+func (r overviewRowRequest) load() tea.Msg {
+	row, err := loadOverviewRow(r.found)
+	if err != nil {
+		return gitFailureMsg{err: err}
+	}
+	return overviewRowMsg{row: row}
 }
 
 type switchRequest struct {
@@ -132,7 +150,17 @@ func loadOverviewRow(found focus.FoundRepository) (repositoryRow, error) {
 		return repositoryRow{}, err
 	}
 	row := repositoryRow{FoundRepository: found, status: status, defaultBranch: defaultBranch}
-	if defaultBranch == "" || !status.HasCommits {
+	if !status.HasCommits {
+		return row, nil
+	}
+	if status.Upstream == "" && status.Branch != "" {
+		onNoRemote, err := found.Repository.CommitsOnNoRemote(ctx)
+		if err != nil {
+			return repositoryRow{}, err
+		}
+		row.commitsOnNoRemote = onNoRemote
+	}
+	if defaultBranch == "" {
 		return row, nil
 	}
 	if mayBeFinished(status, defaultBranch) {
@@ -219,6 +247,8 @@ func (m Model) updateOverview(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		return m.withSelectedRepository(m.openRepositoryRow)
 	case key.Matches(msg, pullKey):
 		return m.withSelectedRepository(m.pullRepositoryRow)
+	case key.Matches(msg, pushKey):
+		return m.withSelectedRepository(m.pushRepositoryRow)
 	}
 	return m, nil
 }
@@ -259,6 +289,32 @@ func (m Model) pullRepositoryRow(row repositoryRow) (tea.Model, tea.Cmd) {
 	return m, pull
 }
 
+func (m Model) pushRepositoryRow(row repositoryRow) (tea.Model, tea.Cmd) {
+	if row.status.Upstream != "" || row.status.Branch == "" {
+		return m.openPushPopup(row.Repository, row.status)
+	}
+	if row.commitsOnNoRemote == 0 {
+		return m.withFooterError("nothing to push"), nil
+	}
+	return m.withConfirmation(row.Repository.Dir, confirmation{
+		lines: []string{
+			titleStyle.Render("publish " + headName(row.status) + " to origin"),
+			textStyle.Render(pluralize(row.commitsOnNoRemote, "commit") + " no remote has"),
+		},
+		confirmKey:  confirmPushKey,
+		run:         publishRequest{repository: row.Repository, branch: row.status.Branch}.publish,
+		runningText: "publishing...",
+	}), nil
+}
+
+func (m Model) reloadOverviewRow(dir string) tea.Cmd {
+	index := slices.IndexFunc(m.overview.rows, isRowOf(gitrepo.Repository{Dir: dir}))
+	if m.mode != modeOverview || index < 0 {
+		return nil
+	}
+	return overviewRowRequest{found: m.overview.rows[index].(repositoryRow).FoundRepository}.load
+}
+
 // A clean branch other than the default one, with no upstream left to pull, is finished once it is merged.
 func mayBeFinished(status gitrepo.Status, defaultBranch string) bool {
 	return len(status.Files) == 0 && (status.Upstream == "" || status.UpstreamGone) &&
@@ -272,17 +328,21 @@ func localBranch(defaultBranch string) string {
 func (m Model) withOverviewPulled(msg pullMsg) (tea.Model, tea.Cmd) {
 	repository := msg.row.Repository
 	m.pulling = withoutDir(m.pulling, repository.Dir)
-	rows := slices.Clone(m.overview.rows)
-	index := slices.IndexFunc(rows, isRowOf(repository))
-	if index >= 0 {
-		rows[index] = msg.row
-	}
-	m.overview.rows = rows
-	m = m.withFooterNotice("pulled " + msg.row.RelativePath)
+	m = m.withOverviewRow(msg.row).withFooterNotice("pulled " + msg.row.RelativePath)
 	if repository != m.repository {
 		return m, nil
 	}
 	return m, m.reloadStatus()
+}
+
+func (m Model) withOverviewRow(row repositoryRow) Model {
+	rows := slices.Clone(m.overview.rows)
+	index := slices.IndexFunc(rows, isRowOf(row.Repository))
+	if index >= 0 {
+		rows[index] = row
+	}
+	m.overview.rows = rows
+	return m
 }
 
 func withoutDir(set map[string]bool, dir string) map[string]bool {
@@ -320,9 +380,16 @@ func (r repositoryRow) cells() []string {
 		repositoryStyle.Render(folderGlyph + " " + sanitizeText(r.RelativePath)),
 		branchStyle.Render(branchGlyph + " " + headName(r.status)),
 		renderChangedCount(len(r.status.Files)),
-		renderAheadBehind(r.status.Tracking),
+		renderUnpushed(r),
 		renderBehindDefault(r),
 	}
+}
+
+func renderUnpushed(row repositoryRow) string {
+	if row.commitsOnNoRemote == 0 {
+		return renderAheadBehind(row.status.Tracking)
+	}
+	return aheadStyle.Render("↑"+strconv.Itoa(row.commitsOnNoRemote)) + mutedStyle.Render(" no upstream")
 }
 
 func (r refusedRow) cells() []string {

@@ -209,6 +209,50 @@ func aFinishedRowIsSwitchedThoughItTracksNoUpstream(t *testing.T) {
 	}
 }
 
+func TestPushInTheOverview(t *testing.T) {
+	t.Run("aRepositoryNotUnderReviewClosesItsPopupOnItsResult", aRepositoryNotUnderReviewClosesItsPopupOnItsResult)
+	t.Run("aBranchWithNoUpstreamIsPublished", aBranchWithNoUpstreamIsPublished)
+}
+
+func aRepositoryNotUnderReviewClosesItsPopupOnItsResult(t *testing.T) {
+	m := update(t, overviewWithTwoRepositories(t), overviewMsg{rows: []overviewRow{repositoryRow{
+		FoundRepository: foundAt("second", "C:/dev/second"),
+		status: gitrepo.Status{
+			Branch: "main", Tracking: gitrepo.Tracking{Upstream: "origin/main", Ahead: 1}, HasCommits: true,
+		},
+	}}, failures: []string{}})
+	m = update(t, m, tea.KeyPressMsg{Code: 'P', Text: "P"})
+	popup := ansi.Strip(m.renderConfirmPopup())
+
+	next, cmd := m.Update(popupSuccessMsg{dir: "C:/dev/second", notice: "pushed to origin/main"})
+	m = asModel(t, next)
+
+	if !strings.Contains(popup, "push main to origin/main") || m.repository.Dir == "C:/dev/second" {
+		t.Fatalf("got popup:\n%s\nfor repository %q, want a push of second", popup, m.repository.Dir)
+	}
+	if m.popup.kind != noPopup || m.footer.text != "pushed to origin/main" || cmd == nil {
+		t.Fatalf("got popup %d, footer %q, command %v, want it closed and the row reloading", m.popup.kind,
+			m.footer.text, cmd)
+	}
+}
+
+func aBranchWithNoUpstreamIsPublished(t *testing.T) {
+	m := update(t, overviewWithTwoRepositories(t), overviewMsg{rows: []overviewRow{repositoryRow{
+		FoundRepository:   foundAt("second", "C:/dev/second"),
+		status:            gitrepo.Status{Branch: "feature", HasCommits: true},
+		commitsOnNoRemote: 2,
+	}}, failures: []string{}})
+	screen := ansi.Strip(m.renderScreen())
+
+	m = update(t, m, tea.KeyPressMsg{Code: 'P', Text: "P"})
+
+	popup := ansi.Strip(m.renderConfirmPopup())
+	if !strings.Contains(screen, "↑2 no upstream") || !strings.Contains(popup, "publish feature to origin") ||
+		!strings.Contains(popup, "2 commits") {
+		t.Fatalf("got screen:\n%s\npopup:\n%s\nwant the unpushed commits shown and offered", screen, popup)
+	}
+}
+
 func TestMayBeFinished(t *testing.T) {
 	changed := []gitrepo.FileStatus{{Path: "a.go", IndexStatus: ' ', WorktreeStatus: 'M'}}
 	for name, test := range map[string]struct {

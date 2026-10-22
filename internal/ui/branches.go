@@ -169,7 +169,7 @@ func (m Model) openDeleteBranchPopup() Model {
 	case row.branch.Name == localBranch(m.branches.defaultBranch):
 		return m.withFooterError(name + " is the default branch, which perusal never deletes")
 	}
-	return m.withConfirmation(confirmation{
+	return m.withConfirmation(m.repository.Dir, confirmation{
 		lines: []string{
 			titleStyle.Render("delete " + sanitizeText(row.branch.Name)),
 			renderMergedDeleteTarget(row, m.branches.defaultBranch),

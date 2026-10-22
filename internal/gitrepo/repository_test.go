@@ -24,6 +24,28 @@ func TestPush(t *testing.T) {
 	t.Run("sendsTheBranchToItsUpstream", sendsTheBranchToItsUpstream)
 }
 
+func TestPublishSendsANewBranchToOriginAndTracksIt(t *testing.T) {
+	_, clone := pushedClone(t)
+	runSteps(t, clone, [][]string{
+		{"-C", clone, "switch", "--create", "feature"},
+		{"-C", clone, "commit", "--allow-empty", "--message", "One"},
+		{"-C", clone, "commit", "--allow-empty", "--message", "Two"},
+	})
+	repository := Repository{Dir: clone}
+
+	before, beforeErr := repository.CommitsOnNoRemote(context.Background())
+	publishErr := repository.Publish(context.Background(), "feature")
+	after, afterErr := repository.CommitsOnNoRemote(context.Background())
+	status, statusErr := repository.Status(context.Background())
+
+	if beforeErr != nil || publishErr != nil || afterErr != nil || statusErr != nil || before != 2 || after != 0 ||
+		status.Upstream != "origin/feature" || status.Ahead != 0 {
+		t.Fatalf("got %d then %d on no remote (%v, %v), publish %v, upstream %q ahead %d (%v), "+
+			"want 2 then 0 and origin/feature even", before, after, beforeErr, afterErr, publishErr, status.Upstream,
+			status.Ahead, statusErr)
+	}
+}
+
 func TestStatus(t *testing.T) {
 	t.Run("leavesTheIndexUnwritten", leavesTheIndexUnwritten)
 }

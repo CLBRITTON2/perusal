@@ -47,6 +47,7 @@ perusal -repo <dir>  # review the repository <dir> is in
 | `b` | anywhere | list the local branches, `enter` switches to one, `D` deletes one after a confirm |
 | `o` | anywhere | in follow mode, open the overview of every repository under `ownerDir` |
 | `p` | overview | fast-forward the selected repository to its upstream, or a finished branch to the default one |
+| `P` | overview | push the selected repository, or publish a branch with no upstream to `origin` |
 | `enter` | log | expand the commit into its files |
 | `/` | log | search, `enter` keeps it, `esc` clears it |
 | `?` | anywhere | list every key, `?` or `esc` closes it |
@@ -99,10 +100,12 @@ working in, and switches as the agent moves between them. It reads
 The overview (`o`) lists every repository under `ownerDir` with its branch, its uncommitted file count, how far it is
 ahead of and behind its upstream, and how far it is behind `origin`'s default branch. The repositories the focus file
 names come first, marked `●`. One that fails a check below is listed muted, and `enter` on it shows why. `enter`
-reviews the selected one, `p` pulls it (fast-forward only, from its upstream rather than the default branch), and
-`esc` goes back. A branch is finished when it is clean, `origin`'s default branch holds all its commits, and it has
-no upstream or the remote deleted it. `p` then switches to the default branch and pulls that. A repository opened this
-way stays open until the focus file starts with a different repository or no longer names it.
+reviews the selected one, `p` pulls it (fast-forward only, from its upstream rather than the default branch), `P`
+pushes it, and `esc` goes back. A branch is finished when it is clean, `origin`'s default branch holds all its commits,
+and it has no upstream or the remote deleted it. `p` then switches to the default branch and pulls that. A branch with
+no upstream shows `↑N no upstream`, the commits no remote-tracking branch holds, and `P` publishes it to the same name
+on `origin` and tracks it. A repository opened this way stays open until the focus file starts with a different
+repository or no longer names it.
 
 perusal runs git as you in a repository the agent chose, and git runs whatever that repository's `.git` tells it to:
 hooks, and config such as `core.fsmonitor`, `core.hooksPath` or `core.sshCommand` that names a program. An agent
