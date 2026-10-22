@@ -1,6 +1,8 @@
 package ui
 
 import (
+	"slices"
+
 	"charm.land/bubbles/v2/key"
 )
 
@@ -25,6 +27,8 @@ var (
 	fullscreenKey     = key.NewBinding(key.WithKeys("d"), key.WithHelp("d", "fullscreen"))
 	wholeFileKey      = key.NewBinding(key.WithKeys("f"), key.WithHelp("f", "whole file"))
 	unifiedKey        = key.NewBinding(key.WithKeys("u"), key.WithHelp("u", "unified"))
+	nextChangeKey     = key.NewBinding(key.WithKeys("n"), key.WithHelp("n/N", "next change"))
+	previousChangeKey = key.NewBinding(key.WithKeys("N"))
 	overviewKey       = key.NewBinding(key.WithKeys("o"), key.WithHelp("o", "overview"))
 	openRepositoryKey = key.NewBinding(key.WithKeys("enter"), key.WithHelp("enter", "open"))
 	pullKey           = key.NewBinding(key.WithKeys("p"), key.WithHelp("p", "pull"))
@@ -44,15 +48,22 @@ var (
 	searchKey         = key.NewBinding(key.WithKeys("/"), key.WithHelp("/", "search"))
 	keepSearchKey     = key.NewBinding(key.WithKeys("enter"), key.WithHelp("enter", "keep"))
 	clearSearchKey    = key.NewBinding(key.WithKeys("esc"), key.WithHelp("esc", "clear"))
+	keyListKey        = key.NewBinding(key.WithKeys("?"), key.WithHelp("?", "all keys"))
+	closeKeyListKey   = key.NewBinding(key.WithKeys("esc", "?"), key.WithHelp("esc", "close"))
 )
 
 var (
-	reviewHelp = []key.Binding{commitKey, pushKey, switchViewKey, scrollDownKey, fullscreenKey, wholeFileKey, unifiedKey,
-		branchesKey, overviewKey, quitKey}
-	changesHelp  = append([]key.Binding{downKey, stageKey, stageAllKey, discardKey}, reviewHelp...)
-	logHelp      = append([]key.Binding{downKey, expandKey, searchKey, amendKey}, reviewHelp...)
+	changesKeys = []key.Binding{downKey, stageKey, stageAllKey, discardKey}
+	logKeys     = []key.Binding{downKey, expandKey, searchKey, amendKey}
+	diffKeys    = []key.Binding{scrollDownKey, nextChangeKey, fullscreenKey, wholeFileKey, unifiedKey}
+	reviewKeys  = []key.Binding{commitKey, pushKey, switchViewKey, branchesKey, overviewKey, quitKey}
+	// Not every key fits one line, so the footer leaves the rest to the key list.
+	reviewHelp   = []key.Binding{commitKey, pushKey, switchViewKey, keyListKey, quitKey}
+	changesHelp  = slices.Concat(changesKeys, reviewHelp)
+	logHelp      = slices.Concat(logKeys, reviewHelp)
 	overviewHelp = []key.Binding{downKey, openRepositoryKey, pullKey, closeOverviewKey, quitKey}
 	branchesHelp = []key.Binding{downKey, switchBranchKey, deleteBranchKey, closeBranchesKey, quitKey}
 	searchHelp   = []key.Binding{keepSearchKey, clearSearchKey}
 	commitHelp   = []key.Binding{nextFieldKey, submitKey, cancelKey}
+	keyListHelp  = []key.Binding{closeKeyListKey}
 )

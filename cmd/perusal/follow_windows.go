@@ -13,7 +13,7 @@ import (
 	"github.com/CLBRITTON2/perusal/internal/ui"
 )
 
-const followUsage = "  perusal follow                  review whichever working tree the agent's focused herdr pane is in\n"
+const followUsage = "  perusal follow                  review the repositories the agent's focus file names\n"
 
 func runFollow(args []string) error {
 	configPath, err := followConfigPath()
@@ -23,7 +23,7 @@ func runFollow(args []string) error {
 	flags := flag.NewFlagSet("perusal follow", flag.ContinueOnError)
 	flags.Usage = func() {
 		fmt.Fprint(flags.Output(), "usage: perusal follow\n\n"+
-			"Reviews whichever working tree the agent's focused herdr pane is in, as set up in "+configPath+".\n")
+			"Reviews the repositories the agent's focus file names, as set up in "+configPath+".\n")
 	}
 	if err := flags.Parse(args); err != nil {
 		return fmt.Errorf("parse flags: %w", err)

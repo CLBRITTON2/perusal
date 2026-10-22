@@ -1,4 +1,4 @@
-// Package focus maps the agent's focused herdr pane to the repositories the owner can safely run git in.
+// Package focus maps the agent's focus file to the repositories the owner can safely run git in.
 package focus
 
 import (

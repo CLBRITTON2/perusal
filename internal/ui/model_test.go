@@ -24,6 +24,7 @@ func TestFocusSwitch(t *testing.T) {
 	t.Run("opensTheFirstFocusedRepositoryWithUncommittedChanges", opensTheFirstFocusedRepositoryWithUncommittedChanges)
 	t.Run("aFocusThatStillNamesTheReviewedRepositoryKeepsItAndShowsTheRefusals",
 		aFocusThatStillNamesTheReviewedRepositoryKeepsItAndShowsTheRefusals)
+	t.Run("aFocusWithADifferentFirstRepositoryPicksAgain", aFocusWithADifferentFirstRepositoryPicksAgain)
 }
 
 func TestTheOverviewListsTheFocusedRepositoriesFirstAndMarksThem(t *testing.T) {
@@ -61,12 +62,25 @@ func aFocusThatStillNamesTheReviewedRepositoryKeepsItAndShowsTheRefusals(t *test
 	m := focusOnSeveral(t, map[string]bool{"C:/dev/cwd": false, "C:/dev/first": true, "C:/dev/second": false})
 
 	m = update(t, m, focus.Focus{
-		Repositories: []gitrepo.Repository{{Dir: "C:/dev/other"}, {Dir: "C:/dev/first"}},
+		Repositories: []gitrepo.Repository{{Dir: "C:/dev/cwd"}, {Dir: "C:/dev/other"}, {Dir: "C:/dev/first"}},
 		Refusals:     []error{errors.New("C:/dev/notes: no .git")},
 	})
 
 	if m.repository.Dir != "C:/dev/first" || !m.footer.isError || !strings.Contains(m.footer.text, "C:/dev/notes: no .git") {
 		t.Fatalf("got %s, footer %q, want C:/dev/first and the refusal", m.repository.Dir, m.footer.text)
+	}
+}
+
+func aFocusWithADifferentFirstRepositoryPicksAgain(t *testing.T) {
+	m := focusOnSeveral(t, map[string]bool{"C:/dev/cwd": false, "C:/dev/first": true, "C:/dev/second": false})
+	focused := []gitrepo.Repository{{Dir: "C:/dev/other"}, {Dir: "C:/dev/first"}}
+
+	m = update(t, m, focus.Focus{Repositories: focused, Refusals: []error{}})
+	uncommitted := map[string]bool{"C:/dev/other": true, "C:/dev/first": true}
+	m = update(t, m, uncommittedMsg{focused: focused, uncommitted: uncommitted})
+
+	if m.repository.Dir != "C:/dev/other" {
+		t.Fatalf("got %s, want C:/dev/other", m.repository.Dir)
 	}
 }
 
@@ -282,6 +296,50 @@ func TestARewrapKeepsTheTopDiffLineOnScreen(t *testing.T) {
 
 	if afterUnified != 20 || afterResize != 20 || topLineNumber(m) != 20 {
 		t.Fatalf("got top lines %d, %d, %d, want line 20 throughout", afterUnified, afterResize, topLineNumber(m))
+	}
+}
+
+func TestNAndShiftNJumpBetweenChangesAndWrapAround(t *testing.T) {
+	hunk := contextHunk(1, 100, "line")
+	for _, number := range []int{30, 95, 96} {
+		hunk.Rows[number-1] = diff.Row{Old: diff.Line{Kind: diff.LineRemoved, Number: number, Text: "old"},
+			New: diff.Line{Kind: diff.LineAdded, Number: number, Text: "new"}}
+	}
+	m := reviewingRepository(t, gitrepo.Status{Files: twoFiles()})
+	m = update(t, m, tea.WindowSizeMsg{Width: 120, Height: 16})
+	m = update(t, m, diffMsg{dir: "C:/dev/repo", path: "a.go", contextLines: hunkContext,
+		fileDiff: diff.FileDiff{Hunks: []diff.Hunk{hunk}}})
+
+	got := []int{}
+	for _, press := range []tea.KeyPressMsg{{Code: 'n', Text: "n"}, {Code: 'n', Text: "n"}, {Code: 'n', Text: "n"},
+		{Code: 'N', Text: "N"}, {Code: 'N', Text: "N"}} {
+		m = update(t, m, press)
+		got = append(got, topLineNumber(m))
+	}
+
+	if !reflect.DeepEqual(got, []int{27, 89, 27, 89, 27}) {
+		t.Fatalf("got top lines %v, want 27, 89, 27, 89, 27", got)
+	}
+}
+
+func TestTheFooterFitsAndQuestionMarkListsEveryKey(t *testing.T) {
+	m := reviewingRepository(t, gitrepo.Status{Files: twoFiles()})
+	footer := ansi.Strip(m.renderFooter())
+
+	m = update(t, m, tea.KeyPressMsg{Code: '?', Text: "?"})
+	keyList := ansi.Strip(m.renderKeyListPopup())
+	m = update(t, m, tea.KeyPressMsg{Code: tea.KeyEscape})
+
+	if strings.Contains(footer, "…") || !strings.Contains(footer, "? all keys") {
+		t.Fatalf("got footer %q, want it whole with ? all keys", footer)
+	}
+	for _, want := range []string{"discard", "next change", "unified", "overview", "quit"} {
+		if !strings.Contains(keyList, want) {
+			t.Fatalf("got key list:\n%s\nwant the key list to hold %q", keyList, want)
+		}
+	}
+	if m.popup.kind != noPopup {
+		t.Fatalf("got popup %d after esc, want none", m.popup.kind)
 	}
 }
 

@@ -24,8 +24,9 @@ const columnSeparator = "│"
 type diffLayout func(hunk diff.Hunk, numberWidth int, width int) []renderedLine
 
 type renderedLine struct {
-	text   string
-	source sourceLine
+	text    string
+	source  sourceLine
+	changed bool
 }
 
 // sourceLine holds the file line numbers a rendered line shows, zero for a side it does not show, and the index of
@@ -71,6 +72,46 @@ func firstReaching(lines []renderedLine, anchor sourceLine) int {
 	return index
 }
 
+// nextChangeOffset wraps from the last change to the first.
+func nextChangeOffset(lines []renderedLine, offset int, maxOffset int) int {
+	offsets := changeOffsets(lines, maxOffset)
+	if len(offsets) == 0 {
+		return offset
+	}
+	for _, changeOffset := range offsets {
+		if changeOffset > offset {
+			return changeOffset
+		}
+	}
+	return offsets[0]
+}
+
+// previousChangeOffset wraps from the first change to the last.
+func previousChangeOffset(lines []renderedLine, offset int, maxOffset int) int {
+	offsets := changeOffsets(lines, maxOffset)
+	if len(offsets) == 0 {
+		return offset
+	}
+	for index := len(offsets) - 1; index >= 0; index-- {
+		if offsets[index] < offset {
+			return offsets[index]
+		}
+	}
+	return offsets[len(offsets)-1]
+}
+
+// changeOffsets returns the offset that shows each change hunkContext rows below the top, or as near as the offset
+// range allows, each once.
+func changeOffsets(lines []renderedLine, maxOffset int) []int {
+	offsets := []int{}
+	for index, line := range lines {
+		if line.changed && (index == 0 || !lines[index-1].changed) {
+			offsets = append(offsets, min(max(index-hunkContext, 0), maxOffset))
+		}
+	}
+	return slices.Compact(offsets)
+}
+
 func lineTexts(lines []renderedLine) []string {
 	texts := []string{}
 	for _, line := range lines {
@@ -79,10 +120,10 @@ func lineTexts(lines []renderedLine) []string {
 	return texts
 }
 
-func linesWithSource(texts []string, source sourceLine) []renderedLine {
+func linesWithSource(texts []string, source sourceLine, changed bool) []renderedLine {
 	lines := []renderedLine{}
 	for _, text := range texts {
-		lines = append(lines, renderedLine{text: text, source: source})
+		lines = append(lines, renderedLine{text: text, source: source, changed: changed})
 	}
 	return lines
 }
@@ -121,7 +162,8 @@ func renderSideBySide(hunk diff.Hunk, numberWidth int, width int) []renderedLine
 			lines = append(lines, renderedLine{
 				text: segmentOrFiller(left, index, row.Old.Kind, leftWidth) + separator +
 					segmentOrFiller(right, index, row.New.Kind, rightWidth),
-				source: sourceLine{oldNumber: row.Old.Number, newNumber: row.New.Number},
+				source:  sourceLine{oldNumber: row.Old.Number, newNumber: row.New.Number},
+				changed: row.Old.Kind != diff.LineContext,
 			})
 		}
 	}
@@ -152,7 +194,7 @@ func renderUnified(hunk diff.Hunk, numberWidth int, width int) []renderedLine {
 func renderUnifiedLine(shown diff.Line, oldSide diff.Line, newSide diff.Line, numberWidth int, width int) []renderedLine {
 	gutterText := numberOrBlank(oldSide, numberWidth) + " " + numberOrBlank(newSide, numberWidth) + " "
 	source := sourceLine{oldNumber: oldSide.Number, newNumber: newSide.Number}
-	return linesWithSource(wrapLine(shown, gutterText, width), source)
+	return linesWithSource(wrapLine(shown, gutterText, width), source, shown.Kind != diff.LineContext)
 }
 
 // renderOneSide lays out an added or deleted file, whose rows each have one side.
@@ -166,7 +208,7 @@ func renderOneSide(hunk diff.Hunk, numberWidth int, width int) []renderedLine {
 			shown = row.New
 		}
 		lines = append(lines, linesWithSource(wrapSide(shown, numberWidth, width),
-			sourceLine{oldNumber: row.Old.Number, newNumber: row.New.Number})...)
+			sourceLine{oldNumber: row.Old.Number, newNumber: row.New.Number}, shown.Kind != diff.LineContext)...)
 	}
 	return lines
 }
@@ -374,10 +416,11 @@ func renderCommit(commit gitrepo.Commit, sections []diff.FileSection, layout dif
 	if len(sections) == 0 {
 		texts = append(texts, "", mutedStyle.Render("no file changes"))
 	}
-	lines := linesWithSource(texts, sourceLine{})
+	lines := linesWithSource(texts, sourceLine{}, false)
 	for index, section := range sections {
 		header := []string{"", fileHeaderStyle.Render(fitToWidth(" "+sanitizeText(section.Path), width))}
-		sectionLines := append(linesWithSource(header, sourceLine{}), renderFileDiff(section.FileDiff, layout, width)...)
+		sectionLines := append(linesWithSource(header, sourceLine{}, false),
+			renderFileDiff(section.FileDiff, layout, width)...)
 		for _, line := range sectionLines {
 			line.source.section = index
 			lines = append(lines, line)

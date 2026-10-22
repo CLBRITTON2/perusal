@@ -60,6 +60,7 @@ const (
 	noPopup popupKind = iota
 	commitPopup
 	confirmPopup
+	keyListPopup
 )
 
 // confirmation is a confirm popup's text and the git run its confirmKey starts, both fixed when the popup opens.
@@ -158,6 +159,9 @@ func New(findRepositories RepositoryFinder) Model {
 	helpView.Styles.ShortDesc = helpDescStyle
 	helpView.Styles.ShortSeparator = helpSepStyle
 	helpView.Styles.Ellipsis = helpSepStyle
+	helpView.Styles.FullKey = helpKeyStyle
+	helpView.Styles.FullDesc = helpDescStyle
+	helpView.Styles.FullSeparator = helpSepStyle
 	return Model{
 		findRepositories:   findRepositories,
 		overview:           selectableList[overviewRow]{rows: []overviewRow{}},
@@ -305,6 +309,8 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m.updateCommitBox(msg)
 		case m.popup.kind == confirmPopup:
 			return m.updateConfirmPopup(msg)
+		case m.popup.kind == keyListPopup:
+			return m.updateKeyList(msg)
 		case m.mode == modeOverview:
 			return m.updateOverview(msg)
 		case m.mode == modeBranches:
@@ -388,6 +394,15 @@ func (m Model) updateBrowsing(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		return m, nil
 	case key.Matches(msg, scrollUpKey):
 		m.diffView.HalfPageUp()
+		return m, nil
+	case key.Matches(msg, keyListKey):
+		m.popup = popupState{kind: keyListPopup}
+		return m, nil
+	case key.Matches(msg, nextChangeKey):
+		m.diffView.SetYOffset(nextChangeOffset(m.diffLines(), m.diffView.YOffset(), m.maxDiffOffset()))
+		return m, nil
+	case key.Matches(msg, previousChangeKey):
+		m.diffView.SetYOffset(previousChangeOffset(m.diffLines(), m.diffView.YOffset(), m.maxDiffOffset()))
 		return m, nil
 	case key.Matches(msg, switchViewKey):
 		return m.switchView()
@@ -482,7 +497,8 @@ func modeAfterSwitch(mode screenMode) screenMode {
 
 // A focus that still names the repository under review keeps it, so a new edit elsewhere never pulls the review away.
 func (m Model) withFocus(msg focus.Focus) (tea.Model, tea.Cmd) {
-	if m.rejection == "" && slices.Contains(msg.Repositories, m.repository) {
+	if m.rejection == "" && hasSameFirstRepository(m.focused, msg.Repositories) &&
+		slices.Contains(msg.Repositories, m.repository) {
 		m.focused = msg.Repositories
 		return m.withRefusals(msg.Refusals), nil
 	}
@@ -492,6 +508,11 @@ func (m Model) withFocus(msg focus.Focus) (tea.Model, tea.Cmd) {
 		return next.withRefusals(msg.Refusals).withFocusedRepository(next.focused[0])
 	}
 	return next.withRefusals(msg.Refusals), next.loadUncommitted()
+}
+
+// The focus file starts with the focused pane's directory, so a different first repository means a different pane.
+func hasSameFirstRepository(previous []gitrepo.Repository, next []gitrepo.Repository) bool {
+	return len(previous) > 0 && len(next) > 0 && previous[0] == next[0]
 }
 
 func (m Model) withRefusals(refusals []error) Model {
@@ -687,6 +708,13 @@ func discardEffect(file gitrepo.FileStatus) string {
 		return "deletes it"
 	}
 	return "puts it back to HEAD, staged and unstaged changes alike"
+}
+
+func (m Model) updateKeyList(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
+	if key.Matches(msg, closeKeyListKey) {
+		return m.withPopupClosed(), nil
+	}
+	return m, nil
 }
 
 func (m Model) updateConfirmPopup(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
@@ -978,6 +1006,13 @@ func (m Model) withDiffKeptInPlace(previous []renderedLine) Model {
 	return m
 }
 
+// viewport keeps its maximum offset unexported, so this reads it off a copy scrolled to the bottom.
+func (m Model) maxDiffOffset() int {
+	bottom := m.diffView
+	bottom.GotoBottom()
+	return bottom.YOffset()
+}
+
 func (m Model) diffLines() []renderedLine {
 	width := m.diffInnerWidth()
 	sections, loaded := m.selectedCommitDiff()
@@ -1082,6 +1117,8 @@ func (m Model) View() tea.View {
 		view = tea.NewView(m.overlayPopup(m.renderScreen(), m.renderCommitPopup()))
 	case m.popup.kind == confirmPopup:
 		view = tea.NewView(m.overlayPopup(m.renderScreen(), m.renderConfirmPopup()))
+	case m.popup.kind == keyListPopup:
+		view = tea.NewView(m.overlayPopup(m.renderScreen(), m.renderKeyListPopup()))
 	default:
 		view = tea.NewView(m.renderScreen())
 	}
@@ -1385,6 +1422,18 @@ func (m Model) renderConfirmPopup() string {
 	confirmation := m.popup.confirmation
 	return m.renderPopup(confirmation.lines, confirmation.runningText,
 		[]key.Binding{confirmation.confirmKey, cancelKey})
+}
+
+func (m Model) renderKeyListPopup() string {
+	var listKeys []key.Binding
+	if m.view == viewLog {
+		listKeys = logKeys
+	} else {
+		listKeys = changesKeys
+	}
+	columns := m.help.FullHelpView([][]key.Binding{listKeys, diffKeys, reviewKeys})
+	return m.renderPopup(append([]string{titleStyle.Render("keys"), ""}, strings.Split(columns, "\n")...), "",
+		keyListHelp)
 }
 
 func (m Model) renderPopup(lines []string, runningText string, bindings []key.Binding) string {

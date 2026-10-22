@@ -39,6 +39,7 @@ perusal -repo <dir>  # review the repository <dir> is in
 | `d` | anywhere | show the diff fullscreen, `d` again brings the lists back |
 | `f` | anywhere | show the whole file around the changes, `f` again shows only the changed parts |
 | `u` | anywhere | show the diff unified, removed lines above added ones, `u` again shows it side by side |
+| `n` `N` | anywhere | jump the diff to the next or previous change, wrapping around at either end |
 | `c` | anywhere | open the commit popup |
 | `P` | anywhere | open the push popup |
 | `A` | log | amend the selected commit with the staged changes |
@@ -47,6 +48,7 @@ perusal -repo <dir>  # review the repository <dir> is in
 | `p` | overview | fast-forward the selected repository to its upstream, or a finished branch to the default one |
 | `enter` | log | expand the commit into its files |
 | `/` | log | search, `enter` keeps it, `esc` clears it |
+| `?` | anywhere | list every key, `?` or `esc` closes it |
 | `q` | anywhere | quit |
 
 In the commit popup, `tab` switches between summary and description, `enter` commits from the summary, `ctrl+enter`
@@ -83,9 +85,10 @@ working in, and switches as the agent moves between them. It reads
 
 - `agentAccount` is the Windows account the agent runs as.
 - `focusFile` holds one absolute path per line, the directories the agent is working in, and is rewritten whenever
-  they change. Something on the agent side has to write it, such as a herdr plugin. perusal opens the first
-  repository with uncommitted changes, or the first one when all are clean. A new list that still names the
-  repository under review keeps it open, and a path that fails a check below is shown in the footer.
+  they change. Something on the agent side has to write it, such as a herdr plugin, and its first line is where the
+  agent's focused session works, such as its pane's directory. perusal opens the first repository with uncommitted
+  changes, or the first one when all are clean. A new list that starts with the same repository and still names the
+  one under review keeps it open, and a path that fails a check below is shown in the footer.
 - `agentDir` and `ownerDir` are one directory as the agent and you reach it. perusal maps a path under `agentDir`
   to the same path under `ownerDir`, and refuses anything outside it.
 
@@ -95,12 +98,24 @@ names come first, marked `●`. One that fails a check below is listed muted, an
 reviews the selected one, `p` pulls it (fast-forward only, from its upstream rather than the default branch), and
 `esc` goes back. A branch is finished when it is clean, `origin`'s default branch holds all its commits, and it has
 no upstream or the remote deleted it. `p` then switches to the default branch and pulls that. A repository opened this
-way stays open until the focus file changes to a list that does not name it.
+way stays open until the focus file starts with a different repository or no longer names it.
 
-perusal runs git as you in a repository the agent chose, and git runs that repository's hooks and config. So every
-`.git` under `ownerDir` needs an inherited deny of `(OI)(CI)(WD,AD,WEA,WA,DE,DC)` for the agent account, and perusal
-refuses any `.git` the agent owns or that lacks the deny, since a planted hook would otherwise run as you. For the
-same reason the agent account must not be able to write your `%APPDATA%`.
+perusal runs git as you in a repository the agent chose, and git runs whatever that repository's `.git` tells it to:
+hooks, and config such as `core.fsmonitor`, `core.hooksPath` or `core.sshCommand` that names a program. An agent
+that can write `.git` could plant one and have git run it as you. So perusal refuses any `.git` the agent account
+owns, or that lacks a deny of `(OI)(CI)(WD,AD,WEA,WA,DE,DC)` for it. For the same reason the agent account must not
+be able to write your `%APPDATA%`, where the config lives.
+
+From an elevated prompt, for each repository under `ownerDir`, take ownership if the agent cloned it, then add the
+deny:
+
+```
+icacls C:\Users\you\dev\repo\.git /setowner you /T
+icacls C:\Users\you\dev\repo\.git /deny "claude:(OI)(CI)(WD,AD,WEA,WA,DE,DC)"
+```
+
+The deny lists the write bits one by one because `(W)` includes `SYNCHRONIZE`, which every open requests, so it would
+block reads too and git would no longer see the repository.
 
 ## License
 

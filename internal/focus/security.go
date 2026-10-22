@@ -12,7 +12,7 @@ import (
 
 const fileDeleteChild = 0x40 // x/sys/windows lacks FILE_DELETE_CHILD
 
-// The bits setup-claude.ps1 in windows-dev denies on every .git: icacls (OI)(CI)(WD,AD,WEA,WA,DE,DC).
+// The bits every .git must deny the agent account: icacls (OI)(CI)(WD,AD,WEA,WA,DE,DC).
 const (
 	deniedWriteMask = windows.FILE_WRITE_DATA | windows.FILE_APPEND_DATA | windows.FILE_WRITE_EA |
 		windows.FILE_WRITE_ATTRIBUTES | windows.DELETE | fileDeleteChild
@@ -56,8 +56,8 @@ func verifyGitDir(gitDir string, agent *windows.SID) error {
 			return nil
 		}
 	}
-	return fmt.Errorf("%w: %s has no (OI)(CI)(WD,AD,WEA,WA,DE,DC) deny for %s, rerun setup-claude.ps1",
-		ErrGitDirUnprotected, gitDir, agent)
+	return fmt.Errorf("%w: %s has no (OI)(CI)(WD,AD,WEA,WA,DE,DC) deny for %s, "+
+		"add it as the README's Follow mode section shows", ErrGitDirUnprotected, gitDir, agent)
 }
 
 func deniesAgentWrites(ace *windows.ACCESS_ALLOWED_ACE, agent *windows.SID) bool {
