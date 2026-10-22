@@ -11,24 +11,27 @@ import (
 	"github.com/CLBRITTON2/perusal/internal/diff"
 )
 
-var style = styles.Get("rose-pine")
+var chromaStyle = styles.Get("rose-pine")
 
 // FileDiff colors the tokens of every line with the lexer path's file name matches, and returns fileDiff as it is
 // when none does. Each hunk's old and new side are lexed as one block, so a token can span lines.
 func FileDiff(path string, fileDiff diff.FileDiff) (diff.FileDiff, error) {
-	lexer := lexers.Match(path)
-	if lexer == nil || fileDiff.Binary {
+	matched := lexers.Match(path)
+	if matched == nil || fileDiff.Binary {
 		return fileDiff, nil
 	}
+	lexer := chroma.Coalesce(matched)
 	hunks := []diff.Hunk{}
 	for _, hunk := range fileDiff.Hunks {
-		colored, err := hunkTokens(chroma.Coalesce(lexer), hunk)
+		colored, err := hunkTokens(lexer, hunk)
 		if err != nil {
 			return diff.FileDiff{}, fmt.Errorf("highlight %s as %s: %w", path, lexer.Config().Name, err)
 		}
 		hunks = append(hunks, colored)
 	}
-	return diff.FileDiff{Hunks: hunks, Binary: fileDiff.Binary, Change: fileDiff.Change}, nil
+	colored := fileDiff
+	colored.Hunks = hunks
+	return colored, nil
 }
 
 func hunkTokens(lexer chroma.Lexer, hunk diff.Hunk) (diff.Hunk, error) {
@@ -45,30 +48,32 @@ func hunkTokens(lexer chroma.Lexer, hunk diff.Hunk) (diff.Hunk, error) {
 	newIndex := 0
 	for _, row := range hunk.Rows {
 		var left diff.Line
-		if row.Left.Kind == diff.LineBlank {
-			left = row.Left
+		if row.Old.Kind == diff.LineBlank {
+			left = row.Old
 		} else {
-			left = withTokens(row.Left, oldTokens[oldIndex])
+			left = withTokens(row.Old, oldTokens[oldIndex])
 			oldIndex++
 		}
 		var right diff.Line
-		if row.Right.Kind == diff.LineBlank {
-			right = row.Right
+		if row.New.Kind == diff.LineBlank {
+			right = row.New
 		} else {
-			right = withTokens(row.Right, newTokens[newIndex])
+			right = withTokens(row.New, newTokens[newIndex])
 			newIndex++
 		}
-		rows = append(rows, diff.Row{Left: left, Right: right})
+		rows = append(rows, diff.Row{Old: left, New: right})
 	}
-	return diff.Hunk{Header: hunk.Header, Rows: rows}, nil
+	colored := hunk
+	colored.Rows = rows
+	return colored, nil
 }
 
 func oldLine(row diff.Row) diff.Line {
-	return row.Left
+	return row.Old
 }
 
 func newLine(row diff.Row) diff.Line {
-	return row.Right
+	return row.New
 }
 
 func sideTexts(rows []diff.Row, side func(diff.Row) diff.Line) []string {
@@ -82,11 +87,12 @@ func sideTexts(rows []diff.Row, side func(diff.Row) diff.Line) []string {
 }
 
 func withTokens(line diff.Line, tokens []diff.Token) diff.Line {
-	return diff.Line{Kind: line.Kind, Number: line.Number, Text: line.Text, Changed: line.Changed, Tokens: tokens}
+	colored := line
+	colored.Tokens = tokens
+	return colored
 }
 
-// sideTokens returns one token list per text. A token in the style's plain text color is left out, so the line
-// keeps the foreground of its kind.
+// A token in the style's plain text color is left out, so the line keeps the foreground of its kind.
 func sideTokens(lexer chroma.Lexer, texts []string) ([][]diff.Token, error) {
 	tokens := make([][]diff.Token, len(texts))
 	if len(texts) == 0 {
@@ -97,26 +103,27 @@ func sideTokens(lexer chroma.Lexer, texts []string) ([][]diff.Token, error) {
 	if err != nil {
 		return nil, fmt.Errorf("tokenise: %w", err)
 	}
-	plain := style.Get(chroma.Text).Colour
-	line := 0
+	plain := chromaStyle.Get(chroma.Text).Colour
+	textIndex := 0
 	offset := 0
 	for _, token := range iterator.Tokens() {
-		colour := style.Get(token.Type).Colour
+		color := chromaStyle.Get(token.Type).Colour
 		for index, piece := range strings.Split(token.Value, "\n") {
 			if index > 0 {
-				line++
+				textIndex++
 				offset = 0
 			}
 			if piece == "" {
 				continue
 			}
-			if line >= len(texts) || offset+len(piece) > len(texts[line]) || texts[line][offset:offset+len(piece)] != piece {
-				return nil, fmt.Errorf("token %q does not match line %d at byte %d", piece, line+1, offset)
+			if textIndex >= len(texts) || offset+len(piece) > len(texts[textIndex]) ||
+				texts[textIndex][offset:offset+len(piece)] != piece {
+				return nil, fmt.Errorf("token %q does not match line %d at byte %d", piece, textIndex+1, offset)
 			}
-			if colour.IsSet() && colour != plain {
-				tokens[line] = append(tokens[line], diff.Token{
+			if color.IsSet() && color != plain {
+				tokens[textIndex] = append(tokens[textIndex], diff.Token{
 					Span:  diff.Span{Start: offset, End: offset + len(piece)},
-					Color: colour.String(),
+					Color: color.String(),
 				})
 			}
 			offset += len(piece)

@@ -82,7 +82,7 @@ func sendsTheBranchToItsUpstream(t *testing.T) {
 
 func TestStagedLineCounts(t *testing.T) {
 	t.Run("countsOnlyTheStagedChanges", countsOnlyTheStagedChanges)
-	t.Run("countsAnUnbornBranch", countsAnUnbornBranch)
+	t.Run("countsTheStagedLinesOnAnUnbornBranch", countsTheStagedLinesOnAnUnbornBranch)
 }
 
 func countsOnlyTheStagedChanges(t *testing.T) {
@@ -106,7 +106,7 @@ func countsOnlyTheStagedChanges(t *testing.T) {
 	}
 }
 
-func countsAnUnbornBranch(t *testing.T) {
+func countsTheStagedLinesOnAnUnbornBranch(t *testing.T) {
 	useTestIdentity(t)
 	work := t.TempDir()
 	runSteps(t, work, [][]string{{"init", "--initial-branch=main", work}})
@@ -208,7 +208,7 @@ func keepsASeparatorInsideTheMessage(t *testing.T) {
 	parent := strings.Repeat("b", 40)
 	output := []byte(hash + "\x1faaaaaaa\x1f" + parent + "\x1fHEAD -> master, tag: v1\x1fAda\x1f1700000000\x1fFix it\n\nbody \x1f text\n\x00")
 
-	commits, err := ParseLog(output)
+	commits, err := parseLog(output)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -221,7 +221,7 @@ func keepsASeparatorInsideTheMessage(t *testing.T) {
 }
 
 func rejectsARecordWithoutAFullHash(t *testing.T) {
-	_, err := ParseLog([]byte("--output=x\x1fa\x1f\x1f\x1fAda\x1f1700000000\x1fFix\x00"))
+	_, err := parseLog([]byte("--output=x\x1fa\x1f\x1f\x1fAda\x1f1700000000\x1fFix\x00"))
 
 	if err == nil {
 		t.Fatal("got no error for a record whose hash is not a full commit hash")
@@ -229,7 +229,7 @@ func rejectsARecordWithoutAFullHash(t *testing.T) {
 }
 
 func rejectsAParentThatIsNotAFullHash(t *testing.T) {
-	_, err := ParseLog([]byte(strings.Repeat("a", 40) + "\x1faaaaaaa\x1f--all\x1f\x1fAda\x1f1700000000\x1fFix\x00"))
+	_, err := parseLog([]byte(strings.Repeat("a", 40) + "\x1faaaaaaa\x1f--all\x1f\x1fAda\x1f1700000000\x1fFix\x00"))
 
 	if err == nil {
 		t.Fatal("got no error for a parent that is not a full commit hash")
@@ -310,8 +310,6 @@ func discardAllKeepsIgnoredFiles(t *testing.T) {
 	}
 }
 
-// A staged edit, a staged rename, an untracked file in an untracked directory, a second untracked file, and an
-// ignored one.
 func changedWorkTree(t *testing.T) string {
 	t.Helper()
 	work := repositoryWithHistory(t, []string{"1"})
@@ -356,7 +354,6 @@ func refusesADivergedBranch(t *testing.T) {
 	}
 }
 
-// other has pushed a commit work has not fetched.
 func cloneBehindOther(t *testing.T) (string, string) {
 	t.Helper()
 	remote, work := pushedClone(t)
@@ -418,8 +415,6 @@ func switchesToTheDefaultBranchCreatedFromOriginsSoPullFastForwardsIt(t *testing
 	}
 }
 
-// work is on feature, which origin's main took before feature was deleted there, and has no local main. other then
-// pushed onto main.
 func mergedAndDeletedOnTheRemote(t *testing.T) (string, string) {
 	t.Helper()
 	remote, work := pushedClone(t)
@@ -588,7 +583,6 @@ func refusesACommitWithAMergeAboveIt(t *testing.T) {
 	}
 }
 
-// One commit per content, each rewriting a.txt.
 func repositoryWithHistory(t *testing.T, contents []string) string {
 	t.Helper()
 	useTestIdentity(t)

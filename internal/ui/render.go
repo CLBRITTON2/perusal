@@ -47,11 +47,11 @@ func renderSideBySide(fileDiff diff.FileDiff, width int) []string {
 	for _, hunk := range fileDiff.Hunks {
 		lines = append(lines, hunkHeaderStyle.Render(fitToWidth(sanitizeText(hunk.Header), width)))
 		for _, row := range hunk.Rows {
-			left := wrapSide(row.Left, numberWidth, leftWidth)
-			right := wrapSide(row.Right, numberWidth, rightWidth)
+			left := wrapSide(row.Old, numberWidth, leftWidth)
+			right := wrapSide(row.New, numberWidth, rightWidth)
 			for index := 0; index < max(len(left), len(right)); index++ {
-				lines = append(lines, segmentOrFiller(left, index, row.Left.Kind, leftWidth)+separator+
-					segmentOrFiller(right, index, row.Right.Kind, rightWidth))
+				lines = append(lines, segmentOrFiller(left, index, row.Old.Kind, leftWidth)+separator+
+					segmentOrFiller(right, index, row.New.Kind, rightWidth))
 			}
 		}
 	}
@@ -67,15 +67,15 @@ func renderUnified(fileDiff diff.FileDiff, width int) []string {
 		lines = append(lines, hunkHeaderStyle.Render(fitToWidth(sanitizeText(hunk.Header), width)))
 		added := []string{}
 		for _, row := range hunk.Rows {
-			if row.Left.Kind == diff.LineContext {
-				lines = append(append(lines, added...), wrapLine(row.Right, unifiedGutter(row.Left, row.Right, numberWidth), width)...)
+			if row.Old.Kind == diff.LineContext {
+				lines = append(append(lines, added...), wrapLine(row.New, unifiedGutter(row.Old, row.New, numberWidth), width)...)
 				added = []string{}
 			}
-			if row.Left.Kind == diff.LineRemoved {
-				lines = append(lines, wrapLine(row.Left, unifiedGutter(row.Left, diff.Line{Kind: diff.LineBlank}, numberWidth), width)...)
+			if row.Old.Kind == diff.LineRemoved {
+				lines = append(lines, wrapLine(row.Old, unifiedGutter(row.Old, diff.Line{Kind: diff.LineBlank}, numberWidth), width)...)
 			}
-			if row.Right.Kind == diff.LineAdded {
-				added = append(added, wrapLine(row.Right, unifiedGutter(diff.Line{Kind: diff.LineBlank}, row.Right, numberWidth), width)...)
+			if row.New.Kind == diff.LineAdded {
+				added = append(added, wrapLine(row.New, unifiedGutter(diff.Line{Kind: diff.LineBlank}, row.New, numberWidth), width)...)
 			}
 		}
 		lines = append(lines, added...)
@@ -98,15 +98,15 @@ func renderOneSide(fileDiff diff.FileDiff, side func(diff.Row) diff.Line, width 
 }
 
 func oldLine(row diff.Row) diff.Line {
-	return row.Left
+	return row.Old
 }
 
 func newLine(row diff.Row) diff.Line {
-	return row.Right
+	return row.New
 }
 
-func unifiedGutter(before diff.Line, after diff.Line, numberWidth int) string {
-	return numberOrBlank(before, numberWidth) + " " + numberOrBlank(after, numberWidth) + " "
+func unifiedGutter(oldSide diff.Line, newSide diff.Line, numberWidth int) string {
+	return numberOrBlank(oldSide, numberWidth) + " " + numberOrBlank(newSide, numberWidth) + " "
 }
 
 func numberOrBlank(line diff.Line, numberWidth int) string {
@@ -120,28 +120,27 @@ func wrapSide(line diff.Line, numberWidth int, width int) []string {
 	return wrapLine(line, fmt.Sprintf("%*d ", numberWidth, line.Number), width)
 }
 
-// wrapLine renders line under width, with the gutter text on its first row and blank on the rest.
 func wrapLine(line diff.Line, gutterText string, width int) []string {
 	gutterWidth := len(gutterText)
 	if width <= gutterWidth || line.Kind == diff.LineBlank {
 		return []string{strings.Repeat(" ", max(width, 0))}
 	}
 	textWidth := width - gutterWidth
-	gutter, text := lineStyles(line.Kind)
+	gutterStyle, bodyStyle := lineStyles(line.Kind)
 	runs := lineRuns(line)
 	var joined strings.Builder
-	for _, piece := range runs {
-		joined.WriteString(piece.text)
+	for _, run := range runs {
+		joined.WriteString(run.text)
 	}
 	rendered := []string{}
-	for index, row := range wrapRows(joined.String(), textWidth) {
+	for index, segment := range wrapRows(joined.String(), textWidth) {
 		var rowGutter string
 		if index == 0 {
 			rowGutter = gutterText
 		} else {
 			rowGutter = strings.Repeat(" ", gutterWidth)
 		}
-		rendered = append(rendered, gutter.Render(rowGutter)+renderSegment(runs, row.Start, row.End, text,
+		rendered = append(rendered, gutterStyle.Render(rowGutter)+renderSegment(runs, segment, bodyStyle,
 			changedTextStyle(line.Kind), textWidth))
 	}
 	return rendered
@@ -197,7 +196,7 @@ func skipSpaces(text string, position int) int {
 	return len(text) - len(strings.TrimLeft(text[position:], " "))
 }
 
-type run struct {
+type styledRun struct {
 	text       string
 	color      string
 	emphasized bool
@@ -205,17 +204,17 @@ type run struct {
 
 // lineRuns cuts the line wherever a token or the Changed span starts or ends, and sanitizes each piece. sanitizeText
 // maps each rune on its own, so the pieces add up to the sanitized line.
-func lineRuns(line diff.Line) []run {
+func lineRuns(line diff.Line) []styledRun {
 	cuts := []int{0, len(line.Text), line.Changed.Start, line.Changed.End}
 	for _, token := range line.Tokens {
 		cuts = append(cuts, token.Span.Start, token.Span.End)
 	}
 	slices.Sort(cuts)
 	cuts = slices.Compact(cuts)
-	runs := []run{}
+	runs := []styledRun{}
 	for index := 1; index < len(cuts); index++ {
 		start := cuts[index-1]
-		runs = append(runs, run{
+		runs = append(runs, styledRun{
 			text:       sanitizeText(line.Text[start:cuts[index]]),
 			color:      tokenColor(line.Tokens, start),
 			emphasized: start >= line.Changed.Start && start < line.Changed.End,
@@ -233,49 +232,49 @@ func tokenColor(tokens []diff.Token, position int) string {
 	return ""
 }
 
-// start and end are a byte range of the runs joined, the segment being rendered.
-func renderSegment(runs []run, start int, end int, plain lipgloss.Style, emphasized lipgloss.Style, width int) string {
+// segment indexes the runs joined, not the line's Text.
+func renderSegment(runs []styledRun, segment diff.Span, plain lipgloss.Style, emphasized lipgloss.Style, width int) string {
 	var rendered strings.Builder
 	position := 0
-	for _, piece := range runs {
-		from := max(start-position, 0)
-		to := min(end-position, len(piece.text))
+	for _, run := range runs {
+		from := max(segment.Start-position, 0)
+		to := min(segment.End-position, len(run.text))
 		if from < to {
-			rendered.WriteString(runStyle(piece, plain, emphasized).Render(piece.text[from:to]))
+			rendered.WriteString(runStyle(run, plain, emphasized).Render(run.text[from:to]))
 		}
-		position += len(piece.text)
+		position += len(run.text)
 	}
 	padding := strings.Repeat(" ", max(width-ansi.StringWidth(rendered.String()), 0))
 	return rendered.String() + plain.Render(padding)
 }
 
-func runStyle(piece run, plain lipgloss.Style, emphasized lipgloss.Style) lipgloss.Style {
+func runStyle(run styledRun, plain lipgloss.Style, emphasized lipgloss.Style) lipgloss.Style {
 	var base lipgloss.Style
-	if piece.emphasized {
+	if run.emphasized {
 		base = emphasized
 	} else {
 		base = plain
 	}
-	if piece.color == "" {
+	if run.color == "" {
 		return base
 	}
-	return base.Foreground(lipgloss.Color(piece.color))
+	return base.Foreground(lipgloss.Color(run.color))
 }
 
 func segmentOrFiller(segments []string, index int, kind diff.LineKind, width int) string {
 	if index < len(segments) {
 		return segments[index]
 	}
-	_, text := lineStyles(kind)
-	return text.Render(strings.Repeat(" ", width))
+	_, bodyStyle := lineStyles(kind)
+	return bodyStyle.Render(strings.Repeat(" ", width))
 }
 
 func lineStyles(kind diff.LineKind) (lipgloss.Style, lipgloss.Style) {
 	switch kind {
 	case diff.LineRemoved:
-		return removedGutter, removedTextStyle
+		return removedGutterStyle, removedTextStyle
 	case diff.LineAdded:
-		return addedGutter, addedTextStyle
+		return addedGutterStyle, addedTextStyle
 	case diff.LineContext:
 		return mutedStyle, contextTextStyle
 	default:
@@ -298,7 +297,7 @@ func maxLineNumber(fileDiff diff.FileDiff) int {
 	highest := 0
 	for _, hunk := range fileDiff.Hunks {
 		for _, row := range hunk.Rows {
-			highest = max(highest, row.Left.Number, row.Right.Number)
+			highest = max(highest, row.Old.Number, row.New.Number)
 		}
 	}
 	return highest
@@ -326,18 +325,18 @@ func renderCommit(commit gitrepo.Commit, sections []diff.FileSection, layout dif
 	return lines
 }
 
-// Letters match git log --name-status.
 func renderTreeFileRow(section diff.FileSection, last bool, width int) string {
-	var branch string
+	var treeGlyph string
 	if last {
-		branch = "└ "
+		treeGlyph = "└ "
 	} else {
-		branch = "├ "
+		treeGlyph = "├ "
 	}
-	return fitToWidth(mutedStyle.Render(branch)+changeMark(section.FileDiff.Change)+" "+
+	return fitToWidth(mutedStyle.Render(treeGlyph)+changeMark(section.FileDiff.Change)+" "+
 		textStyle.Render(sanitizeText(section.Path)), width)
 }
 
+// Letters match git log --name-status.
 func changeMark(change diff.FileChange) string {
 	switch change {
 	case diff.FileAdded:
@@ -385,9 +384,9 @@ func fitToWidth(text string, width int) string {
 
 func fitLines(lines []string, width int, height int) []string {
 	fitted := []string{}
-	for i := 0; i < height; i++ {
-		if i < len(lines) {
-			fitted = append(fitted, fitToWidth(lines[i], width))
+	for index := 0; index < height; index++ {
+		if index < len(lines) {
+			fitted = append(fitted, fitToWidth(lines[index], width))
 		} else {
 			fitted = append(fitted, strings.Repeat(" ", width))
 		}
@@ -429,21 +428,21 @@ func renderFoldedPane(title string, label string, innerWidth int) string {
 	return left + borderStyle.Render(strings.Repeat("─", fill)) + right
 }
 
-func borderLine(leftCorner string, style lipgloss.Style, text string, rightText string, rightCorner string,
+func borderLine(leftCorner string, style lipgloss.Style, title string, topRight string, rightCorner string,
 	innerWidth int) string {
-	if text == "" || innerWidth < 4 {
+	if title == "" || innerWidth < 4 {
 		return borderStyle.Render(leftCorner + strings.Repeat("─", max(innerWidth, 0)) + rightCorner)
 	}
 	var right string
 	var reserved int
-	if rightText != "" && ansi.StringWidth(rightText)+8 <= innerWidth {
-		right = " " + rightText + borderStyle.Render(" ─"+rightCorner)
-		reserved = ansi.StringWidth(rightText) + 3
+	if topRight != "" && ansi.StringWidth(topRight)+8 <= innerWidth {
+		right = " " + topRight + borderStyle.Render(" ─"+rightCorner)
+		reserved = ansi.StringWidth(topRight) + 3
 	} else {
 		right = borderStyle.Render(rightCorner)
 		reserved = 0
 	}
-	fitted := ansi.Truncate(text, innerWidth-4-reserved, "…")
+	fitted := ansi.Truncate(title, innerWidth-4-reserved, "…")
 	fill := innerWidth - 3 - reserved - ansi.StringWidth(fitted)
 	return borderStyle.Render(leftCorner+"─ ") + style.Render(fitted) + borderStyle.Render(" "+
 		strings.Repeat("─", fill)) + right

@@ -19,16 +19,14 @@ func readsBranchHeadersAndEveryEntryKind(t *testing.T) {
 		"u UU N... 100644 100644 100644 100644 1a2b3c4 5d6e7f8 9a0b1c2 conflict.go\x00" +
 		"? dir/new.txt\x00")
 
-	status, err := ParseStatus(output)
+	status, err := parseStatus(output)
 	if err != nil {
 		t.Fatal(err)
 	}
 
 	want := Status{
 		Branch:     "master",
-		Upstream:   "origin/master",
-		Ahead:      2,
-		Behind:     1,
+		Tracking:   Tracking{Upstream: "origin/master", Ahead: 2, Behind: 1},
 		HasCommits: true,
 		Files: []FileStatus{
 			{Path: "a.go", IndexStatus: ' ', WorktreeStatus: 'M'},
@@ -43,7 +41,7 @@ func readsBranchHeadersAndEveryEntryKind(t *testing.T) {
 }
 
 func readsDetachedUnbornHeadWithNoUpstream(t *testing.T) {
-	status, err := ParseStatus([]byte("# branch.oid (initial)\x00# branch.head (detached)\x00"))
+	status, err := parseStatus([]byte("# branch.oid (initial)\x00# branch.head (detached)\x00"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -55,7 +53,7 @@ func readsDetachedUnbornHeadWithNoUpstream(t *testing.T) {
 }
 
 func rejectsARenameWithNoOriginalPath(t *testing.T) {
-	_, err := ParseStatus([]byte("2 R. N... 100644 100644 100644 1a2b3c4 1a2b3c4 R100 new.go\x00"))
+	_, err := parseStatus([]byte("2 R. N... 100644 100644 100644 1a2b3c4 1a2b3c4 R100 new.go\x00"))
 
 	if err == nil {
 		t.Fatal("got no error for a rename with no original path")

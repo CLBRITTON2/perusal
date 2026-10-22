@@ -114,16 +114,16 @@ func TestChangedSpan(t *testing.T) {
 func marksWhatLiesBetweenTheCommonPrefixAndSuffix(t *testing.T) {
 	row := onlyRow(t, "@@ -1 +1 @@\n-\tcall(a, b)\n+\tcall(a, bc)\n")
 
-	if row.Left.Changed != (Span{Start: 10, End: 10}) || row.Right.Changed != (Span{Start: 10, End: 11}) {
-		t.Fatalf("got %+v and %+v, want the empty span before ) and the inserted c", row.Left.Changed, row.Right.Changed)
+	if row.Old.Changed != (Span{Start: 10, End: 10}) || row.New.Changed != (Span{Start: 10, End: 11}) {
+		t.Fatalf("got %+v and %+v, want the empty span before ) and the inserted c", row.Old.Changed, row.New.Changed)
 	}
 }
 
 func neverSplitsACharacter(t *testing.T) {
 	row := onlyRow(t, "@@ -1 +1 @@\n-café\n+cafè\n")
 
-	if row.Left.Changed != (Span{Start: 3, End: 5}) || row.Right.Changed != (Span{Start: 3, End: 5}) {
-		t.Fatalf("got %+v and %+v, want the whole two-byte é and è", row.Left.Changed, row.Right.Changed)
+	if row.Old.Changed != (Span{Start: 3, End: 5}) || row.New.Changed != (Span{Start: 3, End: 5}) {
+		t.Fatalf("got %+v and %+v, want the whole two-byte é and è", row.Old.Changed, row.New.Changed)
 	}
 }
 
@@ -135,7 +135,7 @@ func marksNothingInAnUnevenBlockOrBetweenUnrelatedLines(t *testing.T) {
 	unrelated := onlyRow(t, "@@ -1 +1 @@\n-abc\n+xyz\n")
 
 	for _, row := range append(uneven.Hunks[0].Rows, unrelated) {
-		if row.Left.Changed != (Span{}) || row.Right.Changed != (Span{}) {
+		if row.Old.Changed != (Span{}) || row.New.Changed != (Span{}) {
 			t.Fatalf("got %+v, want nothing marked", row)
 		}
 	}
@@ -174,10 +174,10 @@ func pairsRemovedWithAddedAndPadsTheShorterSide(t *testing.T) {
 	want := FileDiff{Hunks: []Hunk{{
 		Header: "@@ -10,4 +10,3 @@ func f() {",
 		Rows: []Row{
-			{Left: Line{Kind: LineContext, Number: 10, Text: "keep"}, Right: Line{Kind: LineContext, Number: 10, Text: "keep"}},
-			{Left: Line{Kind: LineRemoved, Number: 11, Text: "old one"}, Right: Line{Kind: LineAdded, Number: 11, Text: "new one"}},
-			{Left: Line{Kind: LineRemoved, Number: 12, Text: "old two"}, Right: Line{Kind: LineAdded, Number: 12, Text: "new two"}},
-			{Left: Line{Kind: LineRemoved, Number: 13, Text: "old three"}, Right: Line{Kind: LineBlank}},
+			{Old: Line{Kind: LineContext, Number: 10, Text: "keep"}, New: Line{Kind: LineContext, Number: 10, Text: "keep"}},
+			{Old: Line{Kind: LineRemoved, Number: 11, Text: "old one"}, New: Line{Kind: LineAdded, Number: 11, Text: "new one"}},
+			{Old: Line{Kind: LineRemoved, Number: 12, Text: "old two"}, New: Line{Kind: LineAdded, Number: 12, Text: "new two"}},
+			{Old: Line{Kind: LineRemoved, Number: 13, Text: "old three"}, New: Line{Kind: LineBlank}},
 		},
 	}}}
 	if !reflect.DeepEqual(fileDiff, want) {
@@ -195,8 +195,8 @@ func numbersLinesFromEachHunkStart(t *testing.T) {
 
 	second := fileDiff.Hunks[1].Rows
 	want := []Row{
-		{Left: Line{Kind: LineRemoved, Number: 40, Text: "c"}, Right: Line{Kind: LineBlank}},
-		{Left: Line{Kind: LineContext, Number: 41, Text: "d"}, Right: Line{Kind: LineContext, Number: 41, Text: "d"}},
+		{Old: Line{Kind: LineRemoved, Number: 40, Text: "c"}, New: Line{Kind: LineBlank}},
+		{Old: Line{Kind: LineContext, Number: 41, Text: "d"}, New: Line{Kind: LineContext, Number: 41, Text: "d"}},
 	}
 	if !reflect.DeepEqual(second, want) {
 		t.Fatalf("second hunk rows:\n%+v\nwant:\n%+v", second, want)
@@ -212,8 +212,8 @@ func startsANewPairingWhenRemovalsFollowAdditions(t *testing.T) {
 	}
 
 	want := []Row{
-		{Left: Line{Kind: LineRemoved, Number: 1, Text: "a"}, Right: Line{Kind: LineAdded, Number: 1, Text: "b"}},
-		{Left: Line{Kind: LineRemoved, Number: 2, Text: "c"}, Right: Line{Kind: LineAdded, Number: 2, Text: "d"}},
+		{Old: Line{Kind: LineRemoved, Number: 1, Text: "a"}, New: Line{Kind: LineAdded, Number: 1, Text: "b"}},
+		{Old: Line{Kind: LineRemoved, Number: 2, Text: "c"}, New: Line{Kind: LineAdded, Number: 2, Text: "d"}},
 	}
 	if !reflect.DeepEqual(fileDiff.Hunks[0].Rows, want) {
 		t.Fatalf("rows:\n%+v\nwant:\n%+v", fileDiff.Hunks[0].Rows, want)

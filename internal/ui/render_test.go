@@ -25,11 +25,11 @@ func TestRenderUnifiedListsRemovedLinesAboveAddedOnes(t *testing.T) {
 	fileDiff := diff.FileDiff{Hunks: []diff.Hunk{{
 		Header: "@@ -1,4 +1,5 @@",
 		Rows: []diff.Row{
-			{Left: diff.Line{Kind: diff.LineContext, Number: 1, Text: "a"}, Right: diff.Line{Kind: diff.LineContext, Number: 1, Text: "a"}},
-			{Left: diff.Line{Kind: diff.LineRemoved, Number: 2, Text: "b"}, Right: diff.Line{Kind: diff.LineAdded, Number: 2, Text: "B"}},
-			{Left: diff.Line{Kind: diff.LineRemoved, Number: 3, Text: "c"}, Right: diff.Line{Kind: diff.LineAdded, Number: 3, Text: "C"}},
-			{Left: diff.Line{Kind: diff.LineBlank}, Right: diff.Line{Kind: diff.LineAdded, Number: 4, Text: "d"}},
-			{Left: diff.Line{Kind: diff.LineContext, Number: 4, Text: "e"}, Right: diff.Line{Kind: diff.LineContext, Number: 5, Text: "e"}},
+			{Old: diff.Line{Kind: diff.LineContext, Number: 1, Text: "a"}, New: diff.Line{Kind: diff.LineContext, Number: 1, Text: "a"}},
+			{Old: diff.Line{Kind: diff.LineRemoved, Number: 2, Text: "b"}, New: diff.Line{Kind: diff.LineAdded, Number: 2, Text: "B"}},
+			{Old: diff.Line{Kind: diff.LineRemoved, Number: 3, Text: "c"}, New: diff.Line{Kind: diff.LineAdded, Number: 3, Text: "C"}},
+			{Old: diff.Line{Kind: diff.LineBlank}, New: diff.Line{Kind: diff.LineAdded, Number: 4, Text: "d"}},
+			{Old: diff.Line{Kind: diff.LineContext, Number: 4, Text: "e"}, New: diff.Line{Kind: diff.LineContext, Number: 5, Text: "e"}},
 		},
 	}}}
 
@@ -94,8 +94,8 @@ func showsANewFileAcrossTheWholeWidth(t *testing.T) {
 	fileDiff := diff.FileDiff{Change: diff.FileAdded, Hunks: []diff.Hunk{{
 		Header: "@@ -0,0 +1,2 @@",
 		Rows: []diff.Row{
-			{Left: diff.Line{Kind: diff.LineBlank}, Right: diff.Line{Kind: diff.LineAdded, Number: 1, Text: "package x"}},
-			{Left: diff.Line{Kind: diff.LineBlank}, Right: diff.Line{Kind: diff.LineAdded, Number: 2, Text: ""}},
+			{Old: diff.Line{Kind: diff.LineBlank}, New: diff.Line{Kind: diff.LineAdded, Number: 1, Text: "package x"}},
+			{Old: diff.Line{Kind: diff.LineBlank}, New: diff.Line{Kind: diff.LineAdded, Number: 2, Text: ""}},
 		},
 	}}}
 
@@ -112,8 +112,8 @@ func wrapsALongLineAndPadsTheOtherSide(t *testing.T) {
 	fileDiff := diff.FileDiff{Hunks: []diff.Hunk{{
 		Header: "@@ -7 +7 @@",
 		Rows: []diff.Row{
-			{Left: diff.Line{Kind: diff.LineRemoved, Number: 7, Text: "old"},
-				Right: diff.Line{Kind: diff.LineAdded, Number: 7, Text: "abcd efgh ijklmnop"}},
+			{Old: diff.Line{Kind: diff.LineRemoved, Number: 7, Text: "old"},
+				New: diff.Line{Kind: diff.LineAdded, Number: 7, Text: "abcd efgh ijklmnop"}},
 		},
 	}}}
 
@@ -146,10 +146,10 @@ func everyRowFillsTheWidthExactly(t *testing.T) {
 	fileDiff := diff.FileDiff{Hunks: []diff.Hunk{{
 		Header: "@@ -9,2 +9,2 @@",
 		Rows: []diff.Row{
-			{Left: diff.Line{Kind: diff.LineRemoved, Number: 9, Text: strings.Repeat("long ", 40)},
-				Right: diff.Line{Kind: diff.LineAdded, Number: 9, Text: "\t世界 wide"}},
-			{Left: diff.Line{Kind: diff.LineRemoved, Number: 10, Text: "x"}, Right: diff.Line{Kind: diff.LineBlank}},
-			{Left: diff.Line{Kind: diff.LineContext, Number: 11, Text: ""}, Right: diff.Line{Kind: diff.LineContext, Number: 11, Text: ""}},
+			{Old: diff.Line{Kind: diff.LineRemoved, Number: 9, Text: strings.Repeat("long ", 40)},
+				New: diff.Line{Kind: diff.LineAdded, Number: 9, Text: "\t世界 wide"}},
+			{Old: diff.Line{Kind: diff.LineRemoved, Number: 10, Text: "x"}, New: diff.Line{Kind: diff.LineBlank}},
+			{Old: diff.Line{Kind: diff.LineContext, Number: 11, Text: ""}, New: diff.Line{Kind: diff.LineContext, Number: 11, Text: ""}},
 		},
 	}}}
 

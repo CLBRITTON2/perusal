@@ -65,8 +65,8 @@ func aConnectorTakesTheColorOfTheLaneItJoins(t *testing.T) {
 func theLineRunsUpTheSameLaneAndDownFirstParents(t *testing.T) {
 	rows := commitGraph(mergedBranch())
 
-	fromSide := lineThrough(rows, 1)
-	fromMainline := lineThrough(rows, 2)
+	fromSide := pathThrough(rows, 1)
+	fromMainline := pathThrough(rows, 2)
 
 	if !slices.Equal(fromSide, []bool{false, true, false, true}) ||
 		!slices.Equal(fromMainline, []bool{true, false, true, true}) {
@@ -77,7 +77,7 @@ func theLineRunsUpTheSameLaneAndDownFirstParents(t *testing.T) {
 func onlyTheSelectedLineKeepsItsFullColor(t *testing.T) {
 	rows := commitGraph(mergedBranch())
 
-	got := renderGraphCells(rows[3].commit, lineThrough(rows, 1))
+	got := renderGraphCells(rows[3].commit, pathThrough(rows, 1))
 
 	want := laneStyles[0].Render("●") + laneStyles[1].Render("─╯") + dimLaneStyles[1].Render(" ")
 	if got != want {

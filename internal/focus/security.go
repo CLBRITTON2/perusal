@@ -10,7 +10,7 @@ import (
 	"golang.org/x/sys/windows"
 )
 
-const fileDeleteChild = 0x40
+const fileDeleteChild = 0x40 // x/sys/windows lacks FILE_DELETE_CHILD
 
 // The bits setup-claude.ps1 in windows-dev denies on every .git: icacls (OI)(CI)(WD,AD,WEA,WA,DE,DC).
 const (
@@ -19,28 +19,13 @@ const (
 	deniedInheritFlags = windows.OBJECT_INHERIT_ACE | windows.CONTAINER_INHERIT_ACE
 )
 
-func LookupAccountSID(account string) (string, error) {
-	sid, _, accountType, err := windows.LookupSID("", account)
-	if err != nil {
-		return "", fmt.Errorf("look up account %s: %w", account, err)
-	}
-	if accountType != windows.SidTypeUser {
-		return "", fmt.Errorf("account %s is not a user account (SID type %d)", account, accountType)
-	}
-	return sid.String(), nil
-}
-
-func VerifyGitDir(gitDir string, agentSID string) error {
+func verifyGitDir(gitDir string, agent *windows.SID) error {
 	info, err := os.Lstat(gitDir)
 	if err != nil {
 		return fmt.Errorf("inspect %s: %w", gitDir, err)
 	}
 	if !info.IsDir() {
 		return fmt.Errorf("%w: %s is not a plain directory (mode %s)", ErrGitDirUnprotected, gitDir, info.Mode())
-	}
-	agent, err := windows.StringToSid(agentSID)
-	if err != nil {
-		return fmt.Errorf("parse agent SID %s: %w", agentSID, err)
 	}
 	descriptor, err := windows.GetNamedSecurityInfo(gitDir, windows.SE_FILE_OBJECT,
 		windows.OWNER_SECURITY_INFORMATION|windows.DACL_SECURITY_INFORMATION)
@@ -53,7 +38,7 @@ func VerifyGitDir(gitDir string, agentSID string) error {
 	}
 	// An owner can rewrite the DACL, so a deny the agent set on its own directory proves nothing.
 	if owner.Equals(agent) {
-		return fmt.Errorf("%w: the agent account %s owns %s", ErrGitDirUnprotected, agentSID, gitDir)
+		return fmt.Errorf("%w: the agent account %s owns %s", ErrGitDirUnprotected, agent, gitDir)
 	}
 	dacl, _, err := descriptor.DACL()
 	if err != nil {
@@ -72,7 +57,7 @@ func VerifyGitDir(gitDir string, agentSID string) error {
 		}
 	}
 	return fmt.Errorf("%w: %s has no (OI)(CI)(WD,AD,WEA,WA,DE,DC) deny for %s, rerun setup-claude.ps1",
-		ErrGitDirUnprotected, gitDir, agentSID)
+		ErrGitDirUnprotected, gitDir, agent)
 }
 
 func deniesAgentWrites(ace *windows.ACCESS_ALLOWED_ACE, agent *windows.SID) bool {

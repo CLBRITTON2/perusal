@@ -16,31 +16,30 @@ import (
 const followUsage = "  perusal follow                  review whichever working tree the agent's focused herdr pane is in\n"
 
 func runFollow(args []string) error {
-	path, err := followConfigPath()
+	configPath, err := followConfigPath()
 	if err != nil {
 		return err
 	}
 	flags := flag.NewFlagSet("perusal follow", flag.ContinueOnError)
 	flags.Usage = func() {
 		fmt.Fprint(flags.Output(), "usage: perusal follow\n\n"+
-			"Reviews whichever working tree the agent's focused herdr pane is in, as set up in "+path+".\n")
+			"Reviews whichever working tree the agent's focused herdr pane is in, as set up in "+configPath+".\n")
 	}
 	if err := flags.Parse(args); err != nil {
 		return fmt.Errorf("parse flags: %w", err)
 	}
 	if flags.NArg() != 0 {
-		return fmt.Errorf("perusal follow takes no arguments, it reads %s, got %q", path, flags.Args())
+		return fmt.Errorf("perusal follow takes no arguments, it reads %s, got %q", configPath, flags.Args())
 	}
-	config, err := focus.LoadConfig(path)
+	config, err := focus.LoadConfig(configPath)
 	if err != nil {
 		return err
 	}
-	agentSID, err := focus.LookupAccountSID(config.AgentAccount)
+	rules, err := focus.NewRules(config)
 	if err != nil {
 		return err
 	}
-	rules := focus.Rules{AgentDir: config.AgentDir, OwnerDir: config.OwnerDir, AgentSID: agentSID}
-	return follow(rules, config.FocusFile)
+	return follow(rules)
 }
 
 // The config names the account whose .git access is checked, so it must sit where the agent cannot write.
@@ -52,17 +51,19 @@ func followConfigPath() (string, error) {
 	return filepath.Join(configDir, "perusal", "config.json"), nil
 }
 
-func follow(rules focus.Rules, focusFile string) error {
+func follow(rules focus.Rules) error {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
-	results, err := focus.Follow(ctx, rules, focusFile)
+	results, err := focus.Follow(ctx, rules)
 	if err != nil {
 		return err
 	}
-	program := tea.NewProgram(ui.New(repositoryLister(rules)))
-	go forwardResults(program, results, focusFile)
+	program := tea.NewProgram(ui.New(func(ctx context.Context) (focus.Found, error) {
+		return focus.FindRepositories(ctx, rules)
+	}))
+	go forwardResults(program, results, rules.FocusFile)
 	if _, err := program.Run(); err != nil {
-		return fmt.Errorf("run perusal following %s: %w", focusFile, err)
+		return fmt.Errorf("run perusal following %s: %w", rules.FocusFile, err)
 	}
 	return nil
 }
@@ -72,39 +73,8 @@ func forwardResults(program *tea.Program, results <-chan focus.Result, focusFile
 		if result.Err != nil {
 			program.Send(ui.FocusRejected{Reason: result.Err.Error()})
 		} else {
-			program.Send(ui.RepositoriesFocused{Repositories: result.Focus.Repositories, Refusals: refusalReasons(result.Focus.Refusals)})
+			program.Send(ui.RepositoriesFocused{Repositories: result.Focus.Repositories, Refusals: result.Focus.Refusals})
 		}
 	}
 	program.Send(ui.FocusRejected{Reason: "stopped watching focus file " + focusFile})
-}
-
-func repositoryLister(rules focus.Rules) ui.Lister {
-	return func(ctx context.Context) (ui.Listing, error) {
-		found, err := focus.FindRepositories(ctx, rules)
-		if err != nil {
-			return ui.Listing{}, err
-		}
-		listed := []ui.ListedRepository{}
-		for _, repository := range found.Repositories {
-			listed = append(listed, ui.ListedRepository{Name: repository.Name, Repository: repository.Repository})
-		}
-		return ui.Listing{Repositories: listed, Refusals: refusedRepositories(found.Refusals)}, nil
-	}
-}
-
-func refusedRepositories(refusals []focus.FoundRefusal) []ui.RefusedRepository {
-	refused := []ui.RefusedRepository{}
-	for _, refusal := range refusals {
-		refused = append(refused, ui.RefusedRepository{Name: refusal.Name, Summary: refusal.Summary(),
-			Reason: refusal.Err.Error()})
-	}
-	return refused
-}
-
-func refusalReasons(refusals []error) []string {
-	reasons := []string{}
-	for _, refusal := range refusals {
-		reasons = append(reasons, refusal.Error())
-	}
-	return reasons
 }

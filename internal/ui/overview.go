@@ -13,36 +13,17 @@ import (
 	tea "charm.land/bubbletea/v2"
 	"github.com/charmbracelet/x/ansi"
 
+	"github.com/CLBRITTON2/perusal/internal/focus"
 	"github.com/CLBRITTON2/perusal/internal/gitrepo"
 )
 
-// Name is the work tree's path below the directory the Lister searched.
-type ListedRepository struct {
-	Name       string
-	Repository gitrepo.Repository
-}
-
-// Name is as in ListedRepository. Summary fits a list row, and Reason is the full refusal.
-type RefusedRepository struct {
-	Name    string
-	Summary string
-	Reason  string
-}
-
-// Refusals are the work trees that failed a check and the directories that could not be listed.
-type Listing struct {
-	Repositories []ListedRepository
-	Refusals     []RefusedRepository
-}
-
-type Lister func(context.Context) (Listing, error)
+type Lister func(context.Context) (focus.Found, error)
 
 // behindDefault counts the commits HEAD lacks from defaultBranch, and stays 0 when defaultBranch is the upstream, whose
-// count the status already holds. finished is a branch p leaves for the default branch: one that mayBeFinished and is
-// merged into defaultBranch. refused is set on a row whose repository failed a check.
+// count the status already holds. finished is a branch p leaves for the default branch.
 type overviewRow struct {
-	listed        ListedRepository
-	refused       RefusedRepository
+	listed        focus.FoundRepository
+	refused       focus.FoundRefusal
 	status        gitrepo.Status
 	defaultBranch string
 	behindDefault int
@@ -59,89 +40,90 @@ type overview struct {
 	pulling  map[string]bool
 }
 
-// problems are the repositories git failed on, which get no row.
+// failures are the repositories git failed on, which get no row.
 type overviewLoadedMsg struct {
 	rows     []overviewRow
-	problems []string
+	failures []string
 }
 
 type overviewFailedMsg struct {
 	err error
 }
 
-// row is reloaded after the pull.
 type overviewPulledMsg struct {
 	row overviewRow
 }
 
-type overviewPullFailedMsg struct {
+type overviewSyncFailedMsg struct {
 	dir string
 	err error
 }
 
 type pullRequest struct {
-	listed ListedRepository
+	listed focus.FoundRepository
 }
 
 func (r pullRequest) pull() tea.Msg {
 	dir := r.listed.Repository.Dir
 	if err := r.listed.Repository.Pull(context.Background()); err != nil {
-		return overviewPullFailedMsg{dir: dir, err: err}
+		return overviewSyncFailedMsg{dir: dir, err: err}
 	}
 	row, err := loadOverviewRow(r.listed)
 	if err != nil {
-		return overviewPullFailedMsg{dir: dir, err: err}
+		return overviewSyncFailedMsg{dir: dir, err: err}
 	}
 	return overviewPulledMsg{row: row}
 }
 
 type switchRequest struct {
-	listed ListedRepository
+	listed focus.FoundRepository
 	branch string
 }
 
 func (r switchRequest) switchAndPull() tea.Msg {
 	if err := r.listed.Repository.Switch(context.Background(), r.branch); err != nil {
-		return overviewPullFailedMsg{dir: r.listed.Repository.Dir, err: err}
+		return overviewSyncFailedMsg{dir: r.listed.Repository.Dir, err: err}
 	}
 	return pullRequest{listed: r.listed}.pull()
 }
 
 type overviewRequest struct {
-	list Lister
+	listRepositories Lister
 }
 
 func (r overviewRequest) load() tea.Msg {
-	listing, err := r.list(context.Background())
+	listing, err := r.listRepositories(context.Background())
 	if err != nil {
 		return overviewFailedMsg{err: err}
 	}
-	rows := make([]overviewRow, len(listing.Repositories))
-	failures := make([]error, len(listing.Repositories))
+	results := make([]overviewRow, len(listing.Repositories))
+	errs := make([]error, len(listing.Repositories))
 	var group sync.WaitGroup
 	for index, listed := range listing.Repositories {
 		group.Go(func() {
-			rows[index], failures[index] = loadOverviewRow(listed)
+			results[index], errs[index] = loadOverviewRow(listed)
 		})
 	}
 	group.Wait()
-	loaded := []overviewRow{}
-	problems := []string{}
-	for index, row := range rows {
-		if failures[index] != nil {
-			problems = append(problems, failures[index].Error())
+	rows := []overviewRow{}
+	failures := []string{}
+	for index, row := range results {
+		if errs[index] != nil {
+			failures = append(failures, errs[index].Error())
 		} else {
-			loaded = append(loaded, row)
+			rows = append(rows, row)
 		}
 	}
 	for _, refused := range listing.Refusals {
-		loaded = append(loaded, overviewRow{listed: ListedRepository{Name: refused.Name}, refused: refused})
+		rows = append(rows, overviewRow{listed: focus.FoundRepository{RelativePath: refused.RelativePath}, refused: refused})
 	}
-	slices.SortFunc(loaded, func(a overviewRow, b overviewRow) int { return strings.Compare(a.listed.Name, b.listed.Name) })
-	return overviewLoadedMsg{rows: loaded, problems: problems}
+	slices.SortFunc(rows, func(a overviewRow, b overviewRow) int {
+		return strings.Compare(a.listed.RelativePath, b.listed.RelativePath)
+	})
+	return overviewLoadedMsg{rows: rows, failures: failures}
 }
 
-func loadOverviewRow(listed ListedRepository) (overviewRow, error) {
+func loadOverviewRow(listed focus.FoundRepository) (overviewRow, error) {
 	ctx := context.Background()
 	status, err := listed.Repository.Status(ctx)
 	if err != nil {
@@ -174,12 +156,12 @@ func loadOverviewRow(listed ListedRepository) (overviewRow, error) {
 }
 
 func (r overviewRow) isRefused() bool {
-	return r.refused.Reason != ""
+	return r.refused.Err != nil
 }
 
 func (m Model) openOverview() (tea.Model, tea.Cmd) {
 	m.overview = overview{open: true, rows: []overviewRow{}, pulling: m.overview.pulling}
-	return m, overviewRequest{list: m.list}.load
+	return m, overviewRequest{listRepositories: m.listRepositories}.load
 }
 
 // Lists the focused repositories first and selects the one under review, so enter right away keeps it.
@@ -195,10 +177,10 @@ func (m Model) withOverviewLoaded(msg overviewLoadedMsg) Model {
 	}), 0)
 	m.overview.offset = 0
 	m = m.withListScrolled()
-	if len(msg.problems) == 0 {
+	if len(msg.failures) == 0 {
 		return m
 	}
-	return m.withFooterError("skipped " + strings.Join(msg.problems, ", "))
+	return m.withFooterError("skipped " + strings.Join(msg.failures, ", "))
 }
 
 func (m Model) focusRank(row overviewRow) int {
@@ -228,7 +210,6 @@ func (m Model) updateOverview(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	return m, nil
 }
 
-// Pulls the selected row's upstream, or switches a finished branch to the default branch and pulls that.
 func (m Model) pullOverviewRow() (tea.Model, tea.Cmd) {
 	if len(m.overview.rows) == 0 {
 		return m, nil
@@ -244,9 +225,9 @@ func (m Model) pullOverviewRow() (tea.Model, tea.Cmd) {
 	case row.finished:
 		pull = switchRequest{listed: listed, branch: localBranch(row.defaultBranch)}.switchAndPull
 	case row.status.Upstream == "":
-		return m.withFooterError(listed.Name + " tracks no upstream, so there is nothing to pull"), nil
+		return m.withFooterError(listed.RelativePath + " tracks no upstream, so there is nothing to pull"), nil
 	case row.status.UpstreamGone:
-		return m.withFooterError(listed.Name + " tracks " + sanitizeSingleLine(row.status.Upstream) +
+		return m.withFooterError(listed.RelativePath + " tracks " + sanitizeSingleLine(row.status.Upstream) +
 			", which was deleted from the remote, so there is nothing to pull"), nil
 	default:
 		pull = pullRequest{listed: listed}.pull
@@ -263,28 +244,27 @@ func mayBeFinished(status gitrepo.Status, defaultBranch string) bool {
 		status.Branch != localBranch(defaultBranch)
 }
 
-// defaultBranch is origin's, as DefaultBranch names it.
 func localBranch(defaultBranch string) string {
 	return strings.TrimPrefix(defaultBranch, "origin/")
 }
 
 func (m Model) withOverviewPulled(msg overviewPulledMsg) (tea.Model, tea.Cmd) {
 	repository := msg.row.listed.Repository
-	m.overview.pulling = withoutKey(m.overview.pulling, repository.Dir)
+	m.overview.pulling = withoutDir(m.overview.pulling, repository.Dir)
 	rows := slices.Clone(m.overview.rows)
 	index := slices.IndexFunc(rows, func(row overviewRow) bool { return row.listed.Repository == repository })
 	if index >= 0 {
 		rows[index] = msg.row
 	}
 	m.overview.rows = rows
-	m = m.withFooterNotice("pulled " + msg.row.listed.Name)
+	m = m.withFooterNotice("pulled " + msg.row.listed.RelativePath)
 	if repository != m.repository {
 		return m, nil
 	}
 	return m, repositoryRequest{repository: m.repository}.loadStatus
 }
 
-func withoutKey(set map[string]bool, dir string) map[string]bool {
+func withoutDir(set map[string]bool, dir string) map[string]bool {
 	without := maps.Clone(set)
 	delete(without, dir)
 	return without
@@ -315,7 +295,7 @@ func (m Model) openOverviewRow() (tea.Model, tea.Cmd) {
 }
 
 func (m Model) withRefusalShown(row overviewRow) Model {
-	return m.withFooterError(row.listed.Name + " is refused: " + row.refused.Reason)
+	return m.withFooterError(row.listed.RelativePath + " is refused: " + row.refused.Err.Error())
 }
 
 func (m Model) renderOverviewPane() string {
@@ -358,21 +338,21 @@ func (m Model) renderFocusMark(row overviewRow) string {
 	if !slices.Contains(m.focused, row.listed.Repository) {
 		return ""
 	}
-	return aheadStyle.Render("●")
+	return markStyle.Render("●")
 }
 
 func renderOverviewCells(row overviewRow) []string {
 	if row.isRefused() {
 		return []string{
-			mutedStyle.Render(folderGlyph + " " + sanitizeText(row.listed.Name)),
-			mutedStyle.Render(sanitizeText(row.refused.Summary)),
+			mutedStyle.Render(folderGlyph + " " + sanitizeText(row.listed.RelativePath)),
+			mutedStyle.Render(sanitizeText(row.refused.Summary())),
 		}
 	}
 	return []string{
-		repositoryStyle.Render(folderGlyph + " " + sanitizeText(row.listed.Name)),
-		branchStyle.Render(branchGlyph + " " + branchLabel(row.status)),
+		repositoryStyle.Render(folderGlyph + " " + sanitizeText(row.listed.RelativePath)),
+		branchStyle.Render(branchGlyph + " " + headName(row.status)),
 		renderChangedCount(len(row.status.Files)),
-		renderAheadBehind(row.status.Ahead, row.status.Behind),
+		renderAheadBehind(row.status.Tracking),
 		renderBehindDefault(row),
 	}
 }

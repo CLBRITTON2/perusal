@@ -7,21 +7,16 @@ import (
 	"strings"
 )
 
-// Upstream, UpstreamGone, Ahead and Behind mean what they do in Status.
 type Branch struct {
-	Name         string
-	Current      bool
-	Upstream     string
-	UpstreamGone bool
-	Ahead        int
-	Behind       int
+	Name    string
+	Current bool
+	Tracking
 }
 
-// Branches lists the local branches by name.
 func (r Repository) Branches(ctx context.Context) ([]Branch, error) {
 	format := strings.Join([]string{"%(HEAD)", "%(refname:lstrip=2)", "%(upstream:short)", "%(upstream:track,nobracket)"},
-		"%1f")
-	output, err := runGit(ctx, r.Dir, []string{"for-each-ref", "--format=" + format, "refs/heads"})
+		refFieldSeparator)
+	output, err := r.git(ctx, "for-each-ref", "--format="+format, "refs/heads")
 	if err != nil {
 		return nil, err
 	}
@@ -31,11 +26,11 @@ func (r Repository) Branches(ctx context.Context) ([]Branch, error) {
 func parseBranches(output []byte) ([]Branch, error) {
 	branches := []Branch{}
 	for line := range strings.Lines(string(output)) {
-		fields := strings.Split(strings.TrimSuffix(line, "\n"), logFieldSeparator)
+		fields := strings.Split(strings.TrimSuffix(line, "\n"), fieldSeparator)
 		if len(fields) != 4 {
 			return nil, fmt.Errorf("parse git for-each-ref line %q: want 4 fields, got %d", line, len(fields))
 		}
-		branch := Branch{Name: fields[1], Current: fields[0] == "*", Upstream: fields[2]}
+		branch := Branch{Name: fields[1], Current: fields[0] == "*", Tracking: Tracking{Upstream: fields[2]}}
 		withTrack, err := branchWithTrack(branch, fields[3])
 		if err != nil {
 			return nil, fmt.Errorf("parse git for-each-ref line %q: %w", line, err)
@@ -74,6 +69,5 @@ func branchWithTrack(branch Branch, track string) (Branch, error) {
 
 // DeleteBranch deletes branch whether or not it is merged, since plain --delete refuses a squash merged branch.
 func (r Repository) DeleteBranch(ctx context.Context, branch string) error {
-	_, err := runGit(ctx, r.Dir, []string{"branch", "--delete", "--force", branch})
-	return err
+	return r.run(ctx, "branch", "--delete", "--force", branch)
 }

@@ -127,8 +127,13 @@ func selectBranch(t *testing.T, m Model, moves int) Model {
 func fourBranches() []branchRow {
 	return []branchRow{
 		{branch: gitrepo.Branch{Name: "fix", Current: true}},
-		{branch: gitrepo.Branch{Name: "main", Upstream: "origin/main"}},
-		{branch: gitrepo.Branch{Name: "done", Upstream: "origin/done", UpstreamGone: true}, merged: true},
+		{branch: gitrepo.Branch{Name: "main", Tracking: gitrepo.Tracking{Upstream: "origin/main"}}},
+		{
+			branch: gitrepo.Branch{
+				Name: "done", Tracking: gitrepo.Tracking{Upstream: "origin/done", UpstreamGone: true},
+			},
+			mergedIntoDefault: true,
+		},
 		{branch: gitrepo.Branch{Name: "wip"}},
 	}
 }

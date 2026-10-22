@@ -37,6 +37,7 @@ var (
 	repositoryStyle     = lipgloss.NewStyle().Foreground(colorRose).Bold(true)
 	branchStyle         = lipgloss.NewStyle().Foreground(colorFoam)
 	aheadStyle          = lipgloss.NewStyle().Foreground(colorGold)
+	markStyle           = lipgloss.NewStyle().Foreground(colorGold)
 	behindStyle         = lipgloss.NewStyle().Foreground(colorLove)
 	errorStyle          = lipgloss.NewStyle().Foreground(colorLove)
 	warningStyle        = lipgloss.NewStyle().Foreground(colorGold)
@@ -56,7 +57,7 @@ var (
 		lipgloss.NewStyle().Foreground(colorRose),
 		lipgloss.NewStyle().Foreground(colorLove),
 	}
-	// laneStyles' colors, each blended 45% over base, for lines off the selected commit's line
+	// laneStyles' colors, each blended 45% over base, for lines off the selected commit's path
 	dimLaneStyles = []lipgloss.Style{
 		lipgloss.NewStyle().Foreground(lipgloss.Color("#66587c")),
 		lipgloss.NewStyle().Foreground(lipgloss.Color("#546a75")),
@@ -73,8 +74,8 @@ var (
 	addedTextStyle      = lipgloss.NewStyle().Foreground(colorText).Background(colorAddedBackground)
 	removedChangedStyle = lipgloss.NewStyle().Foreground(colorText).Background(colorRemovedChanged)
 	addedChangedStyle   = lipgloss.NewStyle().Foreground(colorText).Background(colorAddedChanged)
-	removedGutter       = lipgloss.NewStyle().Foreground(colorLove).Background(colorRemovedBackground)
-	addedGutter         = lipgloss.NewStyle().Foreground(colorFoam).Background(colorAddedBackground)
+	removedGutterStyle  = lipgloss.NewStyle().Foreground(colorLove).Background(colorRemovedBackground)
+	addedGutterStyle    = lipgloss.NewStyle().Foreground(colorFoam).Background(colorAddedBackground)
 	addedMarkStyle      = lipgloss.NewStyle().Foreground(colorFoam).Bold(true)
 	deletedMarkStyle    = lipgloss.NewStyle().Foreground(colorLove).Bold(true)
 	renamedMarkStyle    = lipgloss.NewStyle().Foreground(colorIris).Bold(true)

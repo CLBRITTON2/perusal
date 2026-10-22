@@ -2,7 +2,9 @@ package ui
 
 import (
 	"context"
+	"errors"
 	"fmt"
+	"io/fs"
 	"reflect"
 	"strings"
 	"testing"
@@ -11,6 +13,7 @@ import (
 	"github.com/charmbracelet/x/ansi"
 
 	"github.com/CLBRITTON2/perusal/internal/diff"
+	"github.com/CLBRITTON2/perusal/internal/focus"
 	"github.com/CLBRITTON2/perusal/internal/gitrepo"
 )
 
@@ -28,10 +31,10 @@ func TestTheOverviewListsTheFocusedRepositoriesFirstAndMarksThem(t *testing.T) {
 	m = update(t, m, tea.KeyPressMsg{Code: 'o', Text: "o"})
 
 	m = update(t, m, overviewLoadedMsg{rows: []overviewRow{
-		{listed: ListedRepository{Name: "elsewhere", Repository: gitrepo.Repository{Dir: "C:/dev/elsewhere"}}},
-		{listed: ListedRepository{Name: "first", Repository: gitrepo.Repository{Dir: "C:/dev/first"}}},
-		{listed: ListedRepository{Name: "second", Repository: gitrepo.Repository{Dir: "C:/dev/second"}}},
-	}, problems: []string{}})
+		{listed: focus.FoundRepository{RelativePath: "elsewhere", Repository: gitrepo.Repository{Dir: "C:/dev/elsewhere"}}},
+		{listed: focus.FoundRepository{RelativePath: "first", Repository: gitrepo.Repository{Dir: "C:/dev/first"}}},
+		{listed: focus.FoundRepository{RelativePath: "second", Repository: gitrepo.Repository{Dir: "C:/dev/second"}}},
+	}, failures: []string{}})
 
 	lines := m.overviewLines(118)
 	got := []string{}
@@ -59,7 +62,7 @@ func aFocusThatStillNamesTheReviewedRepositoryKeepsItAndShowsTheRefusals(t *test
 
 	m = update(t, m, RepositoriesFocused{
 		Repositories: []gitrepo.Repository{{Dir: "C:/dev/other"}, {Dir: "C:/dev/first"}},
-		Refusals:     []string{"C:/dev/notes: no .git"},
+		Refusals:     []error{errors.New("C:/dev/notes: no .git")},
 	})
 
 	if m.repository.Dir != "C:/dev/first" || !m.footerIsError || !strings.Contains(m.footerText, "C:/dev/notes: no .git") {
@@ -67,12 +70,11 @@ func aFocusThatStillNamesTheReviewedRepositoryKeepsItAndShowsTheRefusals(t *test
 	}
 }
 
-// The focus lists cwd, first and second, in that order.
 func focusOnSeveral(t *testing.T, uncommitted map[string]bool) Model {
 	t.Helper()
 	focused := []gitrepo.Repository{{Dir: "C:/dev/cwd"}, {Dir: "C:/dev/first"}, {Dir: "C:/dev/second"}}
 	m := update(t, New(listNothing), tea.WindowSizeMsg{Width: 120, Height: 30})
-	m = update(t, m, RepositoriesFocused{Repositories: focused, Refusals: []string{}})
+	m = update(t, m, RepositoriesFocused{Repositories: focused, Refusals: []error{}})
 	return update(t, m, uncommittedLoadedMsg{focused: focused, uncommitted: uncommitted})
 }
 
@@ -80,9 +82,11 @@ func TestEnterInTheOverviewReviewsTheSelectedRepositoryAndKeepsTheFocus(t *testi
 	m := focusOnSeveral(t, map[string]bool{"C:/dev/cwd": false, "C:/dev/first": true, "C:/dev/second": false})
 	m = update(t, m, tea.KeyPressMsg{Code: 'o', Text: "o"})
 	m = update(t, m, overviewLoadedMsg{rows: []overviewRow{
-		{listed: ListedRepository{Name: "first", Repository: gitrepo.Repository{Dir: "C:/dev/first"}}},
-		{listed: ListedRepository{Name: "org/elsewhere", Repository: gitrepo.Repository{Dir: "C:/dev/org/elsewhere"}}},
-	}, problems: []string{}})
+		{listed: focus.FoundRepository{RelativePath: "first", Repository: gitrepo.Repository{Dir: "C:/dev/first"}}},
+		{listed: focus.FoundRepository{
+			RelativePath: "org/elsewhere", Repository: gitrepo.Repository{Dir: "C:/dev/org/elsewhere"},
+		}},
+	}, failures: []string{}})
 	screen := ansi.Strip(m.renderScreen())
 
 	m = update(t, m, tea.KeyPressMsg{Code: 'j', Text: "j"})
@@ -98,15 +102,15 @@ func TestEnterInTheOverviewReviewsTheSelectedRepositoryAndKeepsTheFocus(t *testi
 }
 
 func TestARefusedRepositoryIsAMutedRowWithItsSummaryAndEnterShowsTheReason(t *testing.T) {
-	list := func(context.Context) (Listing, error) {
-		return Listing{Repositories: []ListedRepository{}, Refusals: []RefusedRepository{
-			{Name: "notes", Summary: "access denied", Reason: "list C:/dev/notes: access denied"},
-			{Name: "agents", Summary: "not write-denied to the agent", Reason: "C:/dev/agents/.git has no deny"},
+	list := func(context.Context) (focus.Found, error) {
+		return focus.Found{Repositories: []focus.FoundRepository{}, Refusals: []focus.FoundRefusal{
+			{RelativePath: "notes", Err: fmt.Errorf("list C:/dev/notes: %w", fs.ErrPermission)},
+			{RelativePath: "agents", Err: fmt.Errorf("%w: C:/dev/agents/.git has no deny", focus.ErrGitDirUnprotected)},
 		}}, nil
 	}
 	m := update(t, New(list), tea.WindowSizeMsg{Width: 120, Height: 30})
 	m = update(t, m, tea.KeyPressMsg{Code: 'o', Text: "o"})
-	m = update(t, m, overviewRequest{list: list}.load())
+	m = update(t, m, overviewRequest{listRepositories: list}.load())
 	screen := ansi.Strip(m.renderScreen())
 
 	next, cmd := m.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
@@ -116,7 +120,8 @@ func TestARefusedRepositoryIsAMutedRowWithItsSummaryAndEnterShowsTheReason(t *te
 	if !strings.Contains(screen, want) || strings.Index(screen, "agents") > strings.Index(screen, "notes") {
 		t.Fatalf("got screen:\n%s\nwant agents before notes, as %q", screen, want)
 	}
-	if cmd != nil || !m.overview.open || m.footerText != "agents is refused: C:/dev/agents/.git has no deny" {
+	wantFooter := "agents is refused: " + focus.ErrGitDirUnprotected.Error() + ": C:/dev/agents/.git has no deny"
+	if cmd != nil || !m.overview.open || m.footerText != wantFooter {
 		t.Fatalf("got command %v, open %t, footer %q, want the reason with the overview still open", cmd,
 			m.overview.open, m.footerText)
 	}
@@ -136,7 +141,7 @@ func theRowShowsPullingUntilThePulledRowReplacesIt(t *testing.T) {
 	pulling := ansi.Strip(m.renderScreen())
 	pulled := overviewRow{
 		listed: m.overview.rows[0].listed,
-		status: gitrepo.Status{Branch: "main", Upstream: "origin/main", HasCommits: true},
+		status: gitrepo.Status{Branch: "main", Tracking: gitrepo.Tracking{Upstream: "origin/main"}, HasCommits: true},
 	}
 
 	m = update(t, m, overviewPulledMsg{row: pulled})
@@ -162,9 +167,11 @@ func aRowWithNoUpstreamIsNotPulled(t *testing.T) {
 
 func aRowWhoseUpstreamWasDeletedIsExplained(t *testing.T) {
 	m := update(t, overviewOfTwo(t), overviewLoadedMsg{rows: []overviewRow{{
-		listed: ListedRepository{Name: "first", Repository: gitrepo.Repository{Dir: "C:/dev/first"}},
-		status: gitrepo.Status{Branch: "fix", Upstream: "origin/fix", UpstreamGone: true, HasCommits: true},
-	}}, problems: []string{}})
+		listed: focus.FoundRepository{RelativePath: "first", Repository: gitrepo.Repository{Dir: "C:/dev/first"}},
+		status: gitrepo.Status{
+			Branch: "fix", Tracking: gitrepo.Tracking{Upstream: "origin/fix", UpstreamGone: true}, HasCommits: true,
+		},
+	}}, failures: []string{}})
 	next, cmd := m.Update(tea.KeyPressMsg{Code: 'p', Text: "p"})
 	m = asModel(t, next)
 
@@ -175,11 +182,11 @@ func aRowWhoseUpstreamWasDeletedIsExplained(t *testing.T) {
 
 func aFinishedRowIsSwitchedThoughItTracksNoUpstream(t *testing.T) {
 	m := update(t, overviewOfTwo(t), overviewLoadedMsg{rows: []overviewRow{{
-		listed:        ListedRepository{Name: "first", Repository: gitrepo.Repository{Dir: "C:/dev/first"}},
+		listed:        focus.FoundRepository{RelativePath: "first", Repository: gitrepo.Repository{Dir: "C:/dev/first"}},
 		status:        gitrepo.Status{Branch: "fix", HasCommits: true, Files: []gitrepo.FileStatus{}},
 		defaultBranch: "origin/main",
 		finished:      true,
-	}}, problems: []string{}})
+	}}, failures: []string{}})
 	next, cmd := m.Update(tea.KeyPressMsg{Code: 'p', Text: "p"})
 	m = asModel(t, next)
 
@@ -195,12 +202,17 @@ func TestMayBeFinished(t *testing.T) {
 		want   bool
 	}{
 		"aBranchWhoseUpstreamWasDeleted": {
-			status: gitrepo.Status{Branch: "fix", Upstream: "origin/fix", UpstreamGone: true}, want: true,
+			status: gitrepo.Status{Branch: "fix", Tracking: gitrepo.Tracking{Upstream: "origin/fix", UpstreamGone: true}},
+			want:   true,
 		},
-		"aBranchThatNeverHadAnUpstream":     {status: gitrepo.Status{Branch: "fix"}, want: true},
-		"aBranchWhoseUpstreamStillExists":   {status: gitrepo.Status{Branch: "fix", Upstream: "origin/fix"}},
-		"aBranchWithChanges":                {status: gitrepo.Status{Branch: "fix", Files: changed}},
-		"theDefaultBranchWithItsRemoteGone": {status: gitrepo.Status{Branch: "main", Upstream: "origin/main", UpstreamGone: true}},
+		"aBranchThatNeverHadAnUpstream": {status: gitrepo.Status{Branch: "fix"}, want: true},
+		"aBranchWhoseUpstreamStillExists": {
+			status: gitrepo.Status{Branch: "fix", Tracking: gitrepo.Tracking{Upstream: "origin/fix"}},
+		},
+		"aBranchWithChanges": {status: gitrepo.Status{Branch: "fix", Files: changed}},
+		"theDefaultBranchWithItsRemoteGone": {
+			status: gitrepo.Status{Branch: "main", Tracking: gitrepo.Tracking{Upstream: "origin/main", UpstreamGone: true}},
+		},
 	} {
 		t.Run(name, func(t *testing.T) {
 			if got := mayBeFinished(test.status, "origin/main"); got != test.want {
@@ -210,18 +222,21 @@ func TestMayBeFinished(t *testing.T) {
 	}
 }
 
-// first is 2 behind origin/main, and org/elsewhere tracks no upstream.
 func overviewOfTwo(t *testing.T) Model {
 	t.Helper()
 	m := focusOnSeveral(t, map[string]bool{"C:/dev/cwd": false, "C:/dev/first": true, "C:/dev/second": false})
 	m = update(t, m, tea.KeyPressMsg{Code: 'o', Text: "o"})
 	return update(t, m, overviewLoadedMsg{rows: []overviewRow{
 		{
-			listed: ListedRepository{Name: "first", Repository: gitrepo.Repository{Dir: "C:/dev/first"}},
-			status: gitrepo.Status{Branch: "main", Upstream: "origin/main", Behind: 2, HasCommits: true},
+			listed: focus.FoundRepository{RelativePath: "first", Repository: gitrepo.Repository{Dir: "C:/dev/first"}},
+			status: gitrepo.Status{
+				Branch: "main", Tracking: gitrepo.Tracking{Upstream: "origin/main", Behind: 2}, HasCommits: true,
+			},
 		},
-		{listed: ListedRepository{Name: "org/elsewhere", Repository: gitrepo.Repository{Dir: "C:/dev/org/elsewhere"}}},
-	}, problems: []string{}})
+		{listed: focus.FoundRepository{
+			RelativePath: "org/elsewhere", Repository: gitrepo.Repository{Dir: "C:/dev/org/elsewhere"},
+		}},
+	}, failures: []string{}})
 }
 
 func TestWholeFile(t *testing.T) {
@@ -238,12 +253,12 @@ func dropsAFileDiffLoadedWithTheOtherContext(t *testing.T) {
 
 	m = update(t, m, diffLoadedMsg{dir: "C:/dev/repo", path: "a.go", contextLines: hunkContext,
 		fileDiff: diff.FileDiff{Hunks: []diff.Hunk{{Header: "@@ -5 +5 @@"}}}})
-	stale := m.fileDiff
+	afterStaleLoad := m.fileDiff
 	m = update(t, m, diffLoadedMsg{dir: "C:/dev/repo", path: "a.go", contextLines: wholeFileContext,
 		fileDiff: diff.FileDiff{Hunks: []diff.Hunk{{Header: "@@ -1,9 +1,9 @@"}}}})
 
-	if reload == nil || len(stale.Hunks) != 0 || len(m.fileDiff.Hunks) != 1 || m.fileDiff.Hunks[0].Header != "@@ -1,9 +1,9 @@" {
-		t.Fatalf("got reload %v, stale %v, shown %v, want only the whole file diff shown", reload, stale, m.fileDiff)
+	if reload == nil || len(afterStaleLoad.Hunks) != 0 || len(m.fileDiff.Hunks) != 1 || m.fileDiff.Hunks[0].Header != "@@ -1,9 +1,9 @@" {
+		t.Fatalf("got reload %v, stale %v, shown %v, want only the whole file diff shown", reload, afterStaleLoad, m.fileDiff)
 	}
 }
 
@@ -252,14 +267,14 @@ func reloadsACommitOnlyWhileItWasLoadedWithTheOtherContext(t *testing.T) {
 	m := logOf(t, []gitrepo.Commit{commit})
 	m = update(t, m, commitDiffLoadedMsg{dir: "C:/dev/repo", hash: commit.Hash, contextLines: hunkContext,
 		sections: []diff.FileSection{{Path: "a.go"}}})
-	loadedAtFirst := m.loadSelectedCommitDiff()
+	hunkContextLoad := m.loadSelectedCommitDiff()
 
 	m = update(t, m, tea.KeyPressMsg{Code: 'f', Text: "f"})
-	wholeFile := m.loadSelectedCommitDiff()
+	wholeFileLoad := m.loadSelectedCommitDiff()
 	m = update(t, m, tea.KeyPressMsg{Code: 'f', Text: "f"})
 
-	if loadedAtFirst != nil || wholeFile == nil || m.loadSelectedCommitDiff() != nil {
-		t.Fatalf("got loads %v, %v, %v, want only the whole file one", loadedAtFirst, wholeFile, m.loadSelectedCommitDiff())
+	if hunkContextLoad != nil || wholeFileLoad == nil || m.loadSelectedCommitDiff() != nil {
+		t.Fatalf("got loads %v, %v, %v, want only the whole file one", hunkContextLoad, wholeFileLoad, m.loadSelectedCommitDiff())
 	}
 }
 
@@ -277,12 +292,12 @@ func TestDiscardOpensOnTheSelectedFile(t *testing.T) {
 	}
 }
 
-func listNothing(context.Context) (Listing, error) {
-	return Listing{Repositories: []ListedRepository{}, Refusals: []RefusedRepository{}}, nil
+func listNothing(context.Context) (focus.Found, error) {
+	return focus.Found{Repositories: []focus.FoundRepository{}, Refusals: []focus.FoundRefusal{}}, nil
 }
 
 func focusOn(dir string) RepositoriesFocused {
-	return RepositoriesFocused{Repositories: []gitrepo.Repository{{Dir: dir}}, Refusals: []string{}}
+	return RepositoriesFocused{Repositories: []gitrepo.Repository{{Dir: dir}}, Refusals: []error{}}
 }
 
 func TestFullscreenDiffCoversTheListsSoAClickThereSelectsNothing(t *testing.T) {
@@ -293,13 +308,15 @@ func TestFullscreenDiffCoversTheListsSoAClickThereSelectsNothing(t *testing.T) {
 	m = update(t, m, tea.KeyPressMsg{Code: 'd', Text: "d"})
 	m = update(t, m, tea.MouseClickMsg{X: 3, Y: 3, Button: tea.MouseLeft})
 
-	if m.diffInnerWidth() != 118 || m.selected != 0 {
-		t.Fatalf("got diff width %d, selected file %d, want 118 and file 0", m.diffInnerWidth(), m.selected)
+	if m.diffInnerWidth() != 118 || m.selectedChange != 0 {
+		t.Fatalf("got diff width %d, selected file %d, want 118 and file 0", m.diffInnerWidth(), m.selectedChange)
 	}
 }
 
 func TestADivergedBranchOffersAForcePush(t *testing.T) {
-	m := pressPush(t, gitrepo.Status{Branch: "fix", Upstream: "origin/fix", Ahead: 2, Behind: 1})
+	m := pressPush(t, gitrepo.Status{
+		Branch: "fix", Tracking: gitrepo.Tracking{Upstream: "origin/fix", Ahead: 2, Behind: 1},
+	})
 
 	if m.popup != forcePushPopup || !strings.Contains(m.renderForcePushPopup(), "replaces 1 commit on origin/fix with 2 commits") {
 		t.Fatalf("got popup %d:\n%s", m.popup, m.renderForcePushPopup())
@@ -316,8 +333,9 @@ func pressPush(t *testing.T, status gitrepo.Status) Model {
 func TestRightClickingAnOlderPushedCommitOffersToAmendItWithAForcePushWarning(t *testing.T) {
 	m := update(t, New(listNothing), tea.WindowSizeMsg{Width: 120, Height: 30})
 	m = update(t, m, focusOn("C:/dev/repo"))
-	m = update(t, m, statusLoadedMsg{dir: "C:/dev/repo", status: gitrepo.Status{Branch: "fix", Upstream: "origin/fix",
-		Ahead: 1, Files: twoFiles(), HasCommits: true}})
+	m = update(t, m, statusLoadedMsg{dir: "C:/dev/repo", status: gitrepo.Status{
+		Branch: "fix", Tracking: gitrepo.Tracking{Upstream: "origin/fix", Ahead: 1}, Files: twoFiles(), HasCommits: true,
+	}})
 	m = update(t, m, logLoadedMsg{dir: "C:/dev/repo", limit: logPageSize, commits: []gitrepo.Commit{
 		{Hash: strings.Repeat("1", 40), Parents: []string{strings.Repeat("2", 40)}},
 		{Hash: strings.Repeat("2", 40), ShortHash: "2222222", Summary: "Fix wrap"},
@@ -377,8 +395,8 @@ func expandingACommitListsItsFilesUnderIt(t *testing.T) {
 	m = update(t, m, tea.KeyPressMsg{Code: 'j', Text: "j"})
 
 	want := []logRow{{commit: 0, file: commitRow}, {commit: 0, file: 0}, {commit: 0, file: 1}, {commit: 1, file: commitRow}}
-	if !reflect.DeepEqual(m.visibleLogRows(), want) || m.selectedFile != 1 || m.commitPaneTitle() != " b.go" {
-		t.Fatalf("got rows %v, selected file %d, title %q", m.visibleLogRows(), m.selectedFile, m.commitPaneTitle())
+	if !reflect.DeepEqual(m.visibleLogRows(), want) || m.selectedCommitFile != 1 || m.commitPaneTitle() != " b.go" {
+		t.Fatalf("got rows %v, selected file %d, title %q", m.visibleLogRows(), m.selectedCommitFile, m.commitPaneTitle())
 	}
 }
 
@@ -497,8 +515,8 @@ func refocusingTheSameRepositoryKeepsTheSelection(t *testing.T) {
 
 	m = update(t, m, focusOn("C:/dev/repo"))
 
-	if m.selected != 1 || len(m.status.Files) != 2 {
-		t.Fatalf("got selection %d of %d files, want 1 of 2", m.selected, len(m.status.Files))
+	if m.selectedChange != 1 || len(m.status.Files) != 2 {
+		t.Fatalf("got selection %d of %d files, want 1 of 2", m.selectedChange, len(m.status.Files))
 	}
 }
 

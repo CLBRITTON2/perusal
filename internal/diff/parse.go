@@ -41,8 +41,8 @@ type Span struct {
 }
 
 type Row struct {
-	Left  Line
-	Right Line
+	Old Line
+	New Line
 }
 
 type Hunk struct {
@@ -79,10 +79,10 @@ func CountLines(fileDiff FileDiff) LineCounts {
 	counts := LineCounts{}
 	for _, hunk := range fileDiff.Hunks {
 		for _, row := range hunk.Rows {
-			if row.Left.Kind == LineRemoved {
+			if row.Old.Kind == LineRemoved {
 				counts.Removed++
 			}
-			if row.Right.Kind == LineAdded {
+			if row.New.Kind == LineAdded {
 				counts.Added++
 			}
 		}
@@ -157,11 +157,11 @@ func sectionPath(lines []string) (string, error) {
 	if oldPath != "" {
 		return oldPath, nil
 	}
-	return headerPath(strings.TrimPrefix(lines[0], fileHeaderPrefix))
+	return headerNames(strings.TrimPrefix(lines[0], fileHeaderPrefix))
 }
 
 // Both names are quoted alike unless the file was renamed, and a rename has its own rename to line.
-func headerPath(paths string) (string, error) {
+func headerNames(paths string) (string, error) {
 	if strings.HasPrefix(paths, `"`) {
 		quoted, err := strconv.QuotedPrefix(paths)
 		if err != nil {
@@ -173,9 +173,9 @@ func headerPath(paths string) (string, error) {
 		}
 		return strings.TrimPrefix(path, "a/"), nil
 	}
-	half := (len(paths) - 1) / 2
-	if len(paths)%2 == 1 && strings.HasPrefix(paths, "a/") && paths[half:half+3] == " b/" {
-		return paths[2:half], nil
+	separatorIndex := (len(paths) - 1) / 2
+	if len(paths)%2 == 1 && strings.HasPrefix(paths, "a/") && paths[separatorIndex:separatorIndex+3] == " b/" {
+		return paths[2:separatorIndex], nil
 	}
 	return paths, nil
 }
@@ -194,38 +194,32 @@ func unquotePath(field string) (string, error) {
 }
 
 func ParseUnified(text string) (FileDiff, error) {
-	fileDiff := FileDiff{}
-	var hunk *Hunk
-	pending := changeBlock{}
-	oldNumber := 0
-	newNumber := 0
+	p := unifiedParser{}
 	for index, rawLine := range strings.Split(text, "\n") {
 		line := strings.TrimSuffix(rawLine, "\r")
 		if strings.HasPrefix(line, "@@") {
-			if hunk != nil {
-				hunk.Rows = append(hunk.Rows, pending.pairRows()...)
-				pending = changeBlock{}
+			if p.inHunk() {
+				p.flush()
 			}
 			oldStart, newStart, err := parseHunkStarts(line)
 			if err != nil {
 				return FileDiff{}, fmt.Errorf("parse diff line %d: %w", index+1, err)
 			}
-			oldNumber = oldStart
-			newNumber = newStart
-			fileDiff.Hunks = append(fileDiff.Hunks, Hunk{Header: line})
-			hunk = &fileDiff.Hunks[len(fileDiff.Hunks)-1]
+			p.oldNumber = oldStart
+			p.newNumber = newStart
+			p.fileDiff.Hunks = append(p.fileDiff.Hunks, Hunk{Header: line})
 			continue
 		}
-		if hunk == nil {
+		if !p.inHunk() {
 			switch {
 			case strings.HasPrefix(line, "Binary files "):
-				fileDiff.Binary = true
+				p.fileDiff.Binary = true
 			case strings.HasPrefix(line, "new file mode "):
-				fileDiff.Change = FileAdded
+				p.fileDiff.Change = FileAdded
 			case strings.HasPrefix(line, "deleted file mode "):
-				fileDiff.Change = FileDeleted
+				p.fileDiff.Change = FileDeleted
 			case strings.HasPrefix(line, "rename from "):
-				fileDiff.Change = FileRenamed
+				p.fileDiff.Change = FileRenamed
 			}
 			continue
 		}
@@ -234,32 +228,52 @@ func ParseUnified(text string) (FileDiff, error) {
 		}
 		switch line[0] {
 		case ' ':
-			hunk.Rows = append(hunk.Rows, pending.pairRows()...)
-			pending = changeBlock{}
-			hunk.Rows = append(hunk.Rows, Row{
-				Left:  Line{Kind: LineContext, Number: oldNumber, Text: line[1:]},
-				Right: Line{Kind: LineContext, Number: newNumber, Text: line[1:]},
+			p.flush()
+			p.appendRows(Row{
+				Old: Line{Kind: LineContext, Number: p.oldNumber, Text: line[1:]},
+				New: Line{Kind: LineContext, Number: p.newNumber, Text: line[1:]},
 			})
-			oldNumber++
-			newNumber++
+			p.oldNumber++
+			p.newNumber++
 		case '-':
-			if len(pending.added) > 0 {
-				hunk.Rows = append(hunk.Rows, pending.pairRows()...)
-				pending = changeBlock{}
+			if len(p.pending.added) > 0 {
+				p.flush()
 			}
-			pending.removed = append(pending.removed, Line{Kind: LineRemoved, Number: oldNumber, Text: line[1:]})
-			oldNumber++
+			p.pending.removed = append(p.pending.removed, Line{Kind: LineRemoved, Number: p.oldNumber, Text: line[1:]})
+			p.oldNumber++
 		case '+':
-			pending.added = append(pending.added, Line{Kind: LineAdded, Number: newNumber, Text: line[1:]})
-			newNumber++
+			p.pending.added = append(p.pending.added, Line{Kind: LineAdded, Number: p.newNumber, Text: line[1:]})
+			p.newNumber++
 		default:
 			return FileDiff{}, fmt.Errorf("parse diff line %d: unexpected %q inside a hunk", index+1, line)
 		}
 	}
-	if hunk != nil {
-		hunk.Rows = append(hunk.Rows, pending.pairRows()...)
+	if p.inHunk() {
+		p.flush()
 	}
-	return fileDiff, nil
+	return p.fileDiff, nil
+}
+
+// pending holds the removals and additions not yet paired into rows of the last hunk.
+type unifiedParser struct {
+	fileDiff  FileDiff
+	pending   changeBlock
+	oldNumber int
+	newNumber int
+}
+
+func (p *unifiedParser) inHunk() bool {
+	return len(p.fileDiff.Hunks) > 0
+}
+
+func (p *unifiedParser) flush() {
+	p.appendRows(p.pending.pairRows()...)
+	p.pending = changeBlock{}
+}
+
+func (p *unifiedParser) appendRows(rows ...Row) {
+	last := len(p.fileDiff.Hunks) - 1
+	p.fileDiff.Hunks[last].Rows = append(p.fileDiff.Hunks[last].Rows, rows...)
 }
 
 func parseHunkStarts(header string) (int, int, error) {
@@ -287,32 +301,33 @@ type changeBlock struct {
 func (b changeBlock) pairRows() []Row {
 	rows := []Row{}
 	for i := 0; i < max(len(b.removed), len(b.added)); i++ {
-		left := lineOrBlank(b.removed, i)
-		right := lineOrBlank(b.added, i)
+		removed := lineOrBlank(b.removed, i)
+		added := lineOrBlank(b.added, i)
 		if len(b.removed) == len(b.added) {
-			rows = append(rows, markedRow(left, right))
+			rows = append(rows, markedRow(removed, added))
 		} else {
-			rows = append(rows, Row{Left: left, Right: right})
+			rows = append(rows, Row{Old: removed, New: added})
 		}
 	}
 	return rows
 }
 
-// Marks what lies between the lines' common prefix and suffix, and nothing when they share neither.
 func markedRow(removed Line, added Line) Row {
 	prefix := commonPrefixLength(removed.Text, added.Text)
 	suffix := commonSuffixLength(removed.Text[prefix:], added.Text[prefix:])
 	if prefix+suffix == 0 {
-		return Row{Left: removed, Right: added}
+		return Row{Old: removed, New: added}
 	}
 	return Row{
-		Left:  withChanged(removed, Span{Start: prefix, End: len(removed.Text) - suffix}),
-		Right: withChanged(added, Span{Start: prefix, End: len(added.Text) - suffix}),
+		Old: withChanged(removed, Span{Start: prefix, End: len(removed.Text) - suffix}),
+		New: withChanged(added, Span{Start: prefix, End: len(added.Text) - suffix}),
 	}
 }
 
 func withChanged(line Line, changed Span) Line {
-	return Line{Kind: line.Kind, Number: line.Number, Text: line.Text, Changed: changed}
+	marked := line
+	marked.Changed = changed
+	return marked
 }
 
 // Backs off to a rune start, so a span never splits a character.

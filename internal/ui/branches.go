@@ -13,10 +13,10 @@ import (
 	"github.com/CLBRITTON2/perusal/internal/gitrepo"
 )
 
-// merged is MergedInto's answer for the default branch, and stays false for the default branch itself.
+// mergedIntoDefault stays false for the default branch itself.
 type branchRow struct {
-	branch gitrepo.Branch
-	merged bool
+	branch            gitrepo.Branch
+	mergedIntoDefault bool
 }
 
 // defaultBranch is origin's, as DefaultBranch names it, and empty when origin/HEAD is unset.
@@ -50,11 +50,11 @@ type branchDeletedMsg struct {
 	branch string
 }
 
-type branchesRequest struct {
+type branchListRequest struct {
 	repository gitrepo.Repository
 }
 
-func (r branchesRequest) load() tea.Msg {
+func (r branchListRequest) load() tea.Msg {
 	ctx := context.Background()
 	dir := r.repository.Dir
 	branches, err := r.repository.Branches(ctx)
@@ -66,7 +66,7 @@ func (r branchesRequest) load() tea.Msg {
 		return branchesFailedMsg{dir: dir, err: err}
 	}
 	rows := make([]branchRow, len(branches))
-	failures := make([]error, len(branches))
+	errs := make([]error, len(branches))
 	var group sync.WaitGroup
 	for index, branch := range branches {
 		rows[index] = branchRow{branch: branch}
@@ -74,11 +74,11 @@ func (r branchesRequest) load() tea.Msg {
 			continue
 		}
 		group.Go(func() {
-			rows[index].merged, failures[index] = r.repository.MergedInto(ctx, "refs/heads/"+branch.Name, defaultBranch)
+			rows[index].mergedIntoDefault, errs[index] = r.repository.MergedInto(ctx, "refs/heads/"+branch.Name, defaultBranch)
 		})
 	}
 	group.Wait()
-	if err := errors.Join(failures...); err != nil {
+	if err := errors.Join(errs...); err != nil {
 		return branchesFailedMsg{dir: dir, err: err}
 	}
 	return branchesLoadedMsg{dir: dir, rows: rows, defaultBranch: defaultBranch}
@@ -108,7 +108,7 @@ func (m Model) openBranches() (tea.Model, tea.Cmd) {
 		return m, nil
 	}
 	m.branches = branchList{open: true, rows: []branchRow{}}
-	return m, branchesRequest{repository: m.repository}.load
+	return m, branchListRequest{repository: m.repository}.load
 }
 
 // The first load selects the current branch, and a reload after a delete keeps the selection where it was.
@@ -196,7 +196,7 @@ func (m Model) withBranchDeleted(msg branchDeletedMsg) (tea.Model, tea.Cmd) {
 	if !m.branches.open {
 		return m, nil
 	}
-	return m, branchesRequest{repository: m.repository}.load
+	return m, branchListRequest{repository: m.repository}.load
 }
 
 func (m Model) renderDeleteBranchPopup() string {
@@ -208,7 +208,7 @@ func (m Model) renderDeleteBranchPopup() string {
 
 func (m Model) renderDeleteTargetMerged() string {
 	defaultBranch := sanitizeText(m.branches.defaultBranch)
-	if m.deleteBranchTarget.merged {
+	if m.deleteBranchTarget.mergedIntoDefault {
 		return textStyle.Render(defaultBranch + " has all its changes")
 	}
 	return warningStyle.Render(defaultBranch + " lacks some of its changes")
@@ -251,7 +251,7 @@ func renderBranchCells(row branchRow, defaultBranch string) []string {
 		renderCurrentMark(row.branch),
 		branchStyle.Render(branchGlyph + " " + sanitizeText(row.branch.Name)),
 		renderUpstream(row.branch),
-		renderAheadBehind(row.branch.Ahead, row.branch.Behind),
+		renderAheadBehind(row.branch.Tracking),
 		renderMerged(row, defaultBranch),
 	}
 }
@@ -260,7 +260,7 @@ func renderCurrentMark(branch gitrepo.Branch) string {
 	if !branch.Current {
 		return ""
 	}
-	return aheadStyle.Render("*")
+	return markStyle.Render("*")
 }
 
 func renderUpstream(branch gitrepo.Branch) string {
@@ -271,7 +271,7 @@ func renderUpstream(branch gitrepo.Branch) string {
 }
 
 func renderMerged(row branchRow, defaultBranch string) string {
-	if !row.merged {
+	if !row.mergedIntoDefault {
 		return ""
 	}
 	return successStyle.Render("merged") + mutedStyle.Render(" into "+sanitizeText(defaultBranch))

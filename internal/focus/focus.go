@@ -1,6 +1,5 @@
 //go:build windows
 
-// Package focus maps the agent's focused herdr pane to the repositories the owner can safely run git in.
 package focus
 
 import (
@@ -15,63 +14,33 @@ import (
 	"strings"
 
 	"github.com/fsnotify/fsnotify"
+	"golang.org/x/sys/windows"
 
 	"github.com/CLBRITTON2/perusal/internal/gitrepo"
 )
 
 const maximumFocusFileBytes = 4096
 
-var (
-	ErrMalformedFocusFile = errors.New("the focus file must hold one absolute path per line")
-	ErrOutsideAgentDir    = errors.New("the path is outside the agent directory")
-	ErrNotWorkTree        = errors.New("no .git between the path and the owner directory")
-	ErrGitDirUnprotected  = errors.New("the .git directory is not write-denied to the agent account")
-	ErrWorkTreeMismatch   = errors.New("git resolved a different work tree than the one checked")
-)
-
-// AgentDir and OwnerDir are one directory, as each account reaches it.
 type Rules struct {
-	AgentDir string
-	OwnerDir string
-	AgentSID string
+	Config
+	AgentSID *windows.SID
 }
 
-// Repositories are in focus file order, each once. Refusals are the paths that failed a check.
+func NewRules(config Config) (Rules, error) {
+	sid, _, accountType, err := windows.LookupSID("", config.AgentAccount)
+	if err != nil {
+		return Rules{}, fmt.Errorf("look up account %s: %w", config.AgentAccount, err)
+	}
+	if accountType != windows.SidTypeUser {
+		return Rules{}, fmt.Errorf("account %s is not a user account (SID type %d)", config.AgentAccount, accountType)
+	}
+	return Rules{Config: config, AgentSID: sid}, nil
+}
+
+// Repositories are in focus file order, each once. Refusals hold an error for each path that failed a check.
 type Focus struct {
 	Repositories []gitrepo.Repository
 	Refusals     []error
-}
-
-// Name is the work tree's path below the owner directory, with forward slashes.
-type FoundRepository struct {
-	Name       string
-	Repository gitrepo.Repository
-}
-
-// Name is as in FoundRepository.
-type FoundRefusal struct {
-	Name string
-	Err  error
-}
-
-// Summary names the check Err failed in a few words, short enough for a list row.
-func (r FoundRefusal) Summary() string {
-	switch {
-	case errors.Is(r.Err, ErrGitDirUnprotected):
-		return "not write-denied to the agent"
-	case errors.Is(r.Err, ErrWorkTreeMismatch):
-		return "git opens a different work tree"
-	case errors.Is(r.Err, fs.ErrPermission):
-		return "access denied"
-	}
-	return "failed a check"
-}
-
-// Repositories are in path order. Refusals are the work trees that failed a check and the directories that could not
-// be listed.
-type Found struct {
-	Repositories []FoundRepository
-	Refusals     []FoundRefusal
 }
 
 type Result struct {
@@ -79,25 +48,29 @@ type Result struct {
 	Err   error
 }
 
-func Follow(ctx context.Context, rules Rules, focusFile string) (<-chan Result, error) {
+func Follow(ctx context.Context, rules Rules) (<-chan Result, error) {
 	watcher, err := fsnotify.NewWatcher()
 	if err != nil {
-		return nil, fmt.Errorf("create a watcher for focus file %s: %w", focusFile, err)
+		return nil, fmt.Errorf("create a watcher for focus file %s: %w", rules.FocusFile, err)
 	}
 	// The publisher replaces the file instead of writing into it, which a watch on the file itself does not survive.
-	if err := watcher.Add(filepath.Dir(focusFile)); err != nil {
-		watcher.Close()
-		return nil, fmt.Errorf("watch the directory of focus file %s: %w", focusFile, err)
+	if err := watcher.Add(filepath.Dir(rules.FocusFile)); err != nil {
+		watchErr := fmt.Errorf("watch the directory of focus file %s: %w", rules.FocusFile, err)
+		return nil, errors.Join(watchErr, watcher.Close())
 	}
 	results := make(chan Result)
-	go watchFocusFile(ctx, watcher, rules, focusFile, results)
+	go watchFocusFile(ctx, watcher, rules, results)
 	return results, nil
 }
 
-func watchFocusFile(ctx context.Context, watcher *fsnotify.Watcher, rules Rules, focusFile string, results chan<- Result) {
+func watchFocusFile(ctx context.Context, watcher *fsnotify.Watcher, rules Rules, results chan<- Result) {
 	defer close(results)
-	defer watcher.Close()
-	if !sendResult(ctx, results, resolveResult(ctx, rules, focusFile)) {
+	defer func() {
+		if err := watcher.Close(); err != nil {
+			sendResult(ctx, results, Result{Err: fmt.Errorf("stop watching focus file %s: %w", rules.FocusFile, err)})
+		}
+	}()
+	if !sendResult(ctx, results, resolveResult(ctx, rules)) {
 		return
 	}
 	for {
@@ -108,25 +81,25 @@ func watchFocusFile(ctx context.Context, watcher *fsnotify.Watcher, rules Rules,
 			if !open {
 				return
 			}
-			if !isWriteTo(event, focusFile) {
+			if !isFocusFileUpdate(event, rules.FocusFile) {
 				continue
 			}
-			if !sendResult(ctx, results, resolveResult(ctx, rules, focusFile)) {
+			if !sendResult(ctx, results, resolveResult(ctx, rules)) {
 				return
 			}
 		case err, open := <-watcher.Errors:
 			if !open {
 				return
 			}
-			if !sendResult(ctx, results, Result{Err: fmt.Errorf("watch focus file %s: %w", focusFile, err)}) {
+			if !sendResult(ctx, results, Result{Err: fmt.Errorf("watch focus file %s: %w", rules.FocusFile, err)}) {
 				return
 			}
 		}
 	}
 }
 
-func isWriteTo(event fsnotify.Event, focusFile string) bool {
-	return event.Op&(fsnotify.Create|fsnotify.Write) != 0 && strings.EqualFold(filepath.Clean(event.Name), filepath.Clean(focusFile))
+func isFocusFileUpdate(event fsnotify.Event, focusFile string) bool {
+	return event.Op&(fsnotify.Create|fsnotify.Write) != 0 && isSamePath(event.Name, focusFile)
 }
 
 func sendResult(ctx context.Context, results chan<- Result, result Result) bool {
@@ -138,20 +111,20 @@ func sendResult(ctx context.Context, results chan<- Result, result Result) bool 
 	}
 }
 
-func resolveResult(ctx context.Context, rules Rules, focusFile string) Result {
-	focus, err := Resolve(ctx, rules, focusFile)
+func resolveResult(ctx context.Context, rules Rules) Result {
+	focus, err := resolve(ctx, rules)
 	return Result{Focus: focus, Err: err}
 }
 
-// Resolve fails only when the focus file is unreadable or none of its paths passes the checks.
-func Resolve(ctx context.Context, rules Rules, focusFile string) (Focus, error) {
-	content, err := readFocusFile(focusFile)
+// resolve fails only when the focus file is unreadable or none of its paths passes the checks.
+func resolve(ctx context.Context, rules Rules) (Focus, error) {
+	content, err := readFocusFile(rules.FocusFile)
 	if err != nil {
 		return Focus{}, err
 	}
-	agentPaths, err := ParseFocusFile(content)
+	agentPaths, err := parseFocusFile(content)
 	if err != nil {
-		return Focus{}, fmt.Errorf("parse focus file %s: %w", focusFile, err)
+		return Focus{}, fmt.Errorf("parse focus file %s: %w", rules.FocusFile, err)
 	}
 	repositories := []gitrepo.Repository{}
 	refusals := []error{}
@@ -171,57 +144,65 @@ func Resolve(ctx context.Context, rules Rules, focusFile string) (Focus, error) 
 }
 
 func resolvePath(ctx context.Context, rules Rules, agentPath string) (gitrepo.Repository, error) {
-	ownerPath, err := MapPath(agentPath, rules.AgentDir, rules.OwnerDir)
+	ownerPath, err := mapPath(agentPath, rules.AgentDir, rules.OwnerDir)
 	if err != nil {
 		return gitrepo.Repository{}, err
 	}
-	workTree, err := FindWorkTree(ownerPath, rules.OwnerDir)
+	workTree, err := findWorkTree(ownerPath, rules.OwnerDir)
 	if err != nil {
 		return gitrepo.Repository{}, err
 	}
 	return openWorkTree(ctx, rules.AgentSID, workTree)
 }
 
-// FindRepositories lists every work tree under the owner directory, checked as Resolve checks a focused one. It does
+// FindRepositories lists every work tree under the owner directory, checked as resolve checks a focused one. It does
 // not look inside a work tree, so a nested one is not listed.
 func FindRepositories(ctx context.Context, rules Rules) (Found, error) {
 	found := Found{Repositories: []FoundRepository{}, Refusals: []FoundRefusal{}}
-	err := filepath.WalkDir(rules.OwnerDir, func(path string, entry fs.DirEntry, err error) error {
+	err := filepath.WalkDir(rules.OwnerDir, func(path string, entry fs.DirEntry, listErr error) error {
 		switch {
-		case entry == nil:
-			return fmt.Errorf("list owner directory %s: %w", rules.OwnerDir, err)
-		case err == nil && !entry.IsDir():
+		case entry == nil: // WalkDir passes a nil entry only when the root's Lstat fails
+			return fmt.Errorf("list owner directory %s: %w", rules.OwnerDir, listErr)
+		case listErr == nil && !entry.IsDir():
 			return nil
 		}
-		name, nameErr := nameBelow(rules.OwnerDir, path)
-		if nameErr != nil {
-			return nameErr
-		}
+		name, err := nameBelow(rules.OwnerDir, path)
 		if err != nil {
-			found.Refusals = append(found.Refusals, FoundRefusal{Name: name, Err: fmt.Errorf("list %s: %w", path, err)})
-			return filepath.SkipDir
+			return err
 		}
-		_, err = os.Lstat(filepath.Join(path, ".git"))
+		repository, isWorkTree, err := openIfWorkTree(ctx, rules.AgentSID, path, listErr)
 		switch {
-		case errors.Is(err, fs.ErrNotExist):
-			return nil
 		case err != nil:
-			found.Refusals = append(found.Refusals,
-				FoundRefusal{Name: name, Err: fmt.Errorf("look for .git in %s: %w", path, err)})
+			found.Refusals = append(found.Refusals, FoundRefusal{RelativePath: name, Err: err})
 			return filepath.SkipDir
+		case !isWorkTree:
+			return nil
 		}
-		repository, err := openWorkTree(ctx, rules.AgentSID, path)
-		if err != nil {
-			found.Refusals = append(found.Refusals, FoundRefusal{Name: name, Err: err})
-			return filepath.SkipDir
-		}
-		found.Repositories = append(found.Repositories, FoundRepository{Name: name, Repository: repository})
+		found.Repositories = append(found.Repositories, FoundRepository{RelativePath: name, Repository: repository})
 		return filepath.SkipDir
 	})
 	if err != nil {
 		return Found{}, err
 	}
 	return found, nil
+}
+
+// listErr is the error WalkDir hit listing dir.
+func openIfWorkTree(ctx context.Context, agentSID *windows.SID, dir string, listErr error) (
+	gitrepo.Repository, bool, error,
+) {
+	if listErr != nil {
+		return gitrepo.Repository{}, false, fmt.Errorf("list %s: %w", dir, listErr)
+	}
+	isWorkTree, err := hasDotGit(dir)
+	if err != nil || !isWorkTree {
+		return gitrepo.Repository{}, false, err
+	}
+	repository, err := openWorkTree(ctx, agentSID, dir)
+	if err != nil {
+		return gitrepo.Repository{}, false, err
+	}
+	return repository, true, nil
 }
 
 func nameBelow(ownerDir string, path string) (string, error) {
@@ -233,8 +214,8 @@ func nameBelow(ownerDir string, path string) (string, error) {
 }
 
 // The owner's git runs the config and hooks of a .git, so one the agent could write is refused.
-func openWorkTree(ctx context.Context, agentSID string, workTree string) (gitrepo.Repository, error) {
-	if err := VerifyGitDir(filepath.Join(workTree, ".git"), agentSID); err != nil {
+func openWorkTree(ctx context.Context, agentSID *windows.SID, workTree string) (gitrepo.Repository, error) {
+	if err := verifyGitDir(filepath.Join(workTree, ".git"), agentSID); err != nil {
 		return gitrepo.Repository{}, err
 	}
 	repository, err := gitrepo.Open(ctx, workTree)
@@ -265,6 +246,11 @@ func isSameDirectory(first string, second string) (bool, error) {
 	return os.SameFile(firstInfo, secondInfo), nil
 }
 
+// isSamePath compares spelling, case-insensitively as Windows does.
+func isSamePath(first string, second string) bool {
+	return strings.EqualFold(filepath.Clean(first), filepath.Clean(second))
+}
+
 func readFocusFile(focusFile string) (string, error) {
 	file, err := openSharingDelete(focusFile)
 	if err != nil {
@@ -282,7 +268,7 @@ func readFocusFile(focusFile string) (string, error) {
 }
 
 // A trailing line break is allowed so a hand-written file works.
-func ParseFocusFile(content string) ([]string, error) {
+func parseFocusFile(content string) ([]string, error) {
 	trimmed := strings.TrimRight(content, "\r\n")
 	if trimmed == "" {
 		return nil, fmt.Errorf("%w, got %q", ErrMalformedFocusFile, content)
@@ -298,37 +284,47 @@ func ParseFocusFile(content string) ([]string, error) {
 	return paths, nil
 }
 
-func MapPath(agentPath string, agentDir string, ownerDir string) (string, error) {
-	cleaned := filepath.Clean(agentPath)
-	root := filepath.Clean(agentDir)
-	if !filepath.IsAbs(cleaned) {
+func mapPath(agentPath string, agentDir string, ownerDir string) (string, error) {
+	cleanAgentPath := filepath.Clean(agentPath)
+	agentRoot := filepath.Clean(agentDir)
+	if !filepath.IsAbs(cleanAgentPath) {
 		return "", fmt.Errorf("%w: %s is not absolute", ErrOutsideAgentDir, agentPath)
 	}
-	if strings.EqualFold(cleaned, root) {
+	if isSamePath(cleanAgentPath, agentRoot) {
 		return filepath.Clean(ownerDir), nil
 	}
-	prefix := root + string(filepath.Separator)
-	if len(cleaned) <= len(prefix) || !strings.EqualFold(cleaned[:len(prefix)], prefix) {
+	prefix := agentRoot + string(filepath.Separator)
+	if len(cleanAgentPath) <= len(prefix) || !strings.EqualFold(cleanAgentPath[:len(prefix)], prefix) {
 		return "", fmt.Errorf("%w: %s is not under %s", ErrOutsideAgentDir, agentPath, agentDir)
 	}
-	return filepath.Join(ownerDir, cleaned[len(prefix):]), nil
+	return filepath.Join(ownerDir, cleanAgentPath[len(prefix):]), nil
 }
 
-func FindWorkTree(dir string, ownerDir string) (string, error) {
-	root := filepath.Clean(ownerDir)
+func findWorkTree(dir string, ownerDir string) (string, error) {
 	current := filepath.Clean(dir)
 	for {
-		_, err := os.Lstat(filepath.Join(current, ".git"))
-		if err == nil {
+		isWorkTree, err := hasDotGit(current)
+		if err != nil {
+			return "", err
+		}
+		if isWorkTree {
 			return current, nil
 		}
-		if !errors.Is(err, fs.ErrNotExist) {
-			return "", fmt.Errorf("look for .git in %s: %w", current, err)
-		}
 		parent := filepath.Dir(current)
-		if strings.EqualFold(current, root) || parent == current {
+		if isSamePath(current, ownerDir) || parent == current {
 			return "", fmt.Errorf("%w: %s", ErrNotWorkTree, dir)
 		}
 		current = parent
 	}
+}
+
+func hasDotGit(dir string) (bool, error) {
+	_, err := os.Lstat(filepath.Join(dir, ".git"))
+	switch {
+	case err == nil:
+		return true, nil
+	case errors.Is(err, fs.ErrNotExist):
+		return false, nil
+	}
+	return false, fmt.Errorf("look for .git in %s: %w", dir, err)
 }

@@ -25,7 +25,7 @@ func TestVerifyGitDir(t *testing.T) {
 func acceptsTheSetupDeny(t *testing.T) {
 	gitDir := deniedGitDir(t, deniedWriteMask)
 
-	if err := VerifyGitDir(gitDir, guestsSID); err != nil {
+	if err := verifyGitDir(gitDir, guests(t)); err != nil {
 		t.Fatal(err)
 	}
 }
@@ -34,7 +34,7 @@ func refusesADirectoryWithoutTheDeny(t *testing.T) {
 	gitDir := filepath.Join(t.TempDir(), ".git")
 	mustMkdir(t, gitDir)
 
-	err := VerifyGitDir(gitDir, guestsSID)
+	err := verifyGitDir(gitDir, guests(t))
 
 	if !errors.Is(err, ErrGitDirUnprotected) {
 		t.Fatalf("got %v, want %v", err, ErrGitDirUnprotected)
@@ -44,7 +44,7 @@ func refusesADirectoryWithoutTheDeny(t *testing.T) {
 func refusesADenyThatIsMissingDelete(t *testing.T) {
 	gitDir := deniedGitDir(t, deniedWriteMask&^windows.DELETE)
 
-	err := VerifyGitDir(gitDir, guestsSID)
+	err := verifyGitDir(gitDir, guests(t))
 
 	if !errors.Is(err, ErrGitDirUnprotected) {
 		t.Fatalf("got %v, want %v", err, ErrGitDirUnprotected)
@@ -58,7 +58,7 @@ func refusesADirectoryTheAgentOwns(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	err = VerifyGitDir(gitDir, user.User.Sid.String())
+	err = verifyGitDir(gitDir, user.User.Sid)
 
 	if !errors.Is(err, ErrGitDirUnprotected) {
 		t.Fatalf("got %v, want %v", err, ErrGitDirUnprotected)
@@ -71,7 +71,7 @@ func refusesAGitFile(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	err := VerifyGitDir(gitFile, guestsSID)
+	err := verifyGitDir(gitFile, guests(t))
 
 	if !errors.Is(err, ErrGitDirUnprotected) {
 		t.Fatalf("got %v, want %v", err, ErrGitDirUnprotected)
@@ -86,17 +86,22 @@ func deniedGitDir(t *testing.T, mask uint32) string {
 	return gitDir
 }
 
+func guests(t *testing.T) *windows.SID {
+	t.Helper()
+	sid, err := windows.StringToSid(guestsSID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return sid
+}
+
 func denyGuests(t *testing.T, gitDir string, mask uint32) {
 	t.Helper()
-	guests, err := windows.StringToSid(guestsSID)
+	descriptor, err := windows.GetNamedSecurityInfo(gitDir, windows.SE_FILE_OBJECT, windows.DACL_SECURITY_INFORMATION)
 	if err != nil {
 		t.Fatal(err)
 	}
-	current, err := windows.GetNamedSecurityInfo(gitDir, windows.SE_FILE_OBJECT, windows.DACL_SECURITY_INFORMATION)
-	if err != nil {
-		t.Fatal(err)
-	}
-	currentDACL, _, err := current.DACL()
+	currentDACL, _, err := descriptor.DACL()
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -107,7 +112,7 @@ func denyGuests(t *testing.T, gitDir string, mask uint32) {
 		Trustee: windows.TRUSTEE{
 			TrusteeForm:  windows.TRUSTEE_IS_SID,
 			TrusteeType:  windows.TRUSTEE_IS_WELL_KNOWN_GROUP,
-			TrusteeValue: windows.TrusteeValueFromSID(guests),
+			TrusteeValue: windows.TrusteeValueFromSID(guests(t)),
 		},
 	}
 	dacl, err := windows.ACLFromEntries([]windows.EXPLICIT_ACCESS{deny}, currentDACL)

@@ -25,6 +25,14 @@ func (f FileStatus) HasStagedChanges() bool {
 	return f.IndexStatus != ' ' && f.IndexStatus != '?'
 }
 
+// pathspec names a rename's original path too.
+func (f FileStatus) pathspec() []string {
+	if f.OriginalPath == "" {
+		return []string{f.Path}
+	}
+	return []string{f.Path, f.OriginalPath}
+}
+
 // HasUnstagedChanges is true for an untracked file too, since staging it is still pending.
 func (f FileStatus) HasUnstagedChanges() bool {
 	return f.WorktreeStatus != ' '
@@ -33,25 +41,29 @@ func (f FileStatus) HasUnstagedChanges() bool {
 type Status struct {
 	// Branch is empty when HEAD is detached.
 	Branch string
+	Tracking
+	HasCommits bool
+	Files      []FileStatus
+}
+
+type Tracking struct {
 	// Upstream is empty when the branch tracks nothing. Ahead and Behind are 0 then, and when UpstreamGone.
 	Upstream string
 	// UpstreamGone is true when the ref Upstream names is missing, as after its remote branch was deleted and pruned.
 	UpstreamGone bool
 	Ahead        int
 	Behind       int
-	HasCommits   bool
-	Files        []FileStatus
 }
 
-// ParseStatus reads the NUL-separated output of git status --porcelain=v2 --branch -z.
-func ParseStatus(output []byte) (Status, error) {
+// parseStatus reads the NUL-separated output of git status --porcelain=v2 --branch -z.
+func parseStatus(output []byte) (Status, error) {
 	if len(output) == 0 {
 		return Status{}, errors.New("parse git status: no output, want at least the branch headers")
 	}
 	status := Status{Files: []FileStatus{}}
-	fields := bytes.Split(bytes.TrimSuffix(output, []byte{0}), []byte{0})
-	for i := 0; i < len(fields); i++ {
-		entry := string(fields[i])
+	entries := bytes.Split(bytes.TrimSuffix(output, []byte{0}), []byte{0})
+	for i := 0; i < len(entries); i++ {
+		entry := string(entries[i])
 		kind, rest, _ := strings.Cut(entry, " ")
 		switch kind {
 		case "#":
@@ -67,10 +79,10 @@ func ParseStatus(output []byte) (Status, error) {
 			}
 			if kind == "2" {
 				i++
-				if i == len(fields) {
+				if i == len(entries) {
 					return Status{}, fmt.Errorf("parse git status entry %q: rename has no original path", entry)
 				}
-				file.OriginalPath = string(fields[i])
+				file.OriginalPath = string(entries[i])
 			}
 			status.Files = append(status.Files, file)
 		case "?":
@@ -82,13 +94,13 @@ func ParseStatus(output []byte) (Status, error) {
 			return Status{}, fmt.Errorf("parse git status entry %q: unknown entry kind %q", entry, kind)
 		}
 	}
-	status.UpstreamGone = status.Upstream != "" && !hasAheadBehind(fields)
+	status.UpstreamGone = status.Upstream != "" && !hasAheadBehind(entries)
 	return status, nil
 }
 
 // git omits the branch.ab header when the upstream ref is missing.
-func hasAheadBehind(fields [][]byte) bool {
-	return slices.ContainsFunc(fields, func(field []byte) bool { return bytes.HasPrefix(field, []byte("# branch.ab ")) })
+func hasAheadBehind(entries [][]byte) bool {
+	return slices.ContainsFunc(entries, func(entry []byte) bool { return bytes.HasPrefix(entry, []byte("# branch.ab ")) })
 }
 
 func statusWithHeader(status Status, header string) (Status, error) {
@@ -134,13 +146,13 @@ var fieldsBeforePath = map[string]int{"1": 7, "2": 8, "u": 9}
 
 // The path is the rest of the entry, so it can hold spaces.
 func parseChangedEntry(kind string, rest string) (FileStatus, error) {
-	count := fieldsBeforePath[kind]
-	parts := strings.SplitN(rest, " ", count+1)
-	if len(parts) != count+1 || len(parts[0]) != 2 || parts[count] == "" {
-		return FileStatus{}, fmt.Errorf("want %d fields and a path", count)
+	pathIndex := fieldsBeforePath[kind]
+	parts := strings.SplitN(rest, " ", pathIndex+1)
+	if len(parts) != pathIndex+1 || len(parts[0]) != 2 || parts[pathIndex] == "" {
+		return FileStatus{}, fmt.Errorf("want %d fields and a path", pathIndex)
 	}
 	return FileStatus{
-		Path:           parts[count],
+		Path:           parts[pathIndex],
 		IndexStatus:    shortStatusCode(parts[0][0]),
 		WorktreeStatus: shortStatusCode(parts[0][1]),
 	}, nil

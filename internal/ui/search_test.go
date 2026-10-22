@@ -4,7 +4,7 @@ import (
 	"testing"
 )
 
-func TestHighlight(t *testing.T) {
+func TestSearchHighlight(t *testing.T) {
 	t.Run("mergesOverlappingMatchesAndSanitizesEachRun", mergesOverlappingMatchesAndSanitizesEachRun)
 }
 

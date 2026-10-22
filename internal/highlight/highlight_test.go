@@ -18,10 +18,10 @@ func aCommentOpenedInContextColorsTheAddedLineBelowIt(t *testing.T) {
 	fileDiff := diff.FileDiff{Hunks: []diff.Hunk{{
 		Header: "@@ -1,2 +1,2 @@",
 		Rows: []diff.Row{
-			{Left: diff.Line{Kind: diff.LineContext, Number: 1, Text: "/* open"},
-				Right: diff.Line{Kind: diff.LineContext, Number: 1, Text: "/* open"}},
-			{Left: diff.Line{Kind: diff.LineRemoved, Number: 2, Text: "x := 1"},
-				Right: diff.Line{Kind: diff.LineAdded, Number: 2, Text: "still a comment */"}},
+			{Old: diff.Line{Kind: diff.LineContext, Number: 1, Text: "/* open"},
+				New: diff.Line{Kind: diff.LineContext, Number: 1, Text: "/* open"}},
+			{Old: diff.Line{Kind: diff.LineRemoved, Number: 2, Text: "x := 1"},
+				New: diff.Line{Kind: diff.LineAdded, Number: 2, Text: "still a comment */"}},
 		},
 	}}}
 
@@ -30,8 +30,8 @@ func aCommentOpenedInContextColorsTheAddedLineBelowIt(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	added := highlighted.Hunks[0].Rows[1].Right
-	removed := highlighted.Hunks[0].Rows[1].Left
+	added := highlighted.Hunks[0].Rows[1].New
+	removed := highlighted.Hunks[0].Rows[1].Old
 	want := diff.Token{Span: diff.Span{Start: 0, End: len(added.Text)}, Color: "#6e6a86"}
 	if len(added.Tokens) != 1 || added.Tokens[0] != want || len(removed.Tokens) == 0 ||
 		removed.Tokens[0].Color == want.Color {
@@ -49,8 +49,9 @@ func theRepositorysOwnFilesLexWithoutDrift(t *testing.T) {
 		}
 		rows := []diff.Row{}
 		for number, text := range strings.Split(strings.TrimSuffix(string(content), "\n"), "\n") {
-			rows = append(rows, diff.Row{Left: diff.Line{Kind: diff.LineBlank},
-				Right: diff.Line{Kind: diff.LineAdded, Number: number + 1, Text: text + "\r"}})
+			// The CR catches a lexer that normalizes line endings, which would drift the offsets from Text.
+			rows = append(rows, diff.Row{Old: diff.Line{Kind: diff.LineBlank},
+				New: diff.Line{Kind: diff.LineAdded, Number: number + 1, Text: text + "\r"}})
 		}
 		fileDiff := diff.FileDiff{Change: diff.FileAdded, Hunks: []diff.Hunk{{Header: "@@ -0,0 +1 @@", Rows: rows}}}
 
@@ -64,7 +65,7 @@ func theRepositorysOwnFilesLexWithoutDrift(t *testing.T) {
 
 func anyTokens(fileDiff diff.FileDiff) bool {
 	for _, row := range fileDiff.Hunks[0].Rows {
-		if len(row.Right.Tokens) > 0 {
+		if len(row.New.Tokens) > 0 {
 			return true
 		}
 	}

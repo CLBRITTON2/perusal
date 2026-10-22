@@ -22,9 +22,9 @@ func TestBranchesListsEachLocalBranchWithItsUpstream(t *testing.T) {
 	branches, err := Repository{Dir: work}.Branches(context.Background())
 
 	want := []Branch{
-		{Name: "feature", Upstream: "origin/feature", UpstreamGone: true},
+		{Name: "feature", Tracking: Tracking{Upstream: "origin/feature", UpstreamGone: true}},
 		{Name: "fix/local", Current: true},
-		{Name: "main", Upstream: "origin/main", Ahead: 1, Behind: 1},
+		{Name: "main", Tracking: Tracking{Upstream: "origin/main", Ahead: 1, Behind: 1}},
 	}
 	if err != nil || !reflect.DeepEqual(branches, want) {
 		t.Fatalf("got %+v, %v, want %+v", branches, err, want)
@@ -41,7 +41,6 @@ func TestDeleteBranchDeletesABranchWithChangesTheDefaultBranchLacks(t *testing.T
 	}
 }
 
-// work is back on main, and feature adds a file main lacks.
 func withFeatureBranch(t *testing.T) string {
 	t.Helper()
 	_, work := pushedClone(t)

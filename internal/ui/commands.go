@@ -27,7 +27,7 @@ const (
 // Refusals are the focused paths that failed a check, shown so a refused repository is never silently skipped.
 type RepositoriesFocused struct {
 	Repositories []gitrepo.Repository
-	Refusals     []string
+	Refusals     []error
 }
 
 type FocusRejected struct {
@@ -70,8 +70,7 @@ type commitDiffLoadedMsg struct {
 	sections     []diff.FileSection
 }
 
-// uncommittedLoadedMsg carries the focused repositories it checked instead of a dir, and maps each Dir to whether it
-// has uncommitted changes.
+// uncommittedLoadedMsg carries the focused repositories it checked instead of a dir.
 type uncommittedLoadedMsg struct {
 	focused     []gitrepo.Repository
 	uncommitted map[string]bool

@@ -7,17 +7,20 @@ import (
 	"github.com/CLBRITTON2/perusal/internal/gitrepo"
 )
 
-const noRow = -1
+const (
+	noRow  = -1
+	noLane = -1
+)
 
-// graphEdge is the line from child down to one of its parents.
 type graphEdge struct {
 	child       string
 	parent      string
 	firstParent bool
 }
 
-// A cell is one terminal column, on the selected line when its childRow and parentRow both are. A commit's own
-// symbol holds its row in both, and a cell off any first-parent line holds noRow. int32 keeps a cell at 16 bytes, since the ziti graph holds 760,000 of them.
+// A cell is one terminal commitLane, on the selected path when its childRow and parentRow both are. A commit's own
+// symbol holds its row in both, and a cell off any first-parent path holds noRow. int32 keeps a cell at 16 bytes,
+// since a long history holds close to a million of them.
 type graphCell struct {
 	glyph     rune
 	lane      int32
@@ -25,13 +28,13 @@ type graphCell struct {
 	parentRow int32
 }
 
-// commit and below are the same width, two cells per lane. lineChild and lineParent are the rows the commit's
-// first-parent line continues to, or noRow.
+// commit and below are the same width, two cells per lane. pathChild and pathParent are the rows the commit's
+// first-parent path continues to, or noRow.
 type graphRow struct {
 	commit     []graphCell
 	below      []graphCell
-	lineChild  int32
-	lineParent int32
+	pathChild  int32
+	pathParent int32
 }
 
 func commitGraph(commits []gitrepo.Commit) []graphRow {
@@ -51,32 +54,32 @@ func commitGraph(commits []gitrepo.Commit) []graphRow {
 
 // Each lane holds the edge it leads down along.
 func graphStep(above []graphEdge, commit gitrepo.Commit, rowOf map[string]int32) (graphRow, []graphEdge) {
-	column := commitLane(above, commit.Hash)
+	commitLane := laneOf(above, commit.Hash)
 	below := slices.Clone(above)
-	for len(below) <= column {
+	for len(below) <= commitLane {
 		below = append(below, graphEdge{})
 	}
 	// Each connector is a lane joined to the commit by a horizontal line, which draws that lane's edge.
 	connectors := map[int]graphEdge{}
 	ending := map[int]bool{}
 	for lane, edge := range above {
-		if lane != column && edge.parent == commit.Hash {
+		if lane != commitLane && edge.parent == commit.Hash {
 			ending[lane] = true
 			connectors[lane] = edge
 			below[lane] = graphEdge{}
 		}
 	}
-	var lineChild int32 = noRow
-	if column < len(above) && above[column].parent == commit.Hash && above[column].firstParent {
-		lineChild = rowOf[above[column].child]
+	var pathChild int32 = noRow
+	if commitLane < len(above) && above[commitLane].parent == commit.Hash && above[commitLane].firstParent {
+		pathChild = rowOf[above[commitLane].child]
 	}
-	var lineParent int32 = noRow
+	var pathParent int32 = noRow
 	if len(commit.Parents) == 0 {
-		below[column] = graphEdge{}
+		below[commitLane] = graphEdge{}
 	} else {
-		below[column] = graphEdge{child: commit.Hash, parent: commit.Parents[0], firstParent: true}
+		below[commitLane] = graphEdge{child: commit.Hash, parent: commit.Parents[0], firstParent: true}
 		if row, loaded := rowOf[commit.Parents[0]]; loaded {
-			lineParent = row
+			pathParent = row
 		}
 	}
 	opening := map[int]bool{}
@@ -98,11 +101,11 @@ func graphStep(above []graphEdge, commit gitrepo.Commit, rowOf map[string]int32)
 		connectors[lane] = edge
 	}
 
-	first := column
-	last := column
+	leftmost := commitLane
+	rightmost := commitLane
 	for lane := range connectors {
-		first = min(first, lane)
-		last = max(last, lane)
+		leftmost = min(leftmost, lane)
+		rightmost = max(rightmost, lane)
 	}
 	var commitGlyph rune
 	if len(commit.Parents) > 1 {
@@ -115,21 +118,21 @@ func graphStep(above []graphEdge, commit gitrepo.Commit, rowOf map[string]int32)
 	belowCells := []graphCell{}
 	for lane := range width {
 		passing := lane < len(above) && above[lane].parent != "" && lane < len(below) && below[lane].parent != ""
-		crossed := first < lane && lane < last
+		crossed := leftmost < lane && lane < rightmost
 		var symbol graphCell
 		switch {
-		case lane == column:
+		case lane == commitLane:
 			row := rowOf[commit.Hash]
 			symbol = graphCell{glyph: commitGlyph, lane: int32(lane), childRow: row, parentRow: row}
-		case ending[lane] && lane > column:
+		case ending[lane] && lane > commitLane:
 			symbol = edgeCell('╯', lane, connectors[lane], rowOf)
 		case ending[lane]:
 			symbol = edgeCell('╰', lane, connectors[lane], rowOf)
-		case opening[lane] && lane > column:
+		case opening[lane] && lane > commitLane:
 			symbol = edgeCell('╮', lane, connectors[lane], rowOf)
 		case opening[lane]:
 			symbol = edgeCell('╭', lane, connectors[lane], rowOf)
-		case joining[lane] && lane > column:
+		case joining[lane] && lane > commitLane:
 			symbol = edgeCell('┤', lane, connectors[lane], rowOf)
 		case joining[lane]:
 			symbol = edgeCell('├', lane, connectors[lane], rowOf)
@@ -138,14 +141,14 @@ func graphStep(above []graphEdge, commit gitrepo.Commit, rowOf map[string]int32)
 		case passing:
 			symbol = edgeCell('│', lane, above[lane], rowOf)
 		case crossed:
-			connector := nearestConnector(connectors, column, lane)
+			connector := nearestConnector(connectors, commitLane, lane)
 			symbol = edgeCell('─', connector, connectors[connector], rowOf)
 		default:
 			symbol = blankCell(lane)
 		}
 		var filler graphCell
-		if first <= lane && lane < last {
-			connector := nearestConnector(connectors, column, gapSide(lane, column))
+		if leftmost <= lane && lane < rightmost {
+			connector := nearestConnector(connectors, commitLane, gapSide(lane, commitLane))
 			filler = edgeCell('─', connector, connectors[connector], rowOf)
 		} else {
 			filler = blankCell(lane)
@@ -160,7 +163,7 @@ func graphStep(above []graphEdge, commit gitrepo.Commit, rowOf map[string]int32)
 	for len(below) > 0 && below[len(below)-1].parent == "" {
 		below = below[:len(below)-1]
 	}
-	return graphRow{commit: commitCells, below: belowCells, lineChild: lineChild, lineParent: lineParent}, below
+	return graphRow{commit: commitCells, below: belowCells, pathChild: pathChild, pathParent: pathParent}, below
 }
 
 func edgeCell(glyph rune, lane int, edge graphEdge, rowOf map[string]int32) graphCell {
@@ -181,22 +184,22 @@ func blankCell(lane int) graphCell {
 }
 
 // The gap right of lane belongs to the side of the commit it lies on: lane+1 right of it, lane left of it.
-func gapSide(lane int, column int) int {
-	if lane >= column {
+func gapSide(lane int, commitLane int) int {
+	if lane >= commitLane {
 		return lane + 1
 	}
 	return lane
 }
 
 // A horizontal cell takes the color of the first connector at or beyond it, going outward from the commit.
-func nearestConnector(connectors map[int]graphEdge, column int, from int) int {
-	nearest := noRow
+func nearestConnector(connectors map[int]graphEdge, commitLane int, from int) int {
+	nearest := noLane
 	for lane := range connectors {
-		outward := (from > column && lane >= from) || (from < column && lane <= from)
+		outward := (from > commitLane && lane >= from) || (from < commitLane && lane <= from)
 		if !outward {
 			continue
 		}
-		if nearest == noRow || absInt(lane-from) < absInt(nearest-from) {
+		if nearest == noLane || absInt(lane-from) < absInt(nearest-from) {
 			nearest = lane
 		}
 	}
@@ -220,7 +223,7 @@ func freeLane(lanes []graphEdge, above []graphEdge) int {
 	return len(lanes)
 }
 
-func commitLane(above []graphEdge, hash string) int {
+func laneOf(above []graphEdge, hash string) int {
 	lane := slices.IndexFunc(above, func(edge graphEdge) bool { return edge.parent == hash })
 	if lane >= 0 {
 		return lane
@@ -228,40 +231,40 @@ func commitLane(above []graphEdge, hash string) int {
 	return freeLane(above, above)
 }
 
-// lineThrough marks the rows on the selected commit's first-parent line: its ancestors down to the oldest loaded
+// pathThrough marks the rows on the selected commit's first-parent path: its ancestors down to the oldest loaded
 // one, and the commits above whose first parent continues straight down into it.
-func lineThrough(rows []graphRow, selected int) []bool {
-	line := make([]bool, len(rows))
+func pathThrough(rows []graphRow, selected int) []bool {
+	path := make([]bool, len(rows))
 	if selected < 0 || selected >= len(rows) {
-		return line
+		return path
 	}
-	for row := int32(selected); row != noRow; row = rows[row].lineParent {
-		line[row] = true
+	for row := int32(selected); row != noRow; row = rows[row].pathParent {
+		path[row] = true
 	}
-	for row := rows[selected].lineChild; row != noRow; row = rows[row].lineChild {
-		line[row] = true
+	for row := rows[selected].pathChild; row != noRow; row = rows[row].pathChild {
+		path[row] = true
 	}
-	return line
+	return path
 }
 
-func (c graphCell) onLine(line []bool) bool {
-	return onRow(line, c.childRow) && onRow(line, c.parentRow)
+func (c graphCell) onPath(path []bool) bool {
+	return onRow(path, c.childRow) && onRow(path, c.parentRow)
 }
 
-func onRow(line []bool, row int32) bool {
-	return row != noRow && int(row) < len(line) && line[row]
+func onRow(path []bool, row int32) bool {
+	return row != noRow && int(row) < len(path) && path[row]
 }
 
 // Runs of cells drawn alike share one style, to keep the escape codes per row down.
-func renderGraphCells(cells []graphCell, line []bool) string {
+func renderGraphCells(cells []graphCell, path []bool) string {
 	var rendered strings.Builder
 	start := 0
 	for start < len(cells) {
-		highlighted := cells[start].onLine(line)
+		highlighted := cells[start].onPath(path)
 		lane := cells[start].lane % int32(len(laneStyles))
 		end := start
 		var glyphs strings.Builder
-		for end < len(cells) && cells[end].onLine(line) == highlighted && cells[end].lane%int32(len(laneStyles)) == lane {
+		for end < len(cells) && cells[end].onPath(path) == highlighted && cells[end].lane%int32(len(laneStyles)) == lane {
 			glyphs.WriteRune(cells[end].glyph)
 			end++
 		}
