@@ -21,6 +21,7 @@ var (
 	confirmForceKey   = key.NewBinding(key.WithKeys("enter"), key.WithHelp("enter", "force push"))
 	amendKey          = key.NewBinding(key.WithKeys("A"), key.WithHelp("A", "amend"))
 	confirmAmendKey   = key.NewBinding(key.WithKeys("enter"), key.WithHelp("enter", "amend"))
+	rewordKey         = key.NewBinding(key.WithKeys("r"), key.WithHelp("r", "reword"))
 	switchViewKey     = key.NewBinding(key.WithKeys("tab"), key.WithHelp("tab", "changes/log"))
 	scrollDownKey     = key.NewBinding(key.WithKeys("ctrl+d", "pgdown"), key.WithHelp("^d/^u", "scroll"))
 	scrollUpKey       = key.NewBinding(key.WithKeys("ctrl+u", "pgup"))
@@ -42,6 +43,7 @@ var (
 	forceQuitKey      = key.NewBinding(key.WithKeys("ctrl+c"))
 	nextFieldKey      = key.NewBinding(key.WithKeys("tab", "shift+tab"), key.WithHelp("tab", "next field"))
 	submitKey         = key.NewBinding(key.WithKeys("ctrl+enter"), key.WithHelp("ctrl+enter", "commit"))
+	submitRewordKey   = key.NewBinding(key.WithKeys("ctrl+enter"), key.WithHelp("ctrl+enter", "reword"))
 	enterKey          = key.NewBinding(key.WithKeys("enter"))
 	cancelKey         = key.NewBinding(key.WithKeys("esc"), key.WithHelp("esc", "cancel"))
 	expandKey         = key.NewBinding(key.WithKeys("enter"), key.WithHelp("enter", "expand"))
@@ -54,7 +56,7 @@ var (
 
 var (
 	changesKeys = []key.Binding{downKey, stageKey, stageAllKey, discardKey}
-	logKeys     = []key.Binding{downKey, expandKey, searchKey, amendKey}
+	logKeys     = []key.Binding{downKey, expandKey, searchKey, amendKey, rewordKey}
 	diffKeys    = []key.Binding{scrollDownKey, nextChangeKey, fullscreenKey, wholeFileKey, unifiedKey}
 	reviewKeys  = []key.Binding{commitKey, pushKey, switchViewKey, branchesKey, overviewKey, quitKey}
 	// Not every key fits one line, so the footer leaves the rest to the key list.
@@ -65,5 +67,6 @@ var (
 	branchesHelp = []key.Binding{downKey, switchBranchKey, deleteBranchKey, closeBranchesKey, quitKey}
 	searchHelp   = []key.Binding{keepSearchKey, clearSearchKey}
 	commitHelp   = []key.Binding{nextFieldKey, submitKey, cancelKey}
+	rewordHelp   = []key.Binding{nextFieldKey, submitRewordKey, cancelKey}
 	keyListHelp  = []key.Binding{closeKeyListKey}
 )

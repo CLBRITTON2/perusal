@@ -187,6 +187,17 @@ func (r amendRequest) amend() tea.Msg {
 		"amended "+r.commit.ShortHash+" "+r.commit.Summary)
 }
 
+type rewordRequest struct {
+	repository gitrepo.Repository
+	commit     gitrepo.Commit
+	message    string
+}
+
+func (r rewordRequest) reword() tea.Msg {
+	return popupResult(r.repository.Dir, r.repository.Reword(context.Background(), r.commit.Hash, r.message),
+		"reworded "+r.commit.ShortHash)
+}
+
 type fileRequest struct {
 	repository gitrepo.Repository
 	file       gitrepo.FileStatus

@@ -59,6 +59,7 @@ type popupKind int
 const (
 	noPopup popupKind = iota
 	commitPopup
+	rewordPopup
 	confirmPopup
 	keyListPopup
 )
@@ -71,11 +72,24 @@ type confirmation struct {
 	runningText string
 }
 
+// rewording is a reword popup's commit and lines, and the commit popup's text it puts back when it closes.
+type rewording struct {
+	commit           gitrepo.Commit
+	lines            []string
+	draftSummary     string
+	draftDescription string
+}
+
 type popupState struct {
 	kind         popupKind
 	confirmation confirmation
+	rewording    rewording
 	running      bool
 	err          string
+}
+
+func (p popupState) editsMessage() bool {
+	return p.kind == commitPopup || p.kind == rewordPopup
 }
 
 // display holds what survives a repository switch.
@@ -305,7 +319,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		switch {
 		case key.Matches(msg, forceQuitKey):
 			return m, tea.Quit
-		case m.popup.kind == commitPopup:
+		case m.popup.editsMessage():
 			return m.updateCommitBox(msg)
 		case m.popup.kind == confirmPopup:
 			return m.updateConfirmPopup(msg)
@@ -335,7 +349,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		return m.scrollWheel(msg.Mouse())
 	}
-	if m.popup.kind == commitPopup {
+	if m.popup.editsMessage() {
 		return m.updateFocusedField(msg)
 	}
 	if m.mode == modeSearching {
@@ -456,6 +470,8 @@ func (m Model) updateBrowsing(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		return m.openPushPopup()
 	case key.Matches(msg, amendKey) && m.view == viewLog:
 		return m.openAmendPopup(), nil
+	case key.Matches(msg, rewordKey) && m.view == viewLog:
+		return m.openRewordPopup()
 	case key.Matches(msg, branchesKey):
 		return m.openBranches()
 	case key.Matches(msg, overviewKey):
@@ -605,6 +621,9 @@ func (m Model) startCommit() (tea.Model, tea.Cmd) {
 	m.popup.running = true
 	m.popup.err = ""
 	message := joinCommitMessage(summary, m.descriptionBox.Value())
+	if m.popup.kind == rewordPopup {
+		return m, rewordRequest{repository: m.repository, commit: m.popup.rewording.commit, message: message}.reword
+	}
 	return m, commitRequest{repository: m.repository, message: message}.commit
 }
 
@@ -617,6 +636,10 @@ func joinCommitMessage(summary string, description string) string {
 }
 
 func (m Model) withPopupClosed() Model {
+	if m.popup.kind == rewordPopup {
+		m.summaryInput.SetValue(m.popup.rewording.draftSummary)
+		m.descriptionBox.SetValue(m.popup.rewording.draftDescription)
+	}
 	m.popup = popupState{}
 	m.summaryInput.Blur()
 	m.descriptionBox.Blur()
@@ -674,20 +697,45 @@ func (m Model) openAmendPopup() Model {
 		textStyle.Render(sanitizeText(target.Summary)),
 		textStyle.Render("with " + pluralize(m.stagedFileCount(), "file") + " staged"),
 	}
-	if target.Hash != m.commits[0].Hash {
-		lines = append(lines, warningStyle.Render("rewrites every commit above it"))
-	}
-	// No merge sits above an amendable commit, so the log lists those first and the first Ahead are the unpushed.
-	if m.status.Upstream != "" && m.selectedCommit >= m.status.Ahead {
-		lines = append(lines, warningStyle.Render("it is on "+sanitizeText(m.status.Upstream)+
-			" already, so the next push is a force push"))
-	}
 	return m.withConfirmation(confirmation{
-		lines:       lines,
+		lines:       slices.Concat(lines, m.rewriteWarnings()),
 		confirmKey:  confirmAmendKey,
 		run:         amendRequest{repository: m.repository, commit: target}.amend,
 		runningText: "amending...",
 	})
+}
+
+func (m Model) openRewordPopup() (tea.Model, tea.Cmd) {
+	if m.repository.Dir == "" || len(m.commits) == 0 {
+		return m, nil
+	}
+	target := m.commits[m.selectedCommit]
+	title := titleStyle.Render("reword " + sanitizeText(target.ShortHash))
+	m.popup = popupState{kind: rewordPopup, rewording: rewording{
+		commit:           target,
+		lines:            append([]string{title}, m.rewriteWarnings()...),
+		draftSummary:     m.summaryInput.Value(),
+		draftDescription: m.descriptionBox.Value(),
+	}}
+	summary, description, _ := strings.Cut(target.Message, "\n")
+	m.summaryInput.SetValue(summary)
+	m.descriptionBox.SetValue(strings.TrimSpace(description))
+	m.editingDescription = false
+	m.descriptionBox.Blur()
+	return m, m.summaryInput.Focus()
+}
+
+func (m Model) rewriteWarnings() []string {
+	warnings := []string{}
+	if m.selectedCommit > 0 {
+		warnings = append(warnings, warningStyle.Render("rewrites every commit above it"))
+	}
+	// No merge sits above a rewritable commit, so the log lists those first and the first Ahead are the unpushed.
+	if m.status.Upstream != "" && m.selectedCommit >= m.status.Ahead {
+		warnings = append(warnings, warningStyle.Render("it is on "+sanitizeText(m.status.Upstream)+
+			" already, so the next push is a force push"))
+	}
+	return warnings
 }
 
 func discardConfirmation(target string, effect string, run tea.Cmd) confirmation {
@@ -1115,6 +1163,8 @@ func (m Model) View() tea.View {
 		view = tea.NewView("")
 	case m.popup.kind == commitPopup:
 		view = tea.NewView(m.overlayPopup(m.renderScreen(), m.renderCommitPopup()))
+	case m.popup.kind == rewordPopup:
+		view = tea.NewView(m.overlayPopup(m.renderScreen(), m.renderRewordPopup()))
 	case m.popup.kind == confirmPopup:
 		view = tea.NewView(m.overlayPopup(m.renderScreen(), m.renderConfirmPopup()))
 	case m.popup.kind == keyListPopup:
@@ -1411,11 +1461,19 @@ func (m Model) overlayPopup(screen string, popup string) string {
 }
 
 func (m Model) renderCommitPopup() string {
-	return m.renderPopup([]string{
-		titleStyle.Render("commit to " + headName(m.status)),
+	return m.renderPopup(append([]string{titleStyle.Render("commit to " + headName(m.status))}, m.messageFields()...),
+		"committing...", commitHelp)
+}
+
+func (m Model) renderRewordPopup() string {
+	return m.renderPopup(slices.Concat(m.popup.rewording.lines, m.messageFields()), "rewording...", rewordHelp)
+}
+
+func (m Model) messageFields() []string {
+	return []string{
 		renderField(m.summaryInput.View(), !m.editingDescription, m.fieldInnerWidth(), 1),
 		renderField(m.descriptionBox.View(), m.editingDescription, m.fieldInnerWidth(), descriptionHeight),
-	}, "committing...", commitHelp)
+	}
 }
 
 func (m Model) renderConfirmPopup() string {

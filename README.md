@@ -43,6 +43,7 @@ perusal -repo <dir>  # review the repository <dir> is in
 | `c` | anywhere | open the commit popup |
 | `P` | anywhere | open the push popup |
 | `A` | log | amend the selected commit with the staged changes |
+| `r` | log | reword the selected commit's message in the commit popup |
 | `b` | anywhere | list the local branches, `enter` switches to one, `D` deletes one after a confirm |
 | `o` | anywhere | in follow mode, open the overview of every repository under `ownerDir` |
 | `p` | overview | fast-forward the selected repository to its upstream, or a finished branch to the default one |
@@ -58,7 +59,10 @@ amend it. The wheel moves the selection over a list and scrolls the diff anywher
 
 Amend folds only the staged changes into the commit and keeps its message. An older commit gets a fixup commit and an
 autosquash rebase, so every commit above it is rewritten, and a rebase that stops is aborted and the fixup undone.
-Below `HEAD`, perusal refuses a merge commit, the root commit and any commit with a merge above it.
+
+Reword changes only the message. Below `HEAD`, perusal recreates every commit above it with the same files and
+author, signed if `commit.gpgSign` is on, so staged and unstaged changes stay as they are. Below `HEAD`, amend and
+reword refuse a merge commit, the root commit and any commit with a merge above it.
 
 When the branch and its upstream have diverged, as after amending a pushed commit, the push popup offers a force push
 instead. It pushes with `--force-with-lease --force-if-includes`, so git refuses if the upstream moved since your last

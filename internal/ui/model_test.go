@@ -463,6 +463,35 @@ func TestRightClickingAnOlderPushedCommitOffersToAmendItWithAForcePushWarning(t 
 	}
 }
 
+func TestRewordFillsInTheSelectedMessageAndEscBringsBackTheCommitDraft(t *testing.T) {
+	m := reviewingRepository(t, gitrepo.Status{Branch: "fix", HasCommits: true})
+	m = update(t, m, logMsg{dir: "C:/dev/repo", limit: logPageSize, commits: []gitrepo.Commit{
+		{Hash: strings.Repeat("1", 40), Parents: []string{strings.Repeat("2", 40)}},
+		{Hash: strings.Repeat("2", 40), ShortHash: "2222222", Summary: "Fix wrap", Message: "Fix wrap\n\nKeep words whole"},
+	}})
+	m = update(t, m, tea.KeyPressMsg{Code: 'c', Text: "c"})
+	for _, letter := range "WIP" {
+		m = update(t, m, tea.KeyPressMsg{Code: letter, Text: string(letter)})
+	}
+	m = update(t, m, tea.KeyPressMsg{Code: tea.KeyEscape})
+	m = update(t, m, tea.KeyPressMsg{Code: tea.KeyTab})
+	m = update(t, m, tea.KeyPressMsg{Code: 'j', Text: "j"})
+
+	m = update(t, m, tea.KeyPressMsg{Code: 'r', Text: "r"})
+	popup := ansi.Strip(m.renderRewordPopup())
+	summary, description := m.summaryInput.Value(), m.descriptionBox.Value()
+	m = update(t, m, tea.KeyPressMsg{Code: tea.KeyEscape})
+
+	if summary != "Fix wrap" || description != "Keep words whole" || !strings.Contains(popup, "reword 2222222") ||
+		!strings.Contains(popup, "rewrites every commit above it") {
+		t.Fatalf("got summary %q, description %q, popup:\n%s", summary, description, popup)
+	}
+	if m.popup.kind != noPopup || m.summaryInput.Value() != "WIP" || m.descriptionBox.Value() != "" {
+		t.Fatalf("got popup %d, summary %q, description %q after esc, want the WIP draft back", m.popup.kind,
+			m.summaryInput.Value(), m.descriptionBox.Value())
+	}
+}
+
 func TestLog(t *testing.T) {
 	t.Run("selectionFollowsTheCommitWhenNewOnesArriveAbove", selectionFollowsTheCommitWhenNewOnesArriveAbove)
 	t.Run("expandingACommitListsItsFilesUnderIt", expandingACommitListsItsFilesUnderIt)

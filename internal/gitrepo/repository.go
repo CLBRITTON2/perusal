@@ -43,7 +43,7 @@ const (
 // --no-ext-diff keeps a diff driver the repository configures from running.
 var diffFlags = []string{"--no-color", "--no-ext-diff"}
 
-var ErrCannotAmend = errors.New("cannot amend")
+var ErrCannotRewrite = errors.New("cannot rewrite")
 
 var commitHash = regexp.MustCompile(`^(?:[0-9a-f]{40}|[0-9a-f]{64})$`)
 
@@ -271,7 +271,7 @@ func (r Repository) Switch(ctx context.Context, branch string) error {
 
 // The message goes on stdin to keep it out of the error text.
 func (r Repository) Commit(ctx context.Context, message string) (string, error) {
-	output, err := runGitWithInput(ctx, r.Dir, []string{"commit", "--file", "-"}, message)
+	output, err := runGit(ctx, r.Dir, []string{"commit", "--file", "-"}, message, []string{})
 	if err != nil {
 		return "", err
 	}
@@ -289,19 +289,137 @@ func (r Repository) ForcePush(ctx context.Context) error {
 	return r.run(ctx, "push", "--force-with-lease", "--force-if-includes")
 }
 
+// Reword replaces the message of hash, which below HEAD must be an ancestor with no merge above it. Below HEAD it
+// recreates hash and every commit above it with the same tree and author, signed when commit.gpgSign asks, so the
+// index and the work tree stay as they are, and moves the branch only if HEAD has not moved meanwhile.
+func (r Repository) Reword(ctx context.Context, hash string, message string) error {
+	if !commitHash.MatchString(hash) {
+		return fmt.Errorf("%w %q in %s: not a full commit hash", ErrCannotRewrite, hash, r.Dir)
+	}
+	head, err := r.revParse(ctx, "HEAD")
+	if err != nil {
+		return err
+	}
+	if hash == head {
+		// --only with no paths leaves the staged changes out of the amended commit.
+		_, err := runGit(ctx, r.Dir, []string{"commit", "--amend", "--only", "--file", "-"}, message, []string{})
+		return err
+	}
+	if err := r.checkRewritable(ctx, hash); err != nil {
+		return err
+	}
+	cleanMessage, err := runGit(ctx, r.Dir, []string{"stripspace"}, message, []string{})
+	if err != nil {
+		return err
+	}
+	signFlags, err := r.signFlags(ctx)
+	if err != nil {
+		return err
+	}
+	aboveOutput, err := r.git(ctx, "rev-list", "--reverse", hash+"..HEAD")
+	if err != nil {
+		return err
+	}
+	target, err := r.readCommit(ctx, hash)
+	if err != nil {
+		return err
+	}
+	target.message = string(cleanMessage)
+	rewritten, err := r.commitTree(ctx, target, hash+"^", signFlags)
+	if err != nil {
+		return err
+	}
+	for _, above := range strings.Fields(string(aboveOutput)) {
+		object, err := r.readCommit(ctx, above)
+		if err != nil {
+			return err
+		}
+		rewritten, err = r.commitTree(ctx, object, rewritten, signFlags)
+		if err != nil {
+			return err
+		}
+	}
+	return r.run(ctx, "update-ref", "-m", "perusal: reword "+hash, "HEAD", rewritten, head)
+}
+
+// commit-tree ignores commit.gpgSign, so it is passed on as -S.
+func (r Repository) signFlags(ctx context.Context) ([]string, error) {
+	output, err := r.git(ctx, "config", "--type=bool", "--default=false", "--get", "commit.gpgsign")
+	if err != nil {
+		return nil, err
+	}
+	if strings.TrimSpace(string(output)) == "true" {
+		return []string{"-S"}, nil
+	}
+	return []string{}, nil
+}
+
+type commitObject struct {
+	tree string
+	// author is the author header's value: name <email> unix-time zone.
+	author  string
+	message string
+}
+
+func (r Repository) readCommit(ctx context.Context, hash string) (commitObject, error) {
+	output, err := r.git(ctx, "cat-file", "commit", hash)
+	if err != nil {
+		return commitObject{}, err
+	}
+	return parseCommitObject(string(output))
+}
+
+func parseCommitObject(raw string) (commitObject, error) {
+	headers, message, found := strings.Cut(raw, "\n\n")
+	if !found {
+		return commitObject{}, fmt.Errorf("parse commit object %q: no blank line ends the headers", raw)
+	}
+	object := commitObject{tree: "", author: "", message: message}
+	for line := range strings.SplitSeq(headers, "\n") {
+		name, value, _ := strings.Cut(line, " ")
+		switch name {
+		case "tree":
+			object.tree = value
+		case "author":
+			object.author = value
+		}
+	}
+	if object.tree == "" || object.author == "" {
+		return commitObject{}, fmt.Errorf("parse commit object %q: want a tree and an author header", raw)
+	}
+	return object, nil
+}
+
+func (r Repository) commitTree(ctx context.Context, object commitObject, parent string, signFlags []string) (
+	string, error,
+) {
+	name, rest, nameFound := strings.Cut(object.author, " <")
+	email, date, emailFound := strings.Cut(rest, "> ")
+	if !nameFound || !emailFound {
+		return "", fmt.Errorf("parse author %q in %s: want name <email> time zone", object.author, r.Dir)
+	}
+	args := slices.Concat([]string{"commit-tree", object.tree, "-p", parent, "-F", "-"}, signFlags)
+	output, err := runGit(ctx, r.Dir, args, object.message,
+		[]string{"GIT_AUTHOR_NAME=" + name, "GIT_AUTHOR_EMAIL=" + email, "GIT_AUTHOR_DATE=" + date})
+	if err != nil {
+		return "", err
+	}
+	return strings.TrimSpace(string(output)), nil
+}
+
 // Amend folds the staged changes into hash, which must be HEAD or an ancestor with no merge above it. Below HEAD it
 // commits a fixup and autosquashes it in, and a rebase that stops is aborted and the fixup undone, so the staged
 // changes stay staged.
 func (r Repository) Amend(ctx context.Context, hash string) error {
 	if !commitHash.MatchString(hash) {
-		return fmt.Errorf("%w %q in %s: not a full commit hash", ErrCannotAmend, hash, r.Dir)
+		return fmt.Errorf("%w %q in %s: not a full commit hash", ErrCannotRewrite, hash, r.Dir)
 	}
 	nothingStaged, err := r.gitSucceeds(ctx, "diff", "--cached", "--quiet")
 	if err != nil {
 		return err
 	}
 	if nothingStaged {
-		return fmt.Errorf("%w %s in %s: nothing is staged", ErrCannotAmend, hash, r.Dir)
+		return fmt.Errorf("%w %s in %s: nothing is staged", ErrCannotRewrite, hash, r.Dir)
 	}
 	head, err := r.revParse(ctx, "HEAD")
 	if err != nil {
@@ -336,21 +454,21 @@ func (r Repository) checkRewritable(ctx context.Context, hash string) error {
 		return err
 	}
 	if !isAncestor {
-		return fmt.Errorf("%w %s in %s: not in the history of HEAD", ErrCannotAmend, hash, r.Dir)
+		return fmt.Errorf("%w %s in %s: not in the history of HEAD", ErrCannotRewrite, hash, r.Dir)
 	}
 	parentsOutput, err := r.git(ctx, "log", "--max-count=1", "--format=%P", hash)
 	if err != nil {
 		return err
 	}
 	if len(strings.Fields(string(parentsOutput))) != 1 {
-		return fmt.Errorf("%w %s in %s: it is a merge or a root commit", ErrCannotAmend, hash, r.Dir)
+		return fmt.Errorf("%w %s in %s: it is a merge or a root commit", ErrCannotRewrite, hash, r.Dir)
 	}
 	mergesOutput, err := r.git(ctx, "rev-list", "--min-parents=2", hash+"..HEAD")
 	if err != nil {
 		return err
 	}
 	if len(bytes.TrimSpace(mergesOutput)) != 0 {
-		return fmt.Errorf("%w %s in %s: a merge sits between it and HEAD", ErrCannotAmend, hash, r.Dir)
+		return fmt.Errorf("%w %s in %s: a merge sits between it and HEAD", ErrCannotRewrite, hash, r.Dir)
 	}
 	return nil
 }
@@ -397,7 +515,7 @@ func isExitCodeOne(err error) bool {
 }
 
 func (r Repository) git(ctx context.Context, args ...string) ([]byte, error) {
-	return runGitWithInput(ctx, r.Dir, args, "")
+	return runGit(ctx, r.Dir, args, "", []string{})
 }
 
 func (r Repository) run(ctx context.Context, args ...string) error {
@@ -405,12 +523,13 @@ func (r Repository) run(ctx context.Context, args ...string) error {
 	return err
 }
 
-func runGitWithInput(ctx context.Context, dir string, args []string, input string) ([]byte, error) {
+// environment adds to the inherited one.
+func runGit(ctx context.Context, dir string, args []string, input string, environment []string) ([]byte, error) {
 	command := exec.CommandContext(ctx, "git", args...)
 	command.Dir = dir
 	// A credential prompt would fight the TUI for the terminal, so git fails instead of asking.
 	// Optional locks off: polling git status would otherwise take index.lock and fail the owner's own git add.
-	command.Env = append(os.Environ(), "GIT_TERMINAL_PROMPT=0", "GIT_OPTIONAL_LOCKS=0")
+	command.Env = slices.Concat(os.Environ(), []string{"GIT_TERMINAL_PROMPT=0", "GIT_OPTIONAL_LOCKS=0"}, environment)
 	command.Stdin = strings.NewReader(input)
 	var stderr bytes.Buffer
 	command.Stderr = &stderr

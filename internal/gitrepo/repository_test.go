@@ -489,6 +489,64 @@ func TestAmend(t *testing.T) {
 	t.Run("refusesACommitWithAMergeAboveIt", refusesACommitWithAMergeAboveIt)
 }
 
+func TestReword(t *testing.T) {
+	t.Run("rewordsHeadAndLeavesTheStagedChangesStaged", rewordsHeadAndLeavesTheStagedChangesStaged)
+	t.Run("rewordsAnOlderCommitAndKeepsTheTreesTheAuthorsAndTheIndex",
+		rewordsAnOlderCommitAndKeepsTheTreesTheAuthorsAndTheIndex)
+	t.Run("signsTheRewrittenCommitsWhenCommitGpgSignIsOn", signsTheRewrittenCommitsWhenCommitGpgSignIsOn)
+}
+
+func rewordsHeadAndLeavesTheStagedChangesStaged(t *testing.T) {
+	clone := repositoryWithHistory(t, []string{"1", "2"})
+	parent := revParse(t, clone, "HEAD~1")
+	before := identitiesAndTrees(t, clone)
+	writeFile(t, filepath.Join(clone, "b.txt"), "staged\n")
+	runSteps(t, clone, [][]string{{"-C", clone, "add", "b.txt"}})
+
+	err := Repository{Dir: clone}.Reword(context.Background(), revParse(t, clone, "HEAD"), "Reworded\n\nWith a body")
+
+	if err != nil || messageAt(t, clone, "HEAD") != "Reworded\n\nWith a body" || revParse(t, clone, "HEAD~1") != parent ||
+		identitiesAndTrees(t, clone) != before || stagedNames(t, clone) != "b.txt" {
+		t.Fatalf("got error %v, message %q, staged %q, want the message replaced on the same parent and tree with b.txt "+
+			"still staged", err, messageAt(t, clone, "HEAD"), stagedNames(t, clone))
+	}
+}
+
+func rewordsAnOlderCommitAndKeepsTheTreesTheAuthorsAndTheIndex(t *testing.T) {
+	clone := repositoryWithHistory(t, []string{"1", "2", "3"})
+	before := identitiesAndTrees(t, clone)
+	writeFile(t, filepath.Join(clone, "b.txt"), "staged\n")
+	runSteps(t, clone, [][]string{{"-C", clone, "add", "b.txt"}})
+	writeFile(t, filepath.Join(clone, "a.txt"), "unstaged\n")
+
+	err := Repository{Dir: clone}.Reword(context.Background(), revParse(t, clone, "HEAD~1"), "Reworded")
+
+	unstaged, readErr := os.ReadFile(filepath.Join(clone, "a.txt"))
+	if err != nil || messageAt(t, clone, "HEAD~1") != "Reworded" || messageAt(t, clone, "HEAD") != "Write 3" ||
+		identitiesAndTrees(t, clone) != before || stagedNames(t, clone) != "b.txt" || readErr != nil ||
+		string(unstaged) != "unstaged\n" {
+		t.Fatalf("got error %v, messages %q and %q, history %q, staged %q, a.txt %q (%v), want only the second "+
+			"message replaced in %q", err, messageAt(t, clone, "HEAD~1"), messageAt(t, clone, "HEAD"),
+			identitiesAndTrees(t, clone), stagedNames(t, clone), unstaged, readErr, before)
+	}
+}
+
+func signsTheRewrittenCommitsWhenCommitGpgSignIsOn(t *testing.T) {
+	clone := repositoryWithHistory(t, []string{"1", "2", "3"})
+	head := revParse(t, clone, "HEAD")
+	t.Setenv("GIT_CONFIG_VALUE_0", "true")
+	t.Setenv("GIT_CONFIG_COUNT", "4")
+	t.Setenv("GIT_CONFIG_KEY_3", "gpg.program")
+	t.Setenv("GIT_CONFIG_VALUE_3", "perusal-missing-gpg")
+
+	err := Repository{Dir: clone}.Reword(context.Background(), revParse(t, clone, "HEAD~1"), "Reworded")
+
+	if err == nil || revParse(t, clone, "HEAD") != head {
+		t.Fatalf("got error %v, HEAD %s, want the missing signing program to fail it with HEAD left at %s", err,
+			revParse(t, clone, "HEAD"), head)
+	}
+}
+
 func replacesTheUpstreamCommitThisBranchRewrote(t *testing.T) {
 	remote, clone := pushedClone(t)
 	runSteps(t, clone, [][]string{{"-C", clone, "commit", "--amend", "--allow-empty", "--message", "Rewritten"}})
@@ -582,8 +640,8 @@ func refusesACommitWithAMergeAboveIt(t *testing.T) {
 
 	err := Repository{Dir: clone}.Amend(context.Background(), target)
 
-	if !errors.Is(err, ErrCannotAmend) || revParse(t, clone, "HEAD") != head {
-		t.Fatalf("got error %v, want ErrCannotAmend with HEAD left at %s", err, head)
+	if !errors.Is(err, ErrCannotRewrite) || revParse(t, clone, "HEAD") != head {
+		t.Fatalf("got error %v, want ErrCannotRewrite with HEAD left at %s", err, head)
 	}
 }
 
@@ -643,6 +701,30 @@ func revParse(t *testing.T, dir string, revision string) string {
 		t.Fatal(err)
 	}
 	return hash
+}
+
+func messageAt(t *testing.T, dir string, revision string) string {
+	t.Helper()
+	return strings.TrimSpace(gitOutput(t, dir, "log", "--max-count=1", "--format=%B", revision))
+}
+
+func stagedNames(t *testing.T, dir string) string {
+	t.Helper()
+	return strings.TrimSpace(gitOutput(t, dir, "diff", "--cached", "--name-only"))
+}
+
+func identitiesAndTrees(t *testing.T, dir string) string {
+	t.Helper()
+	return gitOutput(t, dir, "log", "--format=%T %an %ae %ad", "--date=raw")
+}
+
+func gitOutput(t *testing.T, dir string, args ...string) string {
+	t.Helper()
+	output, err := Repository{Dir: dir}.git(context.Background(), args...)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return string(output)
 }
 
 func blobAt(t *testing.T, dir string, object string) string {
