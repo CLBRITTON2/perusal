@@ -39,13 +39,13 @@ func renderFileDiff(fileDiff diff.FileDiff, layout diffLayout, width int) []stri
 }
 
 func renderSideBySide(fileDiff diff.FileDiff, width int) []string {
-	numberWidth := len(strconv.Itoa(maxLineNumber(fileDiff)))
+	numberWidth := lineNumberWidth(fileDiff)
 	leftWidth := (width - 1) / 2
 	rightWidth := width - 1 - leftWidth
 	separator := separatorStyle.Render(columnSeparator)
 	lines := []string{}
 	for _, hunk := range fileDiff.Hunks {
-		lines = append(lines, hunkHeaderStyle.Render(fitToWidth(sanitizeText(hunk.Header), width)))
+		lines = append(lines, renderHunkHeader(hunk, width))
 		for _, row := range hunk.Rows {
 			left := wrapSide(row.Old, numberWidth, leftWidth)
 			right := wrapSide(row.New, numberWidth, rightWidth)
@@ -61,10 +61,10 @@ func renderSideBySide(fileDiff diff.FileDiff, width int) []string {
 // renderUnified lists each run of changes as its removed lines above its added lines, numbering a line by its own
 // side, as GitHub's unified view does.
 func renderUnified(fileDiff diff.FileDiff, width int) []string {
-	numberWidth := len(strconv.Itoa(maxLineNumber(fileDiff)))
+	numberWidth := lineNumberWidth(fileDiff)
 	lines := []string{}
 	for _, hunk := range fileDiff.Hunks {
-		lines = append(lines, hunkHeaderStyle.Render(fitToWidth(sanitizeText(hunk.Header), width)))
+		lines = append(lines, renderHunkHeader(hunk, width))
 		added := []string{}
 		for _, row := range hunk.Rows {
 			if row.Old.Kind == diff.LineContext {
@@ -84,10 +84,10 @@ func renderUnified(fileDiff diff.FileDiff, width int) []string {
 }
 
 func renderOneSide(fileDiff diff.FileDiff, side func(diff.Row) diff.Line, width int) []string {
-	numberWidth := len(strconv.Itoa(maxLineNumber(fileDiff)))
+	numberWidth := lineNumberWidth(fileDiff)
 	lines := []string{}
 	for _, hunk := range fileDiff.Hunks {
-		lines = append(lines, hunkHeaderStyle.Render(fitToWidth(sanitizeText(hunk.Header), width)))
+		lines = append(lines, renderHunkHeader(hunk, width))
 		for _, row := range hunk.Rows {
 			if side(row).Kind != diff.LineBlank {
 				lines = append(lines, wrapSide(side(row), numberWidth, width)...)
@@ -117,7 +117,7 @@ func numberOrBlank(line diff.Line, numberWidth int) string {
 }
 
 func wrapSide(line diff.Line, numberWidth int, width int) []string {
-	return wrapLine(line, fmt.Sprintf("%*d ", numberWidth, line.Number), width)
+	return wrapLine(line, numberOrBlank(line, numberWidth)+" ", width)
 }
 
 func wrapLine(line diff.Line, gutterText string, width int) []string {
@@ -293,14 +293,18 @@ func changedTextStyle(kind diff.LineKind) lipgloss.Style {
 	}
 }
 
-func maxLineNumber(fileDiff diff.FileDiff) int {
+func lineNumberWidth(fileDiff diff.FileDiff) int {
 	highest := 0
 	for _, hunk := range fileDiff.Hunks {
 		for _, row := range hunk.Rows {
 			highest = max(highest, row.Old.Number, row.New.Number)
 		}
 	}
-	return highest
+	return len(strconv.Itoa(highest))
+}
+
+func renderHunkHeader(hunk diff.Hunk, width int) string {
+	return hunkHeaderStyle.Render(fitToWidth(sanitizeText(hunk.Header), width))
 }
 
 func renderCommit(commit gitrepo.Commit, sections []diff.FileSection, layout diffLayout, width int) []string {

@@ -24,6 +24,12 @@ var (
 	colorAddedChanged   = lipgloss.Color("#475763")
 )
 
+// dim is line's color blended 45% over base, for lines off the selected commit's path.
+type laneStyle struct {
+	line lipgloss.Style
+	dim  lipgloss.Style
+}
+
 var (
 	borderStyle         = lipgloss.NewStyle().Foreground(colorMuted)
 	popupStyle          = lipgloss.NewStyle().Border(lipgloss.RoundedBorder()).BorderForeground(colorRose).Padding(0, 1)
@@ -50,20 +56,12 @@ var (
 	hashStyle           = lipgloss.NewStyle().Foreground(colorGold)
 	refStyle            = lipgloss.NewStyle().Foreground(colorFoam).Bold(true)
 	searchMatchStyle    = lipgloss.NewStyle().Foreground(colorRose).Bold(true).Underline(true)
-	laneStyles          = []lipgloss.Style{
-		lipgloss.NewStyle().Foreground(colorIris),
-		lipgloss.NewStyle().Foreground(colorFoam),
-		lipgloss.NewStyle().Foreground(colorGold),
-		lipgloss.NewStyle().Foreground(colorRose),
-		lipgloss.NewStyle().Foreground(colorLove),
-	}
-	// laneStyles' colors, each blended 45% over base, for lines off the selected commit's path
-	dimLaneStyles = []lipgloss.Style{
-		lipgloss.NewStyle().Foreground(lipgloss.Color("#66587c")),
-		lipgloss.NewStyle().Foreground(lipgloss.Color("#546a75")),
-		lipgloss.NewStyle().Foreground(lipgloss.Color("#7c6449")),
-		lipgloss.NewStyle().Foreground(lipgloss.Color("#786168")),
-		lipgloss.NewStyle().Foreground(lipgloss.Color("#783f56")),
+	laneStyles          = []laneStyle{
+		{line: lipgloss.NewStyle().Foreground(colorIris), dim: lipgloss.NewStyle().Foreground(lipgloss.Color("#66587c"))},
+		{line: lipgloss.NewStyle().Foreground(colorFoam), dim: lipgloss.NewStyle().Foreground(lipgloss.Color("#546a75"))},
+		{line: lipgloss.NewStyle().Foreground(colorGold), dim: lipgloss.NewStyle().Foreground(lipgloss.Color("#7c6449"))},
+		{line: lipgloss.NewStyle().Foreground(colorRose), dim: lipgloss.NewStyle().Foreground(lipgloss.Color("#786168"))},
+		{line: lipgloss.NewStyle().Foreground(colorLove), dim: lipgloss.NewStyle().Foreground(lipgloss.Color("#783f56"))},
 	}
 	authorStyle         = lipgloss.NewStyle().Foreground(colorFoam)
 	fileHeaderStyle     = lipgloss.NewStyle().Foreground(colorRose).Background(colorOverlay).Bold(true)

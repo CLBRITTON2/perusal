@@ -85,20 +85,9 @@ type committedMsg struct {
 	summary string
 }
 
-type amendedMsg struct {
+type popupSucceededMsg struct {
 	dir    string
-	commit gitrepo.Commit
-}
-
-type pushedMsg struct {
-	dir      string
-	upstream string
-}
-
-// discarded names what went, a path or "all changes".
-type discardedMsg struct {
-	dir       string
-	discarded string
+	notice string
 }
 
 // popupFailedMsg is the failure of the git run an open popup started.
@@ -136,10 +125,7 @@ func (r repositoryRequest) unstageAll() tea.Msg {
 }
 
 func (r repositoryRequest) discardAll() tea.Msg {
-	if err := r.repository.DiscardAll(context.Background()); err != nil {
-		return popupFailedMsg{dir: r.repository.Dir, err: err}
-	}
-	return discardedMsg{dir: r.repository.Dir, discarded: "all changes"}
+	return popupResult(r.repository.Dir, r.repository.DiscardAll(context.Background()), "discarded all changes")
 }
 
 func indexChanged(dir string, err error) tea.Msg {
@@ -147,6 +133,13 @@ func indexChanged(dir string, err error) tea.Msg {
 		return gitFailedMsg{err: err}
 	}
 	return indexChangedMsg{dir: dir}
+}
+
+func popupResult(dir string, err error, notice string) tea.Msg {
+	if err != nil {
+		return popupFailedMsg{dir: dir, err: err}
+	}
+	return popupSucceededMsg{dir: dir, notice: notice}
 }
 
 type focusedRequest struct {
@@ -184,17 +177,11 @@ type pushRequest struct {
 }
 
 func (r pushRequest) push() tea.Msg {
-	if err := r.repository.Push(context.Background()); err != nil {
-		return popupFailedMsg{dir: r.repository.Dir, err: err}
-	}
-	return pushedMsg{dir: r.repository.Dir, upstream: r.upstream}
+	return popupResult(r.repository.Dir, r.repository.Push(context.Background()), "pushed to "+r.upstream)
 }
 
 func (r pushRequest) forcePush() tea.Msg {
-	if err := r.repository.ForcePush(context.Background()); err != nil {
-		return popupFailedMsg{dir: r.repository.Dir, err: err}
-	}
-	return pushedMsg{dir: r.repository.Dir, upstream: r.upstream}
+	return popupResult(r.repository.Dir, r.repository.ForcePush(context.Background()), "pushed to "+r.upstream)
 }
 
 type amendRequest struct {
@@ -203,10 +190,8 @@ type amendRequest struct {
 }
 
 func (r amendRequest) amend() tea.Msg {
-	if err := r.repository.Amend(context.Background(), r.commit.Hash); err != nil {
-		return popupFailedMsg{dir: r.repository.Dir, err: err}
-	}
-	return amendedMsg{dir: r.repository.Dir, commit: r.commit}
+	return popupResult(r.repository.Dir, r.repository.Amend(context.Background(), r.commit.Hash),
+		"amended "+r.commit.ShortHash+" "+r.commit.Summary)
 }
 
 type fileRequest struct {
@@ -245,10 +230,7 @@ func (r fileRequest) unstage() tea.Msg {
 }
 
 func (r fileRequest) discard() tea.Msg {
-	if err := r.repository.Discard(context.Background(), r.file); err != nil {
-		return popupFailedMsg{dir: r.repository.Dir, err: err}
-	}
-	return discardedMsg{dir: r.repository.Dir, discarded: r.file.Path}
+	return popupResult(r.repository.Dir, r.repository.Discard(context.Background(), r.file), "discarded "+r.file.Path)
 }
 
 type commitDiffRequest struct {

@@ -47,15 +47,10 @@ var (
 )
 
 var (
-	changesHelp      = []key.Binding{downKey, stageKey, stageAllKey, discardKey, commitKey, pushKey, switchViewKey, scrollDownKey, fullscreenKey, wholeFileKey, unifiedKey, branchesKey, overviewKey, quitKey}
-	logHelp          = []key.Binding{downKey, expandKey, searchKey, amendKey, commitKey, pushKey, switchViewKey, scrollDownKey, fullscreenKey, wholeFileKey, unifiedKey, branchesKey, overviewKey, quitKey}
-	overviewHelp     = []key.Binding{downKey, openRepositoryKey, pullKey, closeOverviewKey, quitKey}
-	branchesHelp     = []key.Binding{downKey, switchBranchKey, deleteBranchKey, closeBranchesKey, quitKey}
-	searchHelp       = []key.Binding{keepSearchKey, clearSearchKey}
-	commitHelp       = []key.Binding{nextFieldKey, submitKey, cancelKey}
-	pushHelp         = []key.Binding{confirmPushKey, cancelKey}
-	forcePushHelp    = []key.Binding{confirmForceKey, cancelKey}
-	amendHelp        = []key.Binding{confirmAmendKey, cancelKey}
-	discardHelp      = []key.Binding{confirmDiscardKey, cancelKey}
-	deleteBranchHelp = []key.Binding{confirmDeleteKey, cancelKey}
+	changesHelp  = []key.Binding{downKey, stageKey, stageAllKey, discardKey, commitKey, pushKey, switchViewKey, scrollDownKey, fullscreenKey, wholeFileKey, unifiedKey, branchesKey, overviewKey, quitKey}
+	logHelp      = []key.Binding{downKey, expandKey, searchKey, amendKey, commitKey, pushKey, switchViewKey, scrollDownKey, fullscreenKey, wholeFileKey, unifiedKey, branchesKey, overviewKey, quitKey}
+	overviewHelp = []key.Binding{downKey, openRepositoryKey, pullKey, closeOverviewKey, quitKey}
+	branchesHelp = []key.Binding{downKey, switchBranchKey, deleteBranchKey, closeBranchesKey, quitKey}
+	searchHelp   = []key.Binding{keepSearchKey, clearSearchKey}
+	commitHelp   = []key.Binding{nextFieldKey, submitKey, cancelKey}
 )

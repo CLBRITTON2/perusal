@@ -41,6 +41,15 @@ func TestRenderUnifiedListsRemovedLinesAboveAddedOnes(t *testing.T) {
 	}
 }
 
+func TestWrapRowsGivesAClusterWiderThanTheRowARowOfItsOwn(t *testing.T) {
+	got := wrapRows("世界", 1)
+
+	want := []diff.Span{{Start: 0, End: 3}, {Start: 3, End: 6}}
+	if !slices.Equal(got, want) {
+		t.Fatalf("got %v, want %v", got, want)
+	}
+}
+
 func TestRenderFileDiff(t *testing.T) {
 	t.Run("showsANewFileAcrossTheWholeWidth", showsANewFileAcrossTheWholeWidth)
 }

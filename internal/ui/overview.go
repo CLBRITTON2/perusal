@@ -19,25 +19,23 @@ import (
 
 type Lister func(context.Context) (focus.Found, error)
 
+type overviewRow interface {
+	relativePath() string
+	cells() []string
+}
+
 // behindDefault counts the commits HEAD lacks from defaultBranch, and stays 0 when defaultBranch is the upstream, whose
 // count the status already holds. finished is a branch p leaves for the default branch.
-type overviewRow struct {
-	listed        focus.FoundRepository
-	refused       focus.FoundRefusal
+type repositoryRow struct {
+	focus.FoundRepository
 	status        gitrepo.Status
 	defaultBranch string
 	behindDefault int
 	finished      bool
 }
 
-// pulling holds the Dir of each repository a pull is running in, and outlives closing the overview.
-type overview struct {
-	open     bool
-	loaded   bool
-	rows     []overviewRow
-	selected int
-	offset   int
-	pulling  map[string]bool
+type refusedRow struct {
+	focus.FoundRefusal
 }
 
 // failures are the repositories git failed on, which get no row.
@@ -51,7 +49,7 @@ type overviewFailedMsg struct {
 }
 
 type overviewPulledMsg struct {
-	row overviewRow
+	row repositoryRow
 }
 
 type overviewSyncFailedMsg struct {
@@ -96,7 +94,7 @@ func (r overviewRequest) load() tea.Msg {
 	if err != nil {
 		return overviewFailedMsg{err: err}
 	}
-	results := make([]overviewRow, len(listing.Repositories))
+	results := make([]repositoryRow, len(listing.Repositories))
 	errs := make([]error, len(listing.Repositories))
 	var group sync.WaitGroup
 	for index, listed := range listing.Repositories {
@@ -115,32 +113,32 @@ func (r overviewRequest) load() tea.Msg {
 		}
 	}
 	for _, refused := range listing.Refusals {
-		rows = append(rows, overviewRow{listed: focus.FoundRepository{RelativePath: refused.RelativePath}, refused: refused})
+		rows = append(rows, refusedRow{FoundRefusal: refused})
 	}
 	slices.SortFunc(rows, func(a overviewRow, b overviewRow) int {
-		return strings.Compare(a.listed.RelativePath, b.listed.RelativePath)
+		return strings.Compare(a.relativePath(), b.relativePath())
 	})
 	return overviewLoadedMsg{rows: rows, failures: failures}
 }
 
-func loadOverviewRow(listed focus.FoundRepository) (overviewRow, error) {
+func loadOverviewRow(listed focus.FoundRepository) (repositoryRow, error) {
 	ctx := context.Background()
 	status, err := listed.Repository.Status(ctx)
 	if err != nil {
-		return overviewRow{}, err
+		return repositoryRow{}, err
 	}
 	defaultBranch, err := listed.Repository.DefaultBranch(ctx)
 	if err != nil {
-		return overviewRow{}, err
+		return repositoryRow{}, err
 	}
-	row := overviewRow{listed: listed, status: status, defaultBranch: defaultBranch}
+	row := repositoryRow{FoundRepository: listed, status: status, defaultBranch: defaultBranch}
 	if defaultBranch == "" || !status.HasCommits {
 		return row, nil
 	}
 	if mayBeFinished(status, defaultBranch) {
 		merged, err := listed.Repository.MergedInto(ctx, "HEAD", defaultBranch)
 		if err != nil {
-			return overviewRow{}, err
+			return repositoryRow{}, err
 		}
 		row.finished = merged
 	}
@@ -149,18 +147,23 @@ func loadOverviewRow(listed focus.FoundRepository) (overviewRow, error) {
 	}
 	behind, err := listed.Repository.CommitsBehind(ctx, defaultBranch)
 	if err != nil {
-		return overviewRow{}, err
+		return repositoryRow{}, err
 	}
 	row.behindDefault = behind
 	return row, nil
 }
 
-func (r overviewRow) isRefused() bool {
-	return r.refused.Err != nil
+func (r repositoryRow) relativePath() string {
+	return r.RelativePath
+}
+
+func (r refusedRow) relativePath() string {
+	return r.RelativePath
 }
 
 func (m Model) openOverview() (tea.Model, tea.Cmd) {
-	m.overview = overview{open: true, rows: []overviewRow{}, pulling: m.overview.pulling}
+	m.mode = modeOverview
+	m.overview = selectableList[overviewRow]{rows: []overviewRow{}}
 	return m, overviewRequest{listRepositories: m.listRepositories}.load
 }
 
@@ -170,12 +173,8 @@ func (m Model) withOverviewLoaded(msg overviewLoadedMsg) Model {
 	slices.SortStableFunc(rows, func(a overviewRow, b overviewRow) int {
 		return cmp.Compare(m.focusRank(a), m.focusRank(b))
 	})
-	m.overview.loaded = true
-	m.overview.rows = rows
-	m.overview.selected = max(slices.IndexFunc(rows, func(row overviewRow) bool {
-		return !row.isRefused() && row.listed.Repository == m.repository
-	}), 0)
-	m.overview.offset = 0
+	loaded := selectableList[overviewRow]{loaded: true, rows: rows, selected: 0, offset: 0}
+	m.overview = loaded.withSelected(slices.IndexFunc(rows, isRowOf(m.repository)))
 	m = m.withListScrolled()
 	if len(msg.failures) == 0 {
 		return m
@@ -183,25 +182,39 @@ func (m Model) withOverviewLoaded(msg overviewLoadedMsg) Model {
 	return m.withFooterError("skipped " + strings.Join(msg.failures, ", "))
 }
 
+func isRowOf(repository gitrepo.Repository) func(overviewRow) bool {
+	return func(row overviewRow) bool {
+		listed, isRepository := row.(repositoryRow)
+		return isRepository && listed.Repository == repository
+	}
+}
+
+func (m Model) isFocused(row overviewRow) bool {
+	listed, isRepository := row.(repositoryRow)
+	return isRepository && slices.Contains(m.focused, listed.Repository)
+}
+
 func (m Model) focusRank(row overviewRow) int {
-	if slices.Contains(m.focused, row.listed.Repository) {
+	if m.isFocused(row) {
 		return 0
 	}
 	return 1
 }
 
 func (m Model) updateOverview(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
-	m.footerText = ""
+	m.footer = footer{}
 	switch {
 	case key.Matches(msg, quitKey):
 		return m, tea.Quit
 	case key.Matches(msg, closeOverviewKey):
-		m.overview.open = false
+		m.mode = modeBrowsing
 		return m, nil
 	case key.Matches(msg, downKey):
-		return m.selectOverviewRow(m.overview.selected + 1), nil
+		m.overview = m.overview.withSelected(m.overview.selected + 1).scrolled(m.paneInnerHeight())
+		return m, nil
 	case key.Matches(msg, upKey):
-		return m.selectOverviewRow(m.overview.selected - 1), nil
+		m.overview = m.overview.withSelected(m.overview.selected - 1).scrolled(m.paneInnerHeight())
+		return m, nil
 	case key.Matches(msg, openRepositoryKey):
 		return m.openOverviewRow()
 	case key.Matches(msg, pullKey):
@@ -211,30 +224,37 @@ func (m Model) updateOverview(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 }
 
 func (m Model) pullOverviewRow() (tea.Model, tea.Cmd) {
-	if len(m.overview.rows) == 0 {
+	selected, hasRows := m.overview.selectedRow()
+	if !hasRows {
 		return m, nil
 	}
-	row := m.overview.rows[m.overview.selected]
-	listed := row.listed
+	switch row := selected.(type) {
+	case refusedRow:
+		return m.withRefusalShown(row), nil
+	case repositoryRow:
+		return m.pullRepositoryRow(row)
+	}
+	return m, nil
+}
+
+func (m Model) pullRepositoryRow(row repositoryRow) (tea.Model, tea.Cmd) {
 	var pull tea.Cmd
 	switch {
-	case row.isRefused():
-		return m.withRefusalShown(row), nil
-	case m.overview.pulling[listed.Repository.Dir]:
+	case m.pulling[row.Repository.Dir]:
 		return m, nil
 	case row.finished:
-		pull = switchRequest{listed: listed, branch: localBranch(row.defaultBranch)}.switchAndPull
+		pull = switchRequest{listed: row.FoundRepository, branch: localBranch(row.defaultBranch)}.switchAndPull
 	case row.status.Upstream == "":
-		return m.withFooterError(listed.RelativePath + " tracks no upstream, so there is nothing to pull"), nil
+		return m.withFooterError(row.RelativePath + " tracks no upstream, so there is nothing to pull"), nil
 	case row.status.UpstreamGone:
-		return m.withFooterError(listed.RelativePath + " tracks " + sanitizeSingleLine(row.status.Upstream) +
+		return m.withFooterError(row.RelativePath + " tracks " + sanitizeSingleLine(row.status.Upstream) +
 			", which was deleted from the remote, so there is nothing to pull"), nil
 	default:
-		pull = pullRequest{listed: listed}.pull
+		pull = pullRequest{listed: row.FoundRepository}.pull
 	}
-	pulling := maps.Clone(m.overview.pulling)
-	pulling[listed.Repository.Dir] = true
-	m.overview.pulling = pulling
+	pulling := maps.Clone(m.pulling)
+	pulling[row.Repository.Dir] = true
+	m.pulling = pulling
 	return m, pull
 }
 
@@ -249,19 +269,19 @@ func localBranch(defaultBranch string) string {
 }
 
 func (m Model) withOverviewPulled(msg overviewPulledMsg) (tea.Model, tea.Cmd) {
-	repository := msg.row.listed.Repository
-	m.overview.pulling = withoutDir(m.overview.pulling, repository.Dir)
+	repository := msg.row.Repository
+	m.pulling = withoutDir(m.pulling, repository.Dir)
 	rows := slices.Clone(m.overview.rows)
-	index := slices.IndexFunc(rows, func(row overviewRow) bool { return row.listed.Repository == repository })
+	index := slices.IndexFunc(rows, isRowOf(repository))
 	if index >= 0 {
 		rows[index] = msg.row
 	}
 	m.overview.rows = rows
-	m = m.withFooterNotice("pulled " + msg.row.listed.RelativePath)
+	m = m.withFooterNotice("pulled " + msg.row.RelativePath)
 	if repository != m.repository {
 		return m, nil
 	}
-	return m, repositoryRequest{repository: m.repository}.loadStatus
+	return m, m.reloadStatus()
 }
 
 func withoutDir(set map[string]bool, dir string) map[string]bool {
@@ -270,90 +290,58 @@ func withoutDir(set map[string]bool, dir string) map[string]bool {
 	return without
 }
 
-func (m Model) selectOverviewRow(index int) Model {
-	if len(m.overview.rows) == 0 {
-		return m
-	}
-	m.overview.selected = min(max(index, 0), len(m.overview.rows)-1)
-	return m.withListScrolled()
-}
-
 func (m Model) openOverviewRow() (tea.Model, tea.Cmd) {
-	if len(m.overview.rows) == 0 {
+	selected, hasRows := m.overview.selectedRow()
+	if !hasRows {
 		return m, nil
 	}
-	row := m.overview.rows[m.overview.selected]
-	if row.isRefused() {
+	switch row := selected.(type) {
+	case refusedRow:
 		return m.withRefusalShown(row), nil
-	}
-	repository := row.listed.Repository
-	m.overview.open = false
-	if repository == m.repository {
-		return m, nil
-	}
-	return m.withFocusedRepository(repository)
-}
-
-func (m Model) withRefusalShown(row overviewRow) Model {
-	return m.withFooterError(row.listed.RelativePath + " is refused: " + row.refused.Err.Error())
-}
-
-func (m Model) renderOverviewPane() string {
-	innerWidth := m.width - 2
-	return renderPane("repositories", "", m.overviewLabel(), m.overviewLines(innerWidth), innerWidth, m.paneInnerHeight())
-}
-
-func (m Model) overviewLabel() string {
-	if len(m.overview.rows) == 0 {
-		return ""
-	}
-	return strconv.Itoa(m.overview.selected+1) + " of " + strconv.Itoa(len(m.overview.rows))
-}
-
-func (m Model) overviewLines(innerWidth int) []string {
-	switch {
-	case !m.overview.loaded:
-		return []string{mutedStyle.Render("loading...")}
-	case len(m.overview.rows) == 0:
-		return []string{mutedStyle.Render("no repositories found")}
-	}
-	cells := [][]string{}
-	for _, row := range m.overview.rows {
-		rowCells := append([]string{m.renderFocusMark(row)}, renderOverviewCells(row)...)
-		if m.overview.pulling[row.listed.Repository.Dir] {
-			rowCells = append(rowCells, mutedStyle.Render("pulling..."))
+	case repositoryRow:
+		m.mode = modeBrowsing
+		if row.Repository == m.repository {
+			return m, nil
 		}
-		cells = append(cells, rowCells)
+		return m.withFocusedRepository(row.Repository)
 	}
-	aligned := alignColumns(cells)
-	lines := []string{}
-	end := min(m.overview.offset+m.paneInnerHeight(), len(aligned))
-	for index := m.overview.offset; index < end; index++ {
-		lines = append(lines, listRow(aligned[index], index == m.overview.selected, innerWidth))
+	return m, nil
+}
+
+func (m Model) withRefusalShown(row refusedRow) Model {
+	return m.withFooterError(row.RelativePath + " is refused: " + row.Err.Error())
+}
+
+func (m Model) overviewCells(row overviewRow) []string {
+	cells := append([]string{m.renderFocusMark(row)}, row.cells()...)
+	listed, isRepository := row.(repositoryRow)
+	if isRepository && m.pulling[listed.Repository.Dir] {
+		cells = append(cells, mutedStyle.Render("pulling..."))
 	}
-	return lines
+	return cells
 }
 
 func (m Model) renderFocusMark(row overviewRow) string {
-	if !slices.Contains(m.focused, row.listed.Repository) {
+	if !m.isFocused(row) {
 		return ""
 	}
 	return markStyle.Render("●")
 }
 
-func renderOverviewCells(row overviewRow) []string {
-	if row.isRefused() {
-		return []string{
-			mutedStyle.Render(folderGlyph + " " + sanitizeText(row.listed.RelativePath)),
-			mutedStyle.Render(sanitizeText(row.refused.Summary())),
-		}
-	}
+func (r repositoryRow) cells() []string {
 	return []string{
-		repositoryStyle.Render(folderGlyph + " " + sanitizeText(row.listed.RelativePath)),
-		branchStyle.Render(branchGlyph + " " + headName(row.status)),
-		renderChangedCount(len(row.status.Files)),
-		renderAheadBehind(row.status.Tracking),
-		renderBehindDefault(row),
+		repositoryStyle.Render(folderGlyph + " " + sanitizeText(r.RelativePath)),
+		branchStyle.Render(branchGlyph + " " + headName(r.status)),
+		renderChangedCount(len(r.status.Files)),
+		renderAheadBehind(r.status.Tracking),
+		renderBehindDefault(r),
+	}
+}
+
+func (r refusedRow) cells() []string {
+	return []string{
+		mutedStyle.Render(folderGlyph + " " + sanitizeText(r.RelativePath)),
+		mutedStyle.Render(sanitizeText(r.Summary())),
 	}
 }
 
@@ -364,7 +352,7 @@ func renderChangedCount(count int) string {
 	return warningStyle.Render(strconv.Itoa(count) + " changed")
 }
 
-func renderBehindDefault(row overviewRow) string {
+func renderBehindDefault(row repositoryRow) string {
 	if row.behindDefault == 0 {
 		return ""
 	}

@@ -79,7 +79,7 @@ func onlyTheSelectedLineKeepsItsFullColor(t *testing.T) {
 
 	got := renderGraphCells(rows[3].commit, pathThrough(rows, 1))
 
-	want := laneStyles[0].Render("●") + laneStyles[1].Render("─╯") + dimLaneStyles[1].Render(" ")
+	want := laneStyles[0].line.Render("●") + laneStyles[1].line.Render("─╯") + laneStyles[1].dim.Render(" ")
 	if got != want {
 		t.Fatalf("got %q, want %q", got, want)
 	}

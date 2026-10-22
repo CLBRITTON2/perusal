@@ -18,7 +18,7 @@ type graphEdge struct {
 	firstParent bool
 }
 
-// A cell is one terminal commitLane, on the selected path when its childRow and parentRow both are. A commit's own
+// A cell is one terminal column, on the selected path when its childRow and parentRow both are. A commit's own
 // symbol holds its row in both, and a cell off any first-parent path holds noRow. int32 keeps a cell at 16 bytes,
 // since a long history holds close to a million of them.
 type graphCell struct {
@@ -55,10 +55,7 @@ func commitGraph(commits []gitrepo.Commit) []graphRow {
 // Each lane holds the edge it leads down along.
 func graphStep(above []graphEdge, commit gitrepo.Commit, rowOf map[string]int32) (graphRow, []graphEdge) {
 	commitLane := laneOf(above, commit.Hash)
-	below := slices.Clone(above)
-	for len(below) <= commitLane {
-		below = append(below, graphEdge{})
-	}
+	below := growTo(slices.Clone(above), commitLane)
 	// Each connector is a lane joined to the commit by a horizontal line, which draws that lane's edge.
 	connectors := map[int]graphEdge{}
 	ending := map[int]bool{}
@@ -93,9 +90,7 @@ func graphStep(above []graphEdge, commit gitrepo.Commit, rowOf map[string]int32)
 			continue
 		}
 		lane := freeLane(below, above)
-		for len(below) <= lane {
-			below = append(below, graphEdge{})
-		}
+		below = growTo(below, lane)
 		below[lane] = edge
 		opening[lane] = true
 		connectors[lane] = edge
@@ -117,7 +112,7 @@ func graphStep(above []graphEdge, commit gitrepo.Commit, rowOf map[string]int32)
 	commitCells := []graphCell{}
 	belowCells := []graphCell{}
 	for lane := range width {
-		passing := lane < len(above) && above[lane].parent != "" && lane < len(below) && below[lane].parent != ""
+		passing := occupied(above, lane) && occupied(below, lane)
 		crossed := leftmost < lane && lane < rightmost
 		var symbol graphCell
 		switch {
@@ -154,16 +149,24 @@ func graphStep(above []graphEdge, commit gitrepo.Commit, rowOf map[string]int32)
 			filler = blankCell(lane)
 		}
 		commitCells = append(commitCells, symbol, filler)
-		if lane < len(below) && below[lane].parent != "" {
+		if occupied(below, lane) {
 			belowCells = append(belowCells, edgeCell('│', lane, below[lane], rowOf), blankCell(lane))
 		} else {
 			belowCells = append(belowCells, blankCell(lane), blankCell(lane))
 		}
 	}
-	for len(below) > 0 && below[len(below)-1].parent == "" {
+	for len(below) > 0 && !occupied(below, len(below)-1) {
 		below = below[:len(below)-1]
 	}
 	return graphRow{commit: commitCells, below: belowCells, pathChild: pathChild, pathParent: pathParent}, below
+}
+
+func growTo(lanes []graphEdge, lane int) []graphEdge {
+	return append(lanes, make([]graphEdge, max(lane+1-len(lanes), 0))...)
+}
+
+func occupied(lanes []graphEdge, lane int) bool {
+	return lane < len(lanes) && lanes[lane].parent != ""
 }
 
 func edgeCell(glyph rune, lane int, edge graphEdge, rowOf map[string]int32) graphCell {
@@ -216,7 +219,7 @@ func absInt(value int) int {
 // Also empty above, so a lane that just ended is not reused on the same row.
 func freeLane(lanes []graphEdge, above []graphEdge) int {
 	for lane := range lanes {
-		if lanes[lane].parent == "" && (lane >= len(above) || above[lane].parent == "") {
+		if !occupied(lanes, lane) && !occupied(above, lane) {
 			return lane
 		}
 	}
@@ -251,6 +254,10 @@ func (c graphCell) onPath(path []bool) bool {
 	return onRow(path, c.childRow) && onRow(path, c.parentRow)
 }
 
+func (c graphCell) styleIndex() int32 {
+	return c.lane % int32(len(laneStyles))
+}
+
 func onRow(path []bool, row int32) bool {
 	return row != noRow && int(row) < len(path) && path[row]
 }
@@ -261,17 +268,17 @@ func renderGraphCells(cells []graphCell, path []bool) string {
 	start := 0
 	for start < len(cells) {
 		highlighted := cells[start].onPath(path)
-		lane := cells[start].lane % int32(len(laneStyles))
+		style := cells[start].styleIndex()
 		end := start
 		var glyphs strings.Builder
-		for end < len(cells) && cells[end].onPath(path) == highlighted && cells[end].lane%int32(len(laneStyles)) == lane {
+		for end < len(cells) && cells[end].onPath(path) == highlighted && cells[end].styleIndex() == style {
 			glyphs.WriteRune(cells[end].glyph)
 			end++
 		}
 		if highlighted {
-			rendered.WriteString(laneStyles[lane].Render(glyphs.String()))
+			rendered.WriteString(laneStyles[style].line.Render(glyphs.String()))
 		} else {
-			rendered.WriteString(dimLaneStyles[lane].Render(glyphs.String()))
+			rendered.WriteString(laneStyles[style].dim.Render(glyphs.String()))
 		}
 		start = end
 	}

@@ -32,8 +32,8 @@ func TestDeleteBranch(t *testing.T) {
 
 			m = update(t, m, tea.KeyPressMsg{Code: 'D', Text: "D"})
 
-			if m.popup != noPopup || !m.footerIsError || m.footerText != test.want {
-				t.Fatalf("got popup %d, footer %q, want the refusal %q", m.popup, m.footerText, test.want)
+			if m.popup.kind != noPopup || !m.footer.isError || m.footer.text != test.want {
+				t.Fatalf("got popup %d, footer %q, want the refusal %q", m.popup.kind, m.footer.text, test.want)
 			}
 		})
 	}
@@ -43,10 +43,10 @@ func aMergedBranchIsDeletedAfterAConfirmAndTheListReloadsInPlace(t *testing.T) {
 	m := selectBranch(t, branchesOf(t, gitrepo.Status{}, "origin/main"), 2)
 	screen := ansi.Strip(m.renderScreen())
 	m = update(t, m, tea.KeyPressMsg{Code: 'D', Text: "D"})
-	popup := ansi.Strip(m.renderDeleteBranchPopup())
+	popup := ansi.Strip(m.renderConfirmPopup())
 	next, deleting := m.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
 	m = asModel(t, next)
-	next, reloading := m.Update(branchDeletedMsg{dir: "C:/dev/repo", branch: "done"})
+	next, reloading := m.Update(popupSucceededMsg{dir: "C:/dev/repo", notice: "deleted done"})
 	m = asModel(t, next)
 	rows := fourBranches()
 	m = update(t, m, branchesLoadedMsg{dir: "C:/dev/repo", rows: []branchRow{rows[0], rows[1], rows[3]}, defaultBranch: "origin/main"})
@@ -57,17 +57,17 @@ func aMergedBranchIsDeletedAfterAConfirmAndTheListReloadsInPlace(t *testing.T) {
 	if !strings.Contains(popup, "delete done") || !strings.Contains(popup, "origin/main has all its changes") {
 		t.Fatalf("got popup:\n%s", popup)
 	}
-	if deleting == nil || reloading == nil || m.popup != noPopup || m.footerText != "deleted done" ||
+	if deleting == nil || reloading == nil || m.popup.kind != noPopup || m.footer.text != "deleted done" ||
 		m.branches.rows[m.branches.selected].branch.Name != "wip" {
 		t.Fatalf("got delete %v, reload %v, popup %d, footer %q, selected %d, want wip selected after the delete",
-			deleting, reloading, m.popup, m.footerText, m.branches.selected)
+			deleting, reloading, m.popup.kind, m.footer.text, m.branches.selected)
 	}
 }
 
 func anUnmergedBranchIsDeletedAfterAWarning(t *testing.T) {
 	m := selectBranch(t, branchesOf(t, gitrepo.Status{}, "origin/main"), 3)
 	m = update(t, m, tea.KeyPressMsg{Code: 'D', Text: "D"})
-	popup := ansi.Strip(m.renderDeleteBranchPopup())
+	popup := ansi.Strip(m.renderConfirmPopup())
 
 	_, deleting := m.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
 
@@ -88,8 +88,8 @@ func isRefusedWithUncommittedChanges(t *testing.T) {
 	next, cmd := m.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
 	m = asModel(t, next)
 
-	if cmd != nil || !m.footerIsError || !m.branches.open {
-		t.Fatalf("got command %v, footer %q, want a refusal with the list still open", cmd, m.footerText)
+	if cmd != nil || !m.footer.isError || m.mode != modeBranches {
+		t.Fatalf("got command %v, footer %q, want a refusal with the list still open", cmd, m.footer.text)
 	}
 }
 
@@ -101,17 +101,15 @@ func closesTheListAndReloadsTheStatus(t *testing.T) {
 	next, reloading := m.Update(branchSwitchedMsg{dir: "C:/dev/repo", branch: "wip"})
 	m = asModel(t, next)
 
-	if switching == nil || reloading == nil || m.branches.open || m.footerText != "switched to wip" {
-		t.Fatalf("got switch %v, reload %v, open %t, footer %q, want the list closed after the switch", switching,
-			reloading, m.branches.open, m.footerText)
+	if switching == nil || reloading == nil || m.mode == modeBranches || m.footer.text != "switched to wip" {
+		t.Fatalf("got switch %v, reload %v, mode %d, footer %q, want the list closed after the switch", switching,
+			reloading, m.mode, m.footer.text)
 	}
 }
 
 func branchesOf(t *testing.T, status gitrepo.Status, defaultBranch string) Model {
 	t.Helper()
-	m := update(t, New(listNothing), tea.WindowSizeMsg{Width: 120, Height: 30})
-	m = update(t, m, focusOn("C:/dev/repo"))
-	m = update(t, m, statusLoadedMsg{dir: "C:/dev/repo", status: status})
+	m := reviewing(t, status)
 	m = update(t, m, tea.KeyPressMsg{Code: 'b', Text: "b"})
 	return update(t, m, branchesLoadedMsg{dir: "C:/dev/repo", rows: fourBranches(), defaultBranch: defaultBranch})
 }

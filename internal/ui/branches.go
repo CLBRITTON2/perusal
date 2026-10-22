@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"slices"
-	"strconv"
 	"sync"
 
 	"charm.land/bubbles/v2/key"
@@ -21,12 +20,8 @@ type branchRow struct {
 
 // defaultBranch is origin's, as DefaultBranch names it, and empty when origin/HEAD is unset.
 type branchList struct {
-	open          bool
-	loaded        bool
-	rows          []branchRow
+	selectableList[branchRow]
 	defaultBranch string
-	selected      int
-	offset        int
 }
 
 type branchesLoadedMsg struct {
@@ -41,11 +36,6 @@ type branchesFailedMsg struct {
 }
 
 type branchSwitchedMsg struct {
-	dir    string
-	branch string
-}
-
-type branchDeletedMsg struct {
 	dir    string
 	branch string
 }
@@ -97,45 +87,52 @@ func (r branchRequest) switchTo() tea.Msg {
 }
 
 func (r branchRequest) delete() tea.Msg {
-	if err := r.repository.DeleteBranch(context.Background(), r.branch); err != nil {
-		return popupFailedMsg{dir: r.repository.Dir, err: err}
-	}
-	return branchDeletedMsg{dir: r.repository.Dir, branch: r.branch}
+	return popupResult(r.repository.Dir, r.repository.DeleteBranch(context.Background(), r.branch), "deleted "+r.branch)
 }
 
 func (m Model) openBranches() (tea.Model, tea.Cmd) {
 	if m.repository.Dir == "" {
 		return m, nil
 	}
-	m.branches = branchList{open: true, rows: []branchRow{}}
+	m.mode = modeBranches
+	m.branches = branchList{selectableList: selectableList[branchRow]{rows: []branchRow{}}}
 	return m, branchListRequest{repository: m.repository}.load
+}
+
+func (m Model) reloadBranches() tea.Cmd {
+	if m.mode != modeBranches {
+		return nil
+	}
+	return branchListRequest{repository: m.repository}.load
 }
 
 // The first load selects the current branch, and a reload after a delete keeps the selection where it was.
 func (m Model) withBranchesLoaded(msg branchesLoadedMsg) Model {
+	var selected int
 	if m.branches.loaded {
-		m.branches.selected = min(m.branches.selected, max(len(msg.rows)-1, 0))
+		selected = m.branches.selected
 	} else {
-		m.branches.selected = max(slices.IndexFunc(msg.rows, func(row branchRow) bool { return row.branch.Current }), 0)
+		selected = slices.IndexFunc(msg.rows, func(row branchRow) bool { return row.branch.Current })
 	}
-	m.branches.loaded = true
-	m.branches.rows = msg.rows
-	m.branches.defaultBranch = msg.defaultBranch
+	loaded := selectableList[branchRow]{loaded: true, rows: msg.rows, selected: 0, offset: m.branches.offset}
+	m.branches = branchList{selectableList: loaded.withSelected(selected), defaultBranch: msg.defaultBranch}
 	return m.withListScrolled()
 }
 
 func (m Model) updateBranches(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
-	m.footerText = ""
+	m.footer = footer{}
 	switch {
 	case key.Matches(msg, quitKey):
 		return m, tea.Quit
 	case key.Matches(msg, closeBranchesKey):
-		m.branches.open = false
+		m.mode = modeBrowsing
 		return m, nil
 	case key.Matches(msg, downKey):
-		return m.selectBranchRow(m.branches.selected + 1), nil
+		m.branches.selectableList = m.branches.withSelected(m.branches.selected + 1).scrolled(m.paneInnerHeight())
+		return m, nil
 	case key.Matches(msg, upKey):
-		return m.selectBranchRow(m.branches.selected - 1), nil
+		m.branches.selectableList = m.branches.withSelected(m.branches.selected - 1).scrolled(m.paneInnerHeight())
+		return m, nil
 	case key.Matches(msg, switchBranchKey):
 		return m.switchToSelectedBranch()
 	case key.Matches(msg, deleteBranchKey):
@@ -144,23 +141,16 @@ func (m Model) updateBranches(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	return m, nil
 }
 
-func (m Model) selectBranchRow(index int) Model {
-	if len(m.branches.rows) == 0 {
-		return m
-	}
-	m.branches.selected = min(max(index, 0), len(m.branches.rows)-1)
-	return m.withListScrolled()
-}
-
 // git switch carries uncommitted changes along when they do not conflict, which would mix them into another branch.
 func (m Model) switchToSelectedBranch() (tea.Model, tea.Cmd) {
-	if len(m.branches.rows) == 0 {
+	row, hasRows := m.branches.selectedRow()
+	if !hasRows {
 		return m, nil
 	}
-	branch := m.branches.rows[m.branches.selected].branch
+	branch := row.branch
 	switch {
 	case branch.Current:
-		m.branches.open = false
+		m.mode = modeBrowsing
 		return m, nil
 	case len(m.status.Files) > 0:
 		return m.withFooterError("the work tree has uncommitted changes, so perusal does not switch branches"), nil
@@ -169,10 +159,10 @@ func (m Model) switchToSelectedBranch() (tea.Model, tea.Cmd) {
 }
 
 func (m Model) openDeleteBranchPopup() Model {
-	if len(m.branches.rows) == 0 {
+	row, hasRows := m.branches.selectedRow()
+	if !hasRows {
 		return m
 	}
-	row := m.branches.rows[m.branches.selected]
 	name := sanitizeSingleLine(row.branch.Name)
 	switch {
 	case row.branch.Current:
@@ -183,76 +173,31 @@ func (m Model) openDeleteBranchPopup() Model {
 	case row.branch.Name == localBranch(m.branches.defaultBranch):
 		return m.withFooterError(name + " is the default branch, which perusal never deletes")
 	}
-	m.popup = deleteBranchPopup
-	m.deleteBranchTarget = row
-	return m
+	return m.withConfirmation(confirmation{
+		lines: []string{
+			titleStyle.Render("delete " + sanitizeText(row.branch.Name)),
+			renderDeleteTargetMerged(row, m.branches.defaultBranch),
+		},
+		confirmKey:  confirmDeleteKey,
+		run:         branchRequest{repository: m.repository, branch: row.branch.Name}.delete,
+		runningText: "deleting...",
+	})
 }
 
-func (m Model) withBranchDeleted(msg branchDeletedMsg) (tea.Model, tea.Cmd) {
-	if msg.dir != m.repository.Dir {
-		return m.withFooterNotice("deleted " + msg.branch + " in " + msg.dir), nil
+func renderDeleteTargetMerged(row branchRow, defaultBranch string) string {
+	if row.mergedIntoDefault {
+		return textStyle.Render(sanitizeText(defaultBranch) + " has all its changes")
 	}
-	m = m.withPopupClosed().withFooterNotice("deleted " + msg.branch)
-	if !m.branches.open {
-		return m, nil
-	}
-	return m, branchListRequest{repository: m.repository}.load
+	return warningStyle.Render(sanitizeText(defaultBranch) + " lacks some of its changes")
 }
 
-func (m Model) renderDeleteBranchPopup() string {
-	return m.renderPopup([]string{
-		titleStyle.Render("delete " + sanitizeText(m.deleteBranchTarget.branch.Name)),
-		m.renderDeleteTargetMerged(),
-	}, "deleting...", deleteBranchHelp)
-}
-
-func (m Model) renderDeleteTargetMerged() string {
-	defaultBranch := sanitizeText(m.branches.defaultBranch)
-	if m.deleteBranchTarget.mergedIntoDefault {
-		return textStyle.Render(defaultBranch + " has all its changes")
-	}
-	return warningStyle.Render(defaultBranch + " lacks some of its changes")
-}
-
-func (m Model) renderBranchesPane() string {
-	innerWidth := m.width - 2
-	return renderPane("branches", "", m.branchesLabel(), m.branchLines(innerWidth), innerWidth, m.paneInnerHeight())
-}
-
-func (m Model) branchesLabel() string {
-	if len(m.branches.rows) == 0 {
-		return ""
-	}
-	return strconv.Itoa(m.branches.selected+1) + " of " + strconv.Itoa(len(m.branches.rows))
-}
-
-func (m Model) branchLines(innerWidth int) []string {
-	switch {
-	case !m.branches.loaded:
-		return []string{mutedStyle.Render("loading...")}
-	case len(m.branches.rows) == 0:
-		return []string{mutedStyle.Render("no branches yet")}
-	}
-	cells := [][]string{}
-	for _, row := range m.branches.rows {
-		cells = append(cells, renderBranchCells(row, m.branches.defaultBranch))
-	}
-	aligned := alignColumns(cells)
-	lines := []string{}
-	end := min(m.branches.offset+m.paneInnerHeight(), len(aligned))
-	for index := m.branches.offset; index < end; index++ {
-		lines = append(lines, listRow(aligned[index], index == m.branches.selected, innerWidth))
-	}
-	return lines
-}
-
-func renderBranchCells(row branchRow, defaultBranch string) []string {
+func (l branchList) cells(row branchRow) []string {
 	return []string{
 		renderCurrentMark(row.branch),
 		branchStyle.Render(branchGlyph + " " + sanitizeText(row.branch.Name)),
 		renderUpstream(row.branch),
 		renderAheadBehind(row.branch.Tracking),
-		renderMerged(row, defaultBranch),
+		renderMerged(row, l.defaultBranch),
 	}
 }
 
