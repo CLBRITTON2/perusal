@@ -244,6 +244,35 @@ func listedAt(relativePath string, dir string) focus.FoundRepository {
 func TestWholeFile(t *testing.T) {
 	t.Run("dropsAFileDiffLoadedWithTheOtherContext", dropsAFileDiffLoadedWithTheOtherContext)
 	t.Run("reloadsACommitOnlyWhileItWasLoadedWithTheOtherContext", reloadsACommitOnlyWhileItWasLoadedWithTheOtherContext)
+	t.Run("keepsTheTopLineOnScreenBothWays", keepsTheTopLineOnScreenBothWays)
+}
+
+func keepsTheTopLineOnScreenBothWays(t *testing.T) {
+	hunks := diff.FileDiff{Hunks: []diff.Hunk{contextHunk(10, 24), contextHunk(40, 54), contextHunk(70, 84)}}
+	wholeFile := diff.FileDiff{Hunks: []diff.Hunk{contextHunk(1, 100)}}
+	m := reviewing(t, gitrepo.Status{Files: twoFiles()})
+	m = update(t, m, tea.WindowSizeMsg{Width: 120, Height: 16})
+	m = update(t, m, diffLoadedMsg{dir: "C:/dev/repo", path: "a.go", contextLines: hunkContext, fileDiff: hunks})
+	m.diffView.SetYOffset(20)
+
+	m = update(t, m, tea.KeyPressMsg{Code: 'f', Text: "f"})
+	m = update(t, m, diffLoadedMsg{dir: "C:/dev/repo", path: "a.go", contextLines: wholeFileContext, fileDiff: wholeFile})
+	wholeFileOffset := m.diffView.YOffset()
+	m = update(t, m, tea.KeyPressMsg{Code: 'f', Text: "f"})
+	m = update(t, m, diffLoadedMsg{dir: "C:/dev/repo", path: "a.go", contextLines: hunkContext, fileDiff: hunks})
+
+	if wholeFileOffset != 43 || m.diffView.YOffset() != 20 {
+		t.Fatalf("got offsets %d then %d, want line 43 on top at 43 then back at 20", wholeFileOffset, m.diffView.YOffset())
+	}
+}
+
+func contextHunk(first int, last int) diff.Hunk {
+	hunk := diff.Hunk{Header: fmt.Sprintf("@@ -%d +%d @@", first, first)}
+	for number := first; number <= last; number++ {
+		line := diff.Line{Kind: diff.LineContext, Number: number, Text: "line"}
+		hunk.Rows = append(hunk.Rows, diff.Row{Old: line, New: line})
+	}
+	return hunk
 }
 
 func dropsAFileDiffLoadedWithTheOtherContext(t *testing.T) {

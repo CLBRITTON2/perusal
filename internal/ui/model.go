@@ -221,10 +221,14 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		if msg.path != m.diffPath && m.view == viewChanges {
 			m.diffView.SetYOffset(0)
+			m.diffPath = msg.path
+			m.fileDiff = msg.fileDiff
+			return m.withDiffContent(), nil
 		}
+		previous := m.diffLines()
 		m.diffPath = msg.path
 		m.fileDiff = msg.fileDiff
-		return m.withDiffContent(), nil
+		return m.withDiffKeptInPlace(previous), nil
 	case logLoadedMsg:
 		if msg.dir != m.repository.Dir || msg.limit != m.logLimit {
 			return m, nil
@@ -234,9 +238,10 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if msg.dir != m.repository.Dir || msg.contextLines != m.contextLines() {
 			return m, nil
 		}
+		previous := m.diffLines()
 		m.commitDiffs = maps.Clone(m.commitDiffs)
 		m.commitDiffs[msg.hash] = commitDiff{sections: msg.sections, contextLines: msg.contextLines}
-		return m.withDiffContent().withListScrolled(), nil
+		return m.withDiffKeptInPlace(previous).withListScrolled(), nil
 	case indexChangedMsg:
 		if msg.dir != m.repository.Dir {
 			return m, nil
@@ -391,7 +396,6 @@ func (m Model) updateBrowsing(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		return m.withLayout(), nil
 	case key.Matches(msg, wholeFileKey):
 		m.wholeFile = !m.wholeFile
-		m.diffView.SetYOffset(0)
 		return m, tea.Batch(m.loadSelectedDiff(), m.loadSelectedCommitDiff())
 	case key.Matches(msg, unifiedKey):
 		m.unified = !m.unified
@@ -980,11 +984,20 @@ func (m Model) withLayout() Model {
 }
 
 func (m Model) withDiffContent() Model {
-	m.diffView.SetContentLines(m.diffLines())
+	m.diffView.SetContentLines(lineTexts(m.diffLines()))
 	return m
 }
 
-func (m Model) diffLines() []string {
+// withDiffKeptInPlace shows the diff after its source reloaded with the line the reader was on at the same screen row.
+func (m Model) withDiffKeptInPlace(previous []renderedLine) Model {
+	offset := m.diffView.YOffset()
+	lines := m.diffLines()
+	m.diffView.SetContentLines(lineTexts(lines))
+	m.diffView.SetYOffset(keptOffset(previous, lines, offset))
+	return m
+}
+
+func (m Model) diffLines() []renderedLine {
 	width := m.diffInnerWidth()
 	sections, loaded := m.selectedCommitDiff()
 	switch {
@@ -995,7 +1008,7 @@ func (m Model) diffLines() []string {
 	case m.view == viewChanges && m.diffPath != "":
 		return renderFileDiff(m.fileDiff, m.changeLayout(), width)
 	default:
-		return []string{}
+		return []renderedLine{}
 	}
 }
 
