@@ -58,11 +58,19 @@ func follow(rules focus.Rules) error {
 	if err != nil {
 		return err
 	}
-	program := tea.NewProgram(ui.New(func(ctx context.Context) (focus.Found, error) {
+	statePath, err := viewStatePath()
+	if err != nil {
+		return err
+	}
+	model, err := startingModel(func(ctx context.Context) (focus.Found, error) {
 		return focus.FindRepositories(ctx, rules)
-	}))
+	}, statePath)
+	if err != nil {
+		return err
+	}
+	program := tea.NewProgram(model)
 	go forwardResults(program, results, rules.FocusFile)
-	if _, err := program.Run(); err != nil {
+	if err := runKeepingViewState(program, statePath); err != nil {
 		return fmt.Errorf("run perusal following %s: %w", rules.FocusFile, err)
 	}
 	return nil

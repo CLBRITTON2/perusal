@@ -104,6 +104,14 @@ type display struct {
 	height         int
 }
 
+// ViewState is the part of the display perusal keeps from one run to the next.
+type ViewState struct {
+	LogView        bool `json:"logView"`
+	FullscreenDiff bool `json:"fullscreenDiff"`
+	WholeFile      bool `json:"wholeFile"`
+	Unified        bool `json:"unified"`
+}
+
 type footer struct {
 	text    string
 	isError bool
@@ -196,6 +204,27 @@ func New(findRepositories RepositoryFinder) Model {
 		help:               helpView,
 		summaryInput:       summaryInput,
 		descriptionBox:     descriptionBox,
+	}
+}
+
+func (m Model) WithViewState(viewState ViewState) Model {
+	if viewState.LogView {
+		m.view = viewLog
+	} else {
+		m.view = viewChanges
+	}
+	m.fullscreenDiff = viewState.FullscreenDiff
+	m.wholeFile = viewState.WholeFile
+	m.unified = viewState.Unified
+	return m
+}
+
+func (m Model) ViewState() ViewState {
+	return ViewState{
+		LogView:        m.view == viewLog,
+		FullscreenDiff: m.fullscreenDiff,
+		WholeFile:      m.wholeFile,
+		Unified:        m.unified,
 	}
 }
 

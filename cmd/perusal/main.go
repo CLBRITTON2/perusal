@@ -11,7 +11,6 @@ import (
 
 	"github.com/CLBRITTON2/perusal/internal/focus"
 	"github.com/CLBRITTON2/perusal/internal/gitrepo"
-	"github.com/CLBRITTON2/perusal/internal/ui"
 )
 
 var errOverviewNeedsFollow = errors.New("the overview lists the repositories under the config's ownerDir, so it needs perusal follow")
@@ -64,9 +63,17 @@ func review(repositoryPath string) error {
 	if err != nil {
 		return err
 	}
-	program := tea.NewProgram(ui.New(listWithoutFollow))
+	statePath, err := viewStatePath()
+	if err != nil {
+		return err
+	}
+	model, err := startingModel(listWithoutFollow, statePath)
+	if err != nil {
+		return err
+	}
+	program := tea.NewProgram(model)
 	go program.Send(focus.Focus{Repositories: []gitrepo.Repository{repository}, Refusals: []error{}})
-	if _, err := program.Run(); err != nil {
+	if err := runKeepingViewState(program, statePath); err != nil {
 		return fmt.Errorf("run perusal on %s: %w", repository.Dir, err)
 	}
 	return nil

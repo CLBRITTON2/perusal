@@ -58,6 +58,9 @@ commits from either field, and `esc` cancels. The changes pane shows how many li
 remove. The mouse works too: click a row to select it, click the folded pane to open it, right-click a commit to
 amend it. The wheel moves the selection over a list and scrolls the diff anywhere else.
 
+On quit, perusal saves which list was showing and the `d`, `f` and `u` toggles to `perusal\state.json` in the user
+config directory (`%APPDATA%` on Windows), and the next launch opens the same way.
+
 Amend folds only the staged changes into the commit and keeps its message. An older commit gets a fixup commit and an
 autosquash rebase, so every commit above it is rewritten, and a rebase that stops is aborted and the fixup undone.
 
