@@ -4,7 +4,9 @@ package focus
 
 import (
 	"fmt"
+	"io/fs"
 	"os"
+	"path/filepath"
 	"unsafe"
 
 	"golang.org/x/sys/windows"
@@ -16,9 +18,11 @@ const fileDeleteChild = 0x40 // x/sys/windows lacks FILE_DELETE_CHILD
 const (
 	deniedWriteMask = windows.FILE_WRITE_DATA | windows.FILE_APPEND_DATA | windows.FILE_WRITE_EA |
 		windows.FILE_WRITE_ATTRIBUTES | windows.DELETE | fileDeleteChild
-	deniedInheritFlags = windows.OBJECT_INHERIT_ACE | windows.CONTAINER_INHERIT_ACE
+	grantedWriteMask = deniedWriteMask | windows.GENERIC_WRITE | windows.GENERIC_ALL
 )
 
+// verifyGitDir checks every entry, since one the agent owns, or that grants writes ahead of the inherited deny, is
+// writable through it.
 func verifyGitDir(gitDir string, agent *windows.SID) error {
 	info, err := os.Lstat(gitDir)
 	if err != nil {
@@ -27,47 +31,60 @@ func verifyGitDir(gitDir string, agent *windows.SID) error {
 	if !info.IsDir() {
 		return fmt.Errorf("%w: %s is not a plain directory (mode %s)", ErrGitDirUnprotected, gitDir, info.Mode())
 	}
-	descriptor, err := windows.GetNamedSecurityInfo(gitDir, windows.SE_FILE_OBJECT,
+	return filepath.WalkDir(gitDir, func(path string, entry fs.DirEntry, listErr error) error {
+		if listErr != nil {
+			return fmt.Errorf("list %s: %w", path, listErr)
+		}
+		// A junction or link leads out of .git, past its deny.
+		if !entry.IsDir() && !entry.Type().IsRegular() {
+			return fmt.Errorf("%w: %s is not a plain file or directory (mode %s)", ErrGitDirUnprotected, path, entry.Type())
+		}
+		return verifyGitEntry(path, agent)
+	})
+}
+
+func verifyGitEntry(path string, agent *windows.SID) error {
+	descriptor, err := windows.GetNamedSecurityInfo(path, windows.SE_FILE_OBJECT,
 		windows.OWNER_SECURITY_INFORMATION|windows.DACL_SECURITY_INFORMATION)
 	if err != nil {
-		return fmt.Errorf("read the security descriptor of %s: %w", gitDir, err)
+		return fmt.Errorf("read the security descriptor of %s: %w", path, err)
 	}
 	owner, _, err := descriptor.Owner()
 	if err != nil {
-		return fmt.Errorf("read the owner of %s: %w", gitDir, err)
+		return fmt.Errorf("read the owner of %s: %w", path, err)
 	}
-	// An owner can rewrite the DACL, so a deny the agent set on its own directory proves nothing.
+	// An owner can rewrite the DACL, so a deny on something the agent owns proves nothing.
 	if owner.Equals(agent) {
-		return fmt.Errorf("%w: the agent account %s owns %s", ErrGitDirUnprotected, agent, gitDir)
+		return fmt.Errorf("%w: the agent account %s owns %s", ErrGitDirUnprotected, agent, path)
 	}
 	dacl, _, err := descriptor.DACL()
 	if err != nil {
-		return fmt.Errorf("read the DACL of %s: %w", gitDir, err)
+		return fmt.Errorf("read the DACL of %s: %w", path, err)
 	}
 	if dacl == nil {
-		return fmt.Errorf("%w: %s has a null DACL, which grants everyone full access", ErrGitDirUnprotected, gitDir)
+		return fmt.Errorf("%w: %s has a null DACL, which grants everyone full access", ErrGitDirUnprotected, path)
 	}
+	// Windows applies the first ACE that matches each bit, so a grant ahead of the deny wins.
 	for index := uint16(0); index < dacl.AceCount; index++ {
 		var ace *windows.ACCESS_ALLOWED_ACE
 		if err := windows.GetAce(dacl, uint32(index), &ace); err != nil {
-			return fmt.Errorf("read ACE %d of %s: %w", index, gitDir, err)
+			return fmt.Errorf("read ACE %d of %s: %w", index, path, err)
 		}
-		if deniesAgentWrites(ace, agent) {
+		switch {
+		case ace.Header.AceFlags&windows.INHERIT_ONLY_ACE != 0: // applies to children only, not to path
+		case deniesAgentWrites(ace, agent):
 			return nil
+		case ace.Header.AceType != windows.ACCESS_DENIED_ACE_TYPE && uint32(ace.Mask)&grantedWriteMask != 0:
+			return fmt.Errorf("%w: ACE %d of %s grants writes ahead of the deny for %s, "+
+				"icacls %s /reset /T restores the inherited ACL", ErrGitDirUnprotected, index, path, agent, path)
 		}
 	}
-	return fmt.Errorf("%w: %s has no (OI)(CI)(WD,AD,WEA,WA,DE,DC) deny for %s, "+
-		"add it as the README's Follow mode section shows", ErrGitDirUnprotected, gitDir, agent)
+	return fmt.Errorf("%w: %s has no (WD,AD,WEA,WA,DE,DC) deny for %s, "+
+		"add it as the README's Follow mode section shows", ErrGitDirUnprotected, path, agent)
 }
 
 func deniesAgentWrites(ace *windows.ACCESS_ALLOWED_ACE, agent *windows.SID) bool {
-	if ace.Header.AceType != windows.ACCESS_DENIED_ACE_TYPE {
-		return false
-	}
-	if ace.Header.AceFlags&windows.INHERIT_ONLY_ACE != 0 || ace.Header.AceFlags&deniedInheritFlags != deniedInheritFlags {
-		return false
-	}
-	if uint32(ace.Mask)&deniedWriteMask != deniedWriteMask {
+	if ace.Header.AceType != windows.ACCESS_DENIED_ACE_TYPE || uint32(ace.Mask)&deniedWriteMask != deniedWriteMask {
 		return false
 	}
 	// The SID starts at SidStart and runs past the end of the Go struct, as in the Win32 ACCESS_DENIED_ACE.

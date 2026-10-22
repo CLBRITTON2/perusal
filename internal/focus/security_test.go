@@ -5,6 +5,7 @@ package focus
 import (
 	"errors"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"testing"
 
@@ -20,10 +21,16 @@ func TestVerifyGitDir(t *testing.T) {
 	t.Run("refusesADenyThatIsMissingDelete", refusesADenyThatIsMissingDelete)
 	t.Run("refusesADirectoryTheAgentOwns", refusesADirectoryTheAgentOwns)
 	t.Run("refusesAGitFile", refusesAGitFile)
+	t.Run("refusesAnEntryThatGrantsWritesAheadOfTheDeny", refusesAnEntryThatGrantsWritesAheadOfTheDeny)
+	t.Run("refusesAJunctionInside", refusesAJunctionInside)
 }
 
 func acceptsTheSetupDeny(t *testing.T) {
 	gitDir := deniedGitDir(t, deniedWriteMask)
+	mustMkdir(t, filepath.Join(gitDir, "hooks"))
+	if err := os.WriteFile(filepath.Join(gitDir, "hooks", "pre-commit"), []byte("exit 0\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
 
 	if err := verifyGitDir(gitDir, parsedGuestsSID(t)); err != nil {
 		t.Fatal(err)
@@ -65,6 +72,35 @@ func refusesADirectoryTheAgentOwns(t *testing.T) {
 	}
 }
 
+func refusesAnEntryThatGrantsWritesAheadOfTheDeny(t *testing.T) {
+	gitDir := deniedGitDir(t, deniedWriteMask)
+	hooks := filepath.Join(gitDir, "hooks")
+	mustMkdir(t, hooks)
+	addGuestsACE(t, hooks, windows.FILE_WRITE_DATA, windows.GRANT_ACCESS)
+
+	err := verifyGitDir(gitDir, parsedGuestsSID(t))
+
+	if !errors.Is(err, ErrGitDirUnprotected) {
+		t.Fatalf("got %v, want %v", err, ErrGitDirUnprotected)
+	}
+}
+
+func refusesAJunctionInside(t *testing.T) {
+	gitDir := deniedGitDir(t, deniedWriteMask)
+	target := filepath.Join(t.TempDir(), "hooks")
+	mustMkdir(t, target)
+	junction := filepath.Join(gitDir, "hooks")
+	if output, err := exec.Command("cmd", "/c", "mklink", "/J", junction, target).CombinedOutput(); err != nil {
+		t.Fatalf("mklink: %v: %s", err, output)
+	}
+
+	err := verifyGitDir(gitDir, parsedGuestsSID(t))
+
+	if !errors.Is(err, ErrGitDirUnprotected) {
+		t.Fatalf("got %v, want %v", err, ErrGitDirUnprotected)
+	}
+}
+
 func refusesAGitFile(t *testing.T) {
 	gitFile := filepath.Join(t.TempDir(), ".git")
 	if err := os.WriteFile(gitFile, []byte("gitdir: ../elsewhere\n"), 0o600); err != nil {
@@ -95,9 +131,14 @@ func parsedGuestsSID(t *testing.T) *windows.SID {
 	return sid
 }
 
-func denyGuests(t *testing.T, gitDir string, mask uint32) {
+func denyGuests(t *testing.T, path string, mask uint32) {
 	t.Helper()
-	descriptor, err := windows.GetNamedSecurityInfo(gitDir, windows.SE_FILE_OBJECT, windows.DACL_SECURITY_INFORMATION)
+	addGuestsACE(t, path, mask, windows.DENY_ACCESS)
+}
+
+func addGuestsACE(t *testing.T, path string, mask uint32, mode windows.ACCESS_MODE) {
+	t.Helper()
+	descriptor, err := windows.GetNamedSecurityInfo(path, windows.SE_FILE_OBJECT, windows.DACL_SECURITY_INFORMATION)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -105,9 +146,9 @@ func denyGuests(t *testing.T, gitDir string, mask uint32) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	deny := windows.EXPLICIT_ACCESS{
+	entry := windows.EXPLICIT_ACCESS{
 		AccessPermissions: windows.ACCESS_MASK(mask),
-		AccessMode:        windows.DENY_ACCESS,
+		AccessMode:        mode,
 		Inheritance:       windows.SUB_CONTAINERS_AND_OBJECTS_INHERIT,
 		Trustee: windows.TRUSTEE{
 			TrusteeForm:  windows.TRUSTEE_IS_SID,
@@ -115,11 +156,12 @@ func denyGuests(t *testing.T, gitDir string, mask uint32) {
 			TrusteeValue: windows.TrusteeValueFromSID(parsedGuestsSID(t)),
 		},
 	}
-	dacl, err := windows.ACLFromEntries([]windows.EXPLICIT_ACCESS{deny}, currentDACL)
+	dacl, err := windows.ACLFromEntries([]windows.EXPLICIT_ACCESS{entry}, currentDACL)
 	if err != nil {
 		t.Fatal(err)
 	}
-	err = windows.SetNamedSecurityInfo(gitDir, windows.SE_FILE_OBJECT, windows.DACL_SECURITY_INFORMATION, nil, nil, dacl, nil)
+	err = windows.SetNamedSecurityInfo(path, windows.SE_FILE_OBJECT, windows.DACL_SECURITY_INFORMATION,
+		nil, nil, dacl, nil)
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -102,16 +102,18 @@ way stays open until the focus file starts with a different repository or no lon
 
 perusal runs git as you in a repository the agent chose, and git runs whatever that repository's `.git` tells it to:
 hooks, and config such as `core.fsmonitor`, `core.hooksPath` or `core.sshCommand` that names a program. An agent
-that can write `.git` could plant one and have git run it as you. So perusal refuses any `.git` the agent account
-owns, or that lacks a deny of `(OI)(CI)(WD,AD,WEA,WA,DE,DC)` for it. For the same reason the agent account must not
-be able to write your `%APPDATA%`, where the config lives.
+that can write `.git` could plant one and have git run it as you. So perusal checks `.git` and everything in it, and
+refuses the repository if the agent account owns any of it, if any of it is a link or junction, or if any of it
+grants write access ahead of a deny of `(OI)(CI)(WD,AD,WEA,WA,DE,DC)` for that account. For the same reason the agent
+account must not be able to write your `%APPDATA%`, where the config lives.
 
-From an elevated prompt, for each repository under `ownerDir`, take ownership if the agent cloned it, then add the
-deny:
+From an elevated prompt, for each repository under `ownerDir`, take ownership if the agent cloned it, add the deny,
+then reset everything inside `.git` to the inherited ACL, which drops any grant made directly on it:
 
 ```
 icacls C:\Users\you\dev\repo\.git /setowner you /T
 icacls C:\Users\you\dev\repo\.git /deny "claude:(OI)(CI)(WD,AD,WEA,WA,DE,DC)"
+icacls C:\Users\you\dev\repo\.git\* /reset /T
 ```
 
 The deny lists the write bits one by one because `(W)` includes `SYNCHRONIZE`, which every open requests, so it would
