@@ -191,7 +191,8 @@ func gitInit(t *testing.T, dir string) {
 
 func guestRules(t *testing.T, devDir string, focusFile string) Rules {
 	t.Helper()
-	return Rules{Config: Config{FocusFile: focusFile, AgentDir: agentDevDir, OwnerDir: devDir}, AgentSID: guests(t)}
+	config := Config{FocusFile: focusFile, AgentDir: agentDevDir, OwnerDir: devDir}
+	return Rules{Config: config, AgentSID: parsedGuestsSID(t)}
 }
 
 func focusFileHolding(t *testing.T, agentPath string) string {

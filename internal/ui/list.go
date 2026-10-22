@@ -32,10 +32,6 @@ func (l selectableList[T]) scrolled(height int) selectableList[T] {
 	return l
 }
 
-func (l selectableList[T]) label() string {
-	return positionLabel(l.selected+1, len(l.rows))
-}
-
 func positionLabel(position int, count int) string {
 	if count == 0 {
 		return ""
@@ -46,7 +42,7 @@ func positionLabel(position int, count int) string {
 func renderListPane[T any](title string, list selectableList[T], cellsOf func(T) []string, emptyText string,
 	innerWidth int, innerHeight int) string {
 	lines := listLines(list, cellsOf, emptyText, innerWidth, innerHeight)
-	return renderPane(title, "", list.label(), lines, innerWidth, innerHeight)
+	return renderPane(title, "", positionLabel(list.selected+1, len(list.rows)), lines, innerWidth, innerHeight)
 }
 
 func listLines[T any](list selectableList[T], cellsOf func(T) []string, emptyText string, innerWidth int,

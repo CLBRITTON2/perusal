@@ -47,20 +47,9 @@ func hunkTokens(lexer chroma.Lexer, hunk diff.Hunk) (diff.Hunk, error) {
 	oldIndex := 0
 	newIndex := 0
 	for _, row := range hunk.Rows {
-		var left diff.Line
-		if row.Old.Kind == diff.LineBlank {
-			left = row.Old
-		} else {
-			left = withTokens(row.Old, oldTokens[oldIndex])
-			oldIndex++
-		}
-		var right diff.Line
-		if row.New.Kind == diff.LineBlank {
-			right = row.New
-		} else {
-			right = withTokens(row.New, newTokens[newIndex])
-			newIndex++
-		}
+		var left, right diff.Line
+		left, oldIndex = withNextTokens(row.Old, oldTokens, oldIndex)
+		right, newIndex = withNextTokens(row.New, newTokens, newIndex)
 		rows = append(rows, diff.Row{Old: left, New: right})
 	}
 	colored := hunk
@@ -86,10 +75,14 @@ func sideTexts(rows []diff.Row, side func(diff.Row) diff.Line) []string {
 	return texts
 }
 
-func withTokens(line diff.Line, tokens []diff.Token) diff.Line {
+// withNextTokens gives a line that is not blank the tokens at next, and returns where the following line's tokens are.
+func withNextTokens(line diff.Line, sideTokens [][]diff.Token, next int) (diff.Line, int) {
+	if line.Kind == diff.LineBlank {
+		return line, next
+	}
 	colored := line
-	colored.Tokens = tokens
-	return colored
+	colored.Tokens = sideTokens[next]
+	return colored, next + 1
 }
 
 // A token in the style's plain text color is left out, so the line keeps the foreground of its kind.
@@ -103,30 +96,30 @@ func sideTokens(lexer chroma.Lexer, texts []string) ([][]diff.Token, error) {
 	if err != nil {
 		return nil, fmt.Errorf("tokenise: %w", err)
 	}
-	plain := chromaStyle.Get(chroma.Text).Colour
+	textColor := chromaStyle.Get(chroma.Text).Colour
 	textIndex := 0
 	offset := 0
 	for _, token := range iterator.Tokens() {
 		color := chromaStyle.Get(token.Type).Colour
-		for index, piece := range strings.Split(token.Value, "\n") {
+		for index, tokenLine := range strings.Split(token.Value, "\n") {
 			if index > 0 {
 				textIndex++
 				offset = 0
 			}
-			if piece == "" {
+			if tokenLine == "" {
 				continue
 			}
-			if textIndex >= len(texts) || offset+len(piece) > len(texts[textIndex]) ||
-				texts[textIndex][offset:offset+len(piece)] != piece {
-				return nil, fmt.Errorf("token %q does not match line %d at byte %d", piece, textIndex+1, offset)
+			if textIndex >= len(texts) || offset+len(tokenLine) > len(texts[textIndex]) ||
+				texts[textIndex][offset:offset+len(tokenLine)] != tokenLine {
+				return nil, fmt.Errorf("token %q does not match line %d at byte %d", tokenLine, textIndex+1, offset)
 			}
-			if color.IsSet() && color != plain {
+			if color.IsSet() && color != textColor {
 				tokens[textIndex] = append(tokens[textIndex], diff.Token{
-					Span:  diff.Span{Start: offset, End: offset + len(piece)},
+					Span:  diff.Span{Start: offset, End: offset + len(tokenLine)},
 					Color: color.String(),
 				})
 			}
-			offset += len(piece)
+			offset += len(tokenLine)
 		}
 	}
 	return tokens, nil

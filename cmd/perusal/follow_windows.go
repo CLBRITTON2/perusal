@@ -71,10 +71,10 @@ func follow(rules focus.Rules) error {
 func forwardResults(program *tea.Program, results <-chan focus.Result, focusFile string) {
 	for result := range results {
 		if result.Err != nil {
-			program.Send(ui.FocusRejected{Reason: result.Err.Error()})
+			program.Send(ui.FocusRejection{Reason: result.Err.Error()})
 		} else {
-			program.Send(ui.RepositoriesFocused{Repositories: result.Focus.Repositories, Refusals: result.Focus.Refusals})
+			program.Send(result.Focus)
 		}
 	}
-	program.Send(ui.FocusRejected{Reason: "stopped watching focus file " + focusFile})
+	program.Send(ui.FocusRejection{Reason: "stopped watching focus file " + focusFile})
 }

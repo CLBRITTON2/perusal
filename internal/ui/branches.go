@@ -24,36 +24,32 @@ type branchList struct {
 	defaultBranch string
 }
 
-type branchesLoadedMsg struct {
+type branchesMsg struct {
 	dir           string
 	rows          []branchRow
 	defaultBranch string
 }
 
-type branchesFailedMsg struct {
+type branchesFailureMsg struct {
 	dir string
 	err error
 }
 
-type branchSwitchedMsg struct {
+type branchSwitchMsg struct {
 	dir    string
 	branch string
 }
 
-type branchListRequest struct {
-	repository gitrepo.Repository
-}
-
-func (r branchListRequest) load() tea.Msg {
+func (r repositoryRequest) loadBranches() tea.Msg {
 	ctx := context.Background()
 	dir := r.repository.Dir
 	branches, err := r.repository.Branches(ctx)
 	if err != nil {
-		return branchesFailedMsg{dir: dir, err: err}
+		return branchesFailureMsg{dir: dir, err: err}
 	}
 	defaultBranch, err := r.repository.DefaultBranch(ctx)
 	if err != nil {
-		return branchesFailedMsg{dir: dir, err: err}
+		return branchesFailureMsg{dir: dir, err: err}
 	}
 	rows := make([]branchRow, len(branches))
 	errs := make([]error, len(branches))
@@ -69,9 +65,9 @@ func (r branchListRequest) load() tea.Msg {
 	}
 	group.Wait()
 	if err := errors.Join(errs...); err != nil {
-		return branchesFailedMsg{dir: dir, err: err}
+		return branchesFailureMsg{dir: dir, err: err}
 	}
-	return branchesLoadedMsg{dir: dir, rows: rows, defaultBranch: defaultBranch}
+	return branchesMsg{dir: dir, rows: rows, defaultBranch: defaultBranch}
 }
 
 type branchRequest struct {
@@ -81,9 +77,9 @@ type branchRequest struct {
 
 func (r branchRequest) switchTo() tea.Msg {
 	if err := r.repository.Switch(context.Background(), r.branch); err != nil {
-		return gitFailedMsg{err: err}
+		return gitFailureMsg{err: err}
 	}
-	return branchSwitchedMsg{dir: r.repository.Dir, branch: r.branch}
+	return branchSwitchMsg{dir: r.repository.Dir, branch: r.branch}
 }
 
 func (r branchRequest) delete() tea.Msg {
@@ -96,26 +92,26 @@ func (m Model) openBranches() (tea.Model, tea.Cmd) {
 	}
 	m.mode = modeBranches
 	m.branches = branchList{selectableList: selectableList[branchRow]{rows: []branchRow{}}}
-	return m, branchListRequest{repository: m.repository}.load
+	return m, m.reloadBranches()
 }
 
 func (m Model) reloadBranches() tea.Cmd {
 	if m.mode != modeBranches {
 		return nil
 	}
-	return branchListRequest{repository: m.repository}.load
+	return repositoryRequest{repository: m.repository}.loadBranches
 }
 
 // The first load selects the current branch, and a reload after a delete keeps the selection where it was.
-func (m Model) withBranchesLoaded(msg branchesLoadedMsg) Model {
+func (m Model) withBranchesLoaded(msg branchesMsg) Model {
 	var selected int
 	if m.branches.loaded {
 		selected = m.branches.selected
 	} else {
 		selected = slices.IndexFunc(msg.rows, func(row branchRow) bool { return row.branch.Current })
 	}
-	loaded := selectableList[branchRow]{loaded: true, rows: msg.rows, selected: 0, offset: m.branches.offset}
-	m.branches = branchList{selectableList: loaded.withSelected(selected), defaultBranch: msg.defaultBranch}
+	loadedBranches := selectableList[branchRow]{loaded: true, rows: msg.rows, selected: 0, offset: m.branches.offset}
+	m.branches = branchList{selectableList: loadedBranches.withSelected(selected), defaultBranch: msg.defaultBranch}
 	return m.withListScrolled()
 }
 
@@ -163,7 +159,7 @@ func (m Model) openDeleteBranchPopup() Model {
 	if !hasRows {
 		return m
 	}
-	name := sanitizeSingleLine(row.branch.Name)
+	name := row.branch.Name
 	switch {
 	case row.branch.Current:
 		return m.withFooterError(name + " is checked out, so it cannot be deleted")
@@ -176,7 +172,7 @@ func (m Model) openDeleteBranchPopup() Model {
 	return m.withConfirmation(confirmation{
 		lines: []string{
 			titleStyle.Render("delete " + sanitizeText(row.branch.Name)),
-			renderDeleteTargetMerged(row, m.branches.defaultBranch),
+			renderMergedDeleteTarget(row, m.branches.defaultBranch),
 		},
 		confirmKey:  confirmDeleteKey,
 		run:         branchRequest{repository: m.repository, branch: row.branch.Name}.delete,
@@ -184,7 +180,7 @@ func (m Model) openDeleteBranchPopup() Model {
 	})
 }
 
-func renderDeleteTargetMerged(row branchRow, defaultBranch string) string {
+func renderMergedDeleteTarget(row branchRow, defaultBranch string) string {
 	if row.mergedIntoDefault {
 		return textStyle.Render(sanitizeText(defaultBranch) + " has all its changes")
 	}

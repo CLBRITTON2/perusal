@@ -57,13 +57,13 @@ func theRepositorysOwnFilesLexWithoutDrift(t *testing.T) {
 
 		highlighted, err := FileDiff(filepath.Base(path), fileDiff)
 
-		if err != nil || !anyTokens(highlighted) {
+		if err != nil || !hasTokens(highlighted) {
 			t.Fatalf("%s: got error %v, want every line lexed and some of them colored", path, err)
 		}
 	}
 }
 
-func anyTokens(fileDiff diff.FileDiff) bool {
+func hasTokens(fileDiff diff.FileDiff) bool {
 	for _, row := range fileDiff.Hunks[0].Rows {
 		if len(row.New.Tokens) > 0 {
 			return true

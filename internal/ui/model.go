@@ -18,6 +18,7 @@ import (
 	"github.com/charmbracelet/x/ansi"
 
 	"github.com/CLBRITTON2/perusal/internal/diff"
+	"github.com/CLBRITTON2/perusal/internal/focus"
 	"github.com/CLBRITTON2/perusal/internal/gitrepo"
 )
 
@@ -79,7 +80,7 @@ type popupState struct {
 // display holds what survives a repository switch.
 type display struct {
 	view           viewKind
-	diffFullscreen bool
+	fullscreenDiff bool
 	wholeFile      bool
 	unified        bool
 	width          int
@@ -98,7 +99,7 @@ type commitDiff struct {
 
 type Model struct {
 	display
-	listRepositories Lister
+	findRepositories RepositoryFinder
 	mode             screenMode
 	popup            popupState
 	footer           footer
@@ -109,10 +110,9 @@ type Model struct {
 	branches branchList
 
 	repository gitrepo.Repository
-	// focused lists the repositories the focus named, and uncommitted maps each Dir to whether it has changes.
-	focused     []gitrepo.Repository
-	uncommitted map[string]bool
-	rejection   string
+	// focused lists the repositories the focus named.
+	focused   []gitrepo.Repository
+	rejection string
 
 	status           gitrepo.Status
 	stagedLineCounts diff.LineCounts
@@ -139,10 +139,10 @@ type Model struct {
 	help               help.Model
 	summaryInput       textinput.Model
 	descriptionBox     textarea.Model
-	descriptionFocused bool
+	editingDescription bool
 }
 
-func New(listRepositories Lister) Model {
+func New(findRepositories RepositoryFinder) Model {
 	summaryInput := textinput.New()
 	summaryInput.Placeholder = "Summary (required)"
 	summaryInput.Prompt = ""
@@ -159,12 +159,11 @@ func New(listRepositories Lister) Model {
 	helpView.Styles.ShortSeparator = helpSepStyle
 	helpView.Styles.Ellipsis = helpSepStyle
 	return Model{
-		listRepositories:   listRepositories,
+		findRepositories:   findRepositories,
 		overview:           selectableList[overviewRow]{rows: []overviewRow{}},
 		pulling:            map[string]bool{},
 		branches:           branchList{selectableList: selectableList[branchRow]{rows: []branchRow{}}},
 		focused:            []gitrepo.Repository{},
-		uncommitted:        map[string]bool{},
 		status:             gitrepo.Status{Files: []gitrepo.FileStatus{}},
 		commits:            []gitrepo.Commit{},
 		graph:              []graphRow{},
@@ -190,9 +189,9 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.width = msg.Width
 		m.height = msg.Height
 		return m.withLayout(), nil
-	case RepositoriesFocused:
+	case focus.Focus:
 		return m.withFocus(msg)
-	case FocusRejected:
+	case FocusRejection:
 		return m.withRepository(gitrepo.Repository{}, sanitizeSingleLine(msg.Reason)), nil
 	case pollTickMsg:
 		if m.repository.Dir == "" {
@@ -200,22 +199,21 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		// The next tick waits for the status, so a slow git never stacks up polls.
 		return m, tea.Sequence(m.reloadStatus(), nextPoll())
-	case uncommittedLoadedMsg:
+	case uncommittedMsg:
 		if !slices.Equal(msg.focused, m.focused) {
 			return m, nil
 		}
-		m.uncommitted = msg.uncommitted
 		if m.repository.Dir != "" {
 			return m, nil
 		}
-		return m.withFocusedRepository(m.firstToReview())
-	case statusLoadedMsg:
+		return m.withFocusedRepository(m.firstToReview(msg.uncommitted))
+	case statusMsg:
 		if msg.dir != m.repository.Dir {
 			return m, nil
 		}
 		m.stagedLineCounts = msg.stagedLineCounts
 		return m.withStatus(msg.status)
-	case diffLoadedMsg:
+	case diffMsg:
 		if msg.dir != m.repository.Dir || msg.path != m.selectedPath() || msg.contextLines != m.contextLines() {
 			return m, nil
 		}
@@ -229,12 +227,12 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.diffPath = msg.path
 		m.fileDiff = msg.fileDiff
 		return m.withDiffKeptInPlace(previous), nil
-	case logLoadedMsg:
+	case logMsg:
 		if msg.dir != m.repository.Dir || msg.limit != m.logLimit {
 			return m, nil
 		}
 		return m.withCommits(msg.commits, msg.loadedAt)
-	case commitDiffLoadedMsg:
+	case commitDiffMsg:
 		if msg.dir != m.repository.Dir || msg.contextLines != m.contextLines() {
 			return m, nil
 		}
@@ -242,12 +240,12 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.commitDiffs = maps.Clone(m.commitDiffs)
 		m.commitDiffs[msg.hash] = commitDiff{sections: msg.sections, contextLines: msg.contextLines}
 		return m.withDiffKeptInPlace(previous).withListScrolled(), nil
-	case indexChangedMsg:
+	case indexChangeMsg:
 		if msg.dir != m.repository.Dir {
 			return m, nil
 		}
 		return m, m.reloadStatus()
-	case committedMsg:
+	case commitMsg:
 		if msg.dir != m.repository.Dir {
 			return m.withFooterNotice("committed in " + msg.dir + ": " + msg.summary), nil
 		}
@@ -255,48 +253,48 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.summaryInput.Reset()
 		m.descriptionBox.Reset()
 		return m, m.reloadStatus()
-	case popupSucceededMsg:
+	case popupSuccessMsg:
 		if msg.dir != m.repository.Dir {
 			return m.withFooterNotice(msg.notice + " in " + msg.dir), nil
 		}
 		m = m.withPopupClosed().withFooterNotice(msg.notice)
 		return m, tea.Batch(m.reloadStatus(), m.reloadBranches())
-	case branchesLoadedMsg:
+	case branchesMsg:
 		if msg.dir != m.repository.Dir || m.mode != modeBranches {
 			return m, nil
 		}
 		return m.withBranchesLoaded(msg), nil
-	case branchesFailedMsg:
+	case branchesFailureMsg:
 		if msg.dir == m.repository.Dir {
 			m = m.withModeClosed(modeBranches)
 		}
 		return m.withFooterError(msg.err.Error()), nil
-	case branchSwitchedMsg:
+	case branchSwitchMsg:
 		if msg.dir != m.repository.Dir {
-			return m.withFooterNotice("switched " + msg.dir + " to " + sanitizeSingleLine(msg.branch)), nil
+			return m.withFooterNotice("switched " + msg.dir + " to " + msg.branch), nil
 		}
-		m = m.withModeClosed(modeBranches).withFooterNotice("switched to " + sanitizeSingleLine(msg.branch))
+		m = m.withModeClosed(modeBranches).withFooterNotice("switched to " + msg.branch)
 		return m, m.reloadStatus()
-	case overviewPulledMsg:
+	case pullMsg:
 		return m.withOverviewPulled(msg)
-	case overviewSyncFailedMsg:
+	case syncFailureMsg:
 		m.pulling = withoutDir(m.pulling, msg.dir)
 		return m.withFooterError(msg.err.Error()), nil
-	case popupFailedMsg:
+	case popupFailureMsg:
 		if msg.dir != m.repository.Dir || m.popup.kind == noPopup {
 			return m.withFooterError(msg.err.Error()), nil
 		}
 		m.popup.running = false
 		m.popup.err = sanitizeLines(msg.err.Error())
 		return m, nil
-	case overviewLoadedMsg:
+	case overviewMsg:
 		if m.mode != modeOverview {
 			return m, nil
 		}
 		return m.withOverviewLoaded(msg), nil
-	case overviewFailedMsg:
+	case overviewFailureMsg:
 		return m.withModeClosed(modeOverview).withFooterError(msg.err.Error()), nil
-	case gitFailedMsg:
+	case gitFailureMsg:
 		return m.withFooterError(msg.err.Error()), nil
 	case tea.KeyPressMsg:
 		switch {
@@ -376,6 +374,7 @@ func (m Model) withStatus(status gitrepo.Status) (tea.Model, tea.Cmd) {
 
 func (m Model) updateBrowsing(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	m.footer = footer{}
+	onFile := m.view == viewChanges && len(m.status.Files) > 0
 	switch {
 	case key.Matches(msg, quitKey):
 		return m, tea.Quit
@@ -392,7 +391,7 @@ func (m Model) updateBrowsing(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	case key.Matches(msg, switchViewKey):
 		return m.switchView()
 	case key.Matches(msg, fullscreenKey):
-		m.diffFullscreen = !m.diffFullscreen
+		m.fullscreenDiff = !m.fullscreenDiff
 		return m.withLayout(), nil
 	case key.Matches(msg, wholeFileKey):
 		m.wholeFile = !m.wholeFile
@@ -408,40 +407,32 @@ func (m Model) updateBrowsing(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		return m, m.searchInput.Focus()
 	case key.Matches(msg, clearSearchKey) && m.view == viewLog && m.logFilter != nil:
 		return m.clearSearch()
-	case key.Matches(msg, stageKey):
-		if m.view != viewChanges || len(m.status.Files) == 0 {
-			return m, nil
-		}
+	case key.Matches(msg, stageKey) && onFile:
 		request := fileRequest{repository: m.repository, file: m.status.Files[m.selectedChange]}
 		if request.file.HasUnstagedChanges() {
 			return m, request.stage
 		}
 		return m, request.unstage
-	case key.Matches(msg, stageAllKey):
-		if m.view != viewChanges || len(m.status.Files) == 0 {
-			return m, nil
-		}
+	case key.Matches(msg, stageAllKey) && onFile:
 		request := repositoryRequest{repository: m.repository}
 		if slices.ContainsFunc(m.status.Files, gitrepo.FileStatus.HasUnstagedChanges) {
 			return m, request.stageAll
 		}
 		return m, request.unstageAll
-	case key.Matches(msg, discardKey):
-		if m.view != viewChanges || len(m.status.Files) == 0 {
-			return m, nil
-		}
-		return m.withConfirmation(m.discardConfirmation(m.status.Files[m.selectedChange])), nil
-	case key.Matches(msg, discardAllKey):
-		if m.view != viewChanges || len(m.status.Files) == 0 {
-			return m, nil
-		}
-		return m.withConfirmation(m.discardAllConfirmation()), nil
+	case key.Matches(msg, discardKey) && onFile:
+		file := m.status.Files[m.selectedChange]
+		return m.withConfirmation(discardConfirmation(sanitizeText(file.Path), discardEffect(file),
+			fileRequest{repository: m.repository, file: file}.discard)), nil
+	case key.Matches(msg, discardAllKey) && onFile:
+		return m.withConfirmation(discardConfirmation(pluralize(len(m.status.Files), "file"),
+			"deletes untracked files and puts the rest back to HEAD",
+			repositoryRequest{repository: m.repository}.discardAll)), nil
 	case key.Matches(msg, commitKey):
 		if m.repository.Dir == "" {
 			return m, nil
 		}
 		m.popup = popupState{kind: commitPopup}
-		m.descriptionFocused = false
+		m.editingDescription = false
 		return m, m.summaryInput.Focus()
 	case key.Matches(msg, pushKey):
 		return m.openPushPopup()
@@ -456,6 +447,7 @@ func (m Model) updateBrowsing(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 }
 
 func (m Model) switchView() (tea.Model, tea.Cmd) {
+	m = m.withSearchClosed()
 	if m.view == viewChanges {
 		m.view = viewLog
 	} else {
@@ -467,7 +459,7 @@ func (m Model) switchView() (tea.Model, tea.Cmd) {
 }
 
 func (m Model) withRepository(repository gitrepo.Repository, rejection string) Model {
-	next := New(m.listRepositories)
+	next := New(m.findRepositories)
 	next.display = m.display
 	next.mode = modeAfterSwitch(m.mode)
 	next.overview = m.overview
@@ -486,10 +478,10 @@ func modeAfterSwitch(mode screenMode) screenMode {
 }
 
 // A focus that still names the repository under review keeps it, so a new edit elsewhere never pulls the review away.
-func (m Model) withFocus(msg RepositoriesFocused) (tea.Model, tea.Cmd) {
+func (m Model) withFocus(msg focus.Focus) (tea.Model, tea.Cmd) {
 	if m.rejection == "" && slices.Contains(msg.Repositories, m.repository) {
 		m.focused = msg.Repositories
-		return m.withRefusals(msg.Refusals), m.loadUncommitted()
+		return m.withRefusals(msg.Refusals), nil
 	}
 	next := m.withRepository(gitrepo.Repository{}, "")
 	next.focused = msg.Repositories
@@ -514,7 +506,6 @@ func (m Model) withRefusals(refusals []error) Model {
 func (m Model) withFocusedRepository(repository gitrepo.Repository) (tea.Model, tea.Cmd) {
 	next := m.withRepository(repository, "")
 	next.focused = m.focused
-	next.uncommitted = m.uncommitted
 	next.footer = m.footer
 	return next, next.reloadStatus()
 }
@@ -526,9 +517,10 @@ func (m Model) loadUncommitted() tea.Cmd {
 	return focusedRequest{repositories: m.focused}.loadUncommitted
 }
 
-func (m Model) firstToReview() gitrepo.Repository {
+// uncommitted maps each Dir to whether it has changes.
+func (m Model) firstToReview(uncommitted map[string]bool) gitrepo.Repository {
 	for _, repository := range m.focused {
-		if m.uncommitted[repository.Dir] {
+		if uncommitted[repository.Dir] {
 			return repository
 		}
 	}
@@ -554,9 +546,7 @@ func (m Model) updateCommitBox(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		return m.withPopupClosed(), nil
 	case key.Matches(msg, nextFieldKey):
 		return m.toggleCommitField()
-	case key.Matches(msg, submitKey):
-		return m.startCommit()
-	case key.Matches(msg, enterKey) && !m.descriptionFocused:
+	case key.Matches(msg, submitKey), key.Matches(msg, enterKey) && !m.editingDescription:
 		return m.startCommit()
 	}
 	return m.updateFocusedField(msg)
@@ -564,7 +554,7 @@ func (m Model) updateCommitBox(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 
 func (m Model) updateFocusedField(msg tea.Msg) (tea.Model, tea.Cmd) {
 	var cmd tea.Cmd
-	if m.descriptionFocused {
+	if m.editingDescription {
 		m.descriptionBox, cmd = m.descriptionBox.Update(msg)
 	} else {
 		m.summaryInput, cmd = m.summaryInput.Update(msg)
@@ -573,8 +563,8 @@ func (m Model) updateFocusedField(msg tea.Msg) (tea.Model, tea.Cmd) {
 }
 
 func (m Model) toggleCommitField() (tea.Model, tea.Cmd) {
-	m.descriptionFocused = !m.descriptionFocused
-	if m.descriptionFocused {
+	m.editingDescription = !m.editingDescription
+	if m.editingDescription {
 		m.summaryInput.Blur()
 		return m, m.descriptionBox.Focus()
 	}
@@ -628,7 +618,7 @@ func (m Model) openPushPopup() (tea.Model, tea.Cmd) {
 		return m.withConfirmation(confirmation{
 			lines: []string{
 				titleStyle.Render("push " + headName(m.status) + " to " + upstream),
-				textStyle.Render(counted(m.status.Ahead, "commit")),
+				textStyle.Render(pluralize(m.status.Ahead, "commit")),
 			},
 			confirmKey:  confirmPushKey,
 			run:         request.push,
@@ -638,8 +628,8 @@ func (m Model) openPushPopup() (tea.Model, tea.Cmd) {
 	return m.withConfirmation(confirmation{
 		lines: []string{
 			titleStyle.Render("force push " + headName(m.status) + " to " + upstream),
-			textStyle.Render("replaces " + counted(m.status.Behind, "commit") + " on " + upstream + " with " +
-				counted(m.status.Ahead, "commit")),
+			textStyle.Render("replaces " + pluralize(m.status.Behind, "commit") + " on " + upstream + " with " +
+				pluralize(m.status.Ahead, "commit")),
 		},
 		confirmKey:  confirmForceKey,
 		run:         request.forcePush,
@@ -658,7 +648,7 @@ func (m Model) openAmendPopup() Model {
 	lines := []string{
 		titleStyle.Render("amend " + sanitizeText(target.ShortHash)),
 		textStyle.Render(sanitizeText(target.Summary)),
-		textStyle.Render("with " + counted(m.stagedFileCount(), "file") + " staged"),
+		textStyle.Render("with " + pluralize(m.stagedFileCount(), "file") + " staged"),
 	}
 	if target.Hash != m.commits[0].Hash {
 		lines = append(lines, warningStyle.Render("rewrites every commit above it"))
@@ -676,36 +666,24 @@ func (m Model) openAmendPopup() Model {
 	})
 }
 
-func (m Model) discardConfirmation(file gitrepo.FileStatus) confirmation {
-	var effect string
-	if file.IsUntracked() {
-		effect = "deletes it"
-	} else {
-		effect = "puts it back to HEAD, staged and unstaged changes alike"
-	}
+func discardConfirmation(target string, effect string, run tea.Cmd) confirmation {
 	return confirmation{
 		lines: []string{
-			titleStyle.Render("discard " + sanitizeText(file.Path)),
+			titleStyle.Render("discard " + target),
 			textStyle.Render(effect),
 			warningStyle.Render("this cannot be undone"),
 		},
 		confirmKey:  confirmDiscardKey,
-		run:         fileRequest{repository: m.repository, file: file}.discard,
+		run:         run,
 		runningText: "discarding...",
 	}
 }
 
-func (m Model) discardAllConfirmation() confirmation {
-	return confirmation{
-		lines: []string{
-			titleStyle.Render("discard " + counted(len(m.status.Files), "file")),
-			textStyle.Render("deletes untracked files and puts the rest back to HEAD"),
-			warningStyle.Render("this cannot be undone"),
-		},
-		confirmKey:  confirmDiscardKey,
-		run:         repositoryRequest{repository: m.repository}.discardAll,
-		runningText: "discarding...",
+func discardEffect(file gitrepo.FileStatus) string {
+	if file.IsUntracked() {
+		return "deletes it"
 	}
+	return "puts it back to HEAD, staged and unstaged changes alike"
 }
 
 func (m Model) updateConfirmPopup(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
@@ -880,38 +858,35 @@ func (m Model) clickList(mouse tea.Mouse) (tea.Model, tea.Cmd) {
 	if mouse.X < m.listOuterWidth() && mouse.Y == m.foldedPaneY() {
 		return m.switchView()
 	}
-	row, onRow := m.listRowAt(mouse)
-	if !onRow {
+	index, hitRow := m.listIndexAt(mouse)
+	switch {
+	case !hitRow:
 		return m, nil
+	case m.view == viewLog:
+		return m.selectLogRow(index)
 	}
-	if m.view == viewLog {
-		if m.logOffset+row >= len(m.visibleLogRows()) {
-			return m, nil
-		}
-		return m.selectLogRow(m.logOffset + row)
-	}
-	if m.changesOffset+row >= len(m.status.Files) {
-		return m, nil
-	}
-	return m.selectFile(m.changesOffset + row)
+	return m.selectFile(index)
 }
 
 func (m Model) rightClickList(mouse tea.Mouse) (tea.Model, tea.Cmd) {
-	row, onRow := m.listRowAt(mouse)
-	if m.view != viewLog || !onRow || m.logOffset+row >= len(m.visibleLogRows()) {
+	index, hitRow := m.listIndexAt(mouse)
+	if m.view != viewLog || !hitRow {
 		return m, nil
 	}
-	selected, cmd := m.selectLogRow(m.logOffset + row)
+	selected, cmd := m.selectLogRow(index)
 	return selected.openAmendPopup(), cmd
 }
 
-// Counted from the open pane's first row.
-func (m Model) listRowAt(mouse tea.Mouse) (int, bool) {
+// listIndexAt returns the index of the changed file or log row under the mouse in the open pane.
+func (m Model) listIndexAt(mouse tea.Mouse) (int, bool) {
 	row := mouse.Y - m.listFirstRowY()
 	if mouse.X >= m.listOuterWidth() || row < 0 || row >= m.listInnerHeight() {
 		return 0, false
 	}
-	return row, true
+	if m.view == viewLog {
+		return m.logOffset + row, m.logOffset+row < len(m.visibleLogRows())
+	}
+	return m.changesOffset + row, m.changesOffset+row < len(m.status.Files)
 }
 
 func (m Model) scrollWheel(mouse tea.Mouse) (tea.Model, tea.Cmd) {
@@ -938,8 +913,8 @@ func (m Model) loadSelectedDiff() tea.Cmd {
 
 func (m Model) loadSelectedCommitDiff() tea.Cmd {
 	hash := m.selectedCommitHash()
-	loaded, isLoaded := m.commitDiffs[hash]
-	if m.view != viewLog || hash == "" || (isLoaded && loaded.contextLines == m.contextLines()) {
+	loadedDiff, found := m.commitDiffs[hash]
+	if m.view != viewLog || hash == "" || (found && loadedDiff.contextLines == m.contextLines()) {
 		return nil
 	}
 	return commitDiffRequest{repository: m.repository, hash: hash, contextLines: m.contextLines()}.load
@@ -967,8 +942,8 @@ func (m Model) selectedCommitHash() string {
 }
 
 func (m Model) selectedCommitDiff() ([]diff.FileSection, bool) {
-	loaded, isLoaded := m.commitDiffs[m.selectedCommitHash()]
-	return loaded.sections, isLoaded
+	loadedDiff, found := m.commitDiffs[m.selectedCommitHash()]
+	return loadedDiff.sections, found
 }
 
 func (m Model) withLayout() Model {
@@ -1038,7 +1013,7 @@ func scrolledOffset(offset int, selected int, visibleRows int) int {
 }
 
 func (m Model) listOuterWidth() int {
-	if m.diffFullscreen {
+	if m.fullscreenDiff {
 		return 0
 	}
 	return max(m.width*listPercent/100, minimumListWidth)
@@ -1128,7 +1103,7 @@ func (m Model) renderColumns() string {
 	case m.mode == modeBranches:
 		return renderListPane("branches", m.branches.selectableList, m.branches.cells, "no branches yet", m.width-2,
 			m.paneInnerHeight())
-	case m.diffFullscreen:
+	case m.fullscreenDiff:
 		return m.renderDiffPane()
 	}
 	return lipgloss.JoinHorizontal(lipgloss.Top, m.renderLists(), m.renderDiffPane())
@@ -1241,12 +1216,7 @@ func (m Model) changesLabel() string {
 	if len(m.status.Files) == 0 {
 		return ""
 	}
-	unstaged := 0
-	for _, file := range m.status.Files {
-		if file.HasUnstagedChanges() {
-			unstaged++
-		}
-	}
+	unstaged := countFiles(m.status.Files, gitrepo.FileStatus.HasUnstagedChanges)
 	return strconv.Itoa(m.stagedFileCount()) + " staged · " + strconv.Itoa(unstaged) + " unstaged"
 }
 
@@ -1258,13 +1228,17 @@ func (m Model) changesLineCounts() string {
 }
 
 func (m Model) stagedFileCount() int {
-	staged := 0
-	for _, file := range m.status.Files {
-		if file.HasStagedChanges() {
-			staged++
+	return countFiles(m.status.Files, gitrepo.FileStatus.HasStagedChanges)
+}
+
+func countFiles(files []gitrepo.FileStatus, has func(gitrepo.FileStatus) bool) int {
+	count := 0
+	for _, file := range files {
+		if has(file) {
+			count++
 		}
 	}
-	return staged
+	return count
 }
 
 func (m Model) logLabel() string {
@@ -1395,14 +1369,15 @@ func (m Model) overlayPopup(screen string, popup string) string {
 func (m Model) renderCommitPopup() string {
 	return m.renderPopup([]string{
 		titleStyle.Render("commit to " + headName(m.status)),
-		renderField(m.summaryInput.View(), !m.descriptionFocused, m.fieldInnerWidth(), 1),
-		renderField(m.descriptionBox.View(), m.descriptionFocused, m.fieldInnerWidth(), descriptionHeight),
+		renderField(m.summaryInput.View(), !m.editingDescription, m.fieldInnerWidth(), 1),
+		renderField(m.descriptionBox.View(), m.editingDescription, m.fieldInnerWidth(), descriptionHeight),
 	}, "committing...", commitHelp)
 }
 
 func (m Model) renderConfirmPopup() string {
-	c := m.popup.confirmation
-	return m.renderPopup(c.lines, c.runningText, []key.Binding{c.confirmKey, cancelKey})
+	confirmation := m.popup.confirmation
+	return m.renderPopup(confirmation.lines, confirmation.runningText,
+		[]key.Binding{confirmation.confirmKey, cancelKey})
 }
 
 func (m Model) renderPopup(lines []string, runningText string, bindings []key.Binding) string {
@@ -1420,7 +1395,7 @@ func (m Model) renderPopup(lines []string, runningText string, bindings []key.Bi
 	return popupStyle.Width(width + 4).Render(strings.Join(lines, "\n") + "\n\n" + status)
 }
 
-func counted(count int, noun string) string {
+func pluralize(count int, noun string) string {
 	if count == 1 {
 		return "1 " + noun
 	}

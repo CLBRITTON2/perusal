@@ -46,10 +46,11 @@ func aMergedBranchIsDeletedAfterAConfirmAndTheListReloadsInPlace(t *testing.T) {
 	popup := ansi.Strip(m.renderConfirmPopup())
 	next, deleting := m.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
 	m = asModel(t, next)
-	next, reloading := m.Update(popupSucceededMsg{dir: "C:/dev/repo", notice: "deleted done"})
+	next, reloading := m.Update(popupSuccessMsg{dir: "C:/dev/repo", notice: "deleted done"})
 	m = asModel(t, next)
 	rows := fourBranches()
-	m = update(t, m, branchesLoadedMsg{dir: "C:/dev/repo", rows: []branchRow{rows[0], rows[1], rows[3]}, defaultBranch: "origin/main"})
+	m = update(t, m, branchesMsg{
+		dir: "C:/dev/repo", rows: []branchRow{rows[0], rows[1], rows[3]}, defaultBranch: "origin/main"})
 
 	if !strings.Contains(screen, "origin/done deleted") || !strings.Contains(screen, "merged into origin/main") {
 		t.Fatalf("got screen:\n%s\nwant done marked merged with its upstream deleted", screen)
@@ -98,7 +99,7 @@ func closesTheListAndReloadsTheStatus(t *testing.T) {
 
 	next, switching := m.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
 	m = asModel(t, next)
-	next, reloading := m.Update(branchSwitchedMsg{dir: "C:/dev/repo", branch: "wip"})
+	next, reloading := m.Update(branchSwitchMsg{dir: "C:/dev/repo", branch: "wip"})
 	m = asModel(t, next)
 
 	if switching == nil || reloading == nil || m.mode == modeBranches || m.footer.text != "switched to wip" {
@@ -109,9 +110,9 @@ func closesTheListAndReloadsTheStatus(t *testing.T) {
 
 func branchesOf(t *testing.T, status gitrepo.Status, defaultBranch string) Model {
 	t.Helper()
-	m := reviewing(t, status)
+	m := reviewingRepository(t, status)
 	m = update(t, m, tea.KeyPressMsg{Code: 'b', Text: "b"})
-	return update(t, m, branchesLoadedMsg{dir: "C:/dev/repo", rows: fourBranches(), defaultBranch: defaultBranch})
+	return update(t, m, branchesMsg{dir: "C:/dev/repo", rows: fourBranches(), defaultBranch: defaultBranch})
 }
 
 func selectBranch(t *testing.T, m Model, moves int) Model {

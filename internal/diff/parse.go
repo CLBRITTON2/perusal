@@ -114,8 +114,25 @@ func ParseFiles(text string) ([]FileSection, error) {
 	return sections, nil
 }
 
+// git splits one file into a deletion and an addition when a rename or type change leaves too little in common.
+func ParseFile(text string) (FileDiff, error) {
+	sections, err := ParseFiles(text)
+	if err != nil {
+		return FileDiff{}, err
+	}
+	if len(sections) == 1 {
+		return sections[0].FileDiff, nil
+	}
+	joined := FileDiff{Hunks: []Hunk{}, Change: FileModified}
+	for _, section := range sections {
+		joined.Hunks = append(joined.Hunks, section.FileDiff.Hunks...)
+		joined.Binary = joined.Binary || section.FileDiff.Binary
+	}
+	return joined, nil
+}
+
 func parseFileSection(lines []string) (FileSection, error) {
-	fileDiff, err := ParseUnified(strings.Join(lines, "\n"))
+	fileDiff, err := parseUnified(strings.Join(lines, "\n"))
 	if err != nil {
 		return FileSection{}, err
 	}
@@ -193,33 +210,33 @@ func unquotePath(field string) (string, error) {
 	return unquoted, nil
 }
 
-func ParseUnified(text string) (FileDiff, error) {
-	p := unifiedParser{}
+func parseUnified(text string) (FileDiff, error) {
+	parser := unifiedParser{}
 	for index, rawLine := range strings.Split(text, "\n") {
 		line := strings.TrimSuffix(rawLine, "\r")
 		if strings.HasPrefix(line, "@@") {
-			if p.inHunk() {
-				p.flush()
+			if parser.inHunk() {
+				parser.flush()
 			}
 			oldStart, newStart, err := parseHunkStarts(line)
 			if err != nil {
 				return FileDiff{}, fmt.Errorf("parse diff line %d: %w", index+1, err)
 			}
-			p.oldNumber = oldStart
-			p.newNumber = newStart
-			p.fileDiff.Hunks = append(p.fileDiff.Hunks, Hunk{Header: line})
+			parser.oldNumber = oldStart
+			parser.newNumber = newStart
+			parser.fileDiff.Hunks = append(parser.fileDiff.Hunks, Hunk{Header: line})
 			continue
 		}
-		if !p.inHunk() {
+		if !parser.inHunk() {
 			switch {
 			case strings.HasPrefix(line, "Binary files "):
-				p.fileDiff.Binary = true
+				parser.fileDiff.Binary = true
 			case strings.HasPrefix(line, "new file mode "):
-				p.fileDiff.Change = FileAdded
+				parser.fileDiff.Change = FileAdded
 			case strings.HasPrefix(line, "deleted file mode "):
-				p.fileDiff.Change = FileDeleted
+				parser.fileDiff.Change = FileDeleted
 			case strings.HasPrefix(line, "rename from "):
-				p.fileDiff.Change = FileRenamed
+				parser.fileDiff.Change = FileRenamed
 			}
 			continue
 		}
@@ -228,30 +245,31 @@ func ParseUnified(text string) (FileDiff, error) {
 		}
 		switch line[0] {
 		case ' ':
-			p.flush()
-			p.appendRows(Row{
-				Old: Line{Kind: LineContext, Number: p.oldNumber, Text: line[1:]},
-				New: Line{Kind: LineContext, Number: p.newNumber, Text: line[1:]},
+			parser.flush()
+			parser.appendRows(Row{
+				Old: Line{Kind: LineContext, Number: parser.oldNumber, Text: line[1:]},
+				New: Line{Kind: LineContext, Number: parser.newNumber, Text: line[1:]},
 			})
-			p.oldNumber++
-			p.newNumber++
+			parser.oldNumber++
+			parser.newNumber++
 		case '-':
-			if len(p.pending.added) > 0 {
-				p.flush()
+			if len(parser.pending.added) > 0 {
+				parser.flush()
 			}
-			p.pending.removed = append(p.pending.removed, Line{Kind: LineRemoved, Number: p.oldNumber, Text: line[1:]})
-			p.oldNumber++
+			parser.pending.removed = append(parser.pending.removed,
+				Line{Kind: LineRemoved, Number: parser.oldNumber, Text: line[1:]})
+			parser.oldNumber++
 		case '+':
-			p.pending.added = append(p.pending.added, Line{Kind: LineAdded, Number: p.newNumber, Text: line[1:]})
-			p.newNumber++
+			parser.pending.added = append(parser.pending.added, Line{Kind: LineAdded, Number: parser.newNumber, Text: line[1:]})
+			parser.newNumber++
 		default:
 			return FileDiff{}, fmt.Errorf("parse diff line %d: unexpected %q inside a hunk", index+1, line)
 		}
 	}
-	if p.inHunk() {
-		p.flush()
+	if parser.inHunk() {
+		parser.flush()
 	}
-	return p.fileDiff, nil
+	return parser.fileDiff, nil
 }
 
 // pending holds the removals and additions not yet paired into rows of the last hunk.
@@ -319,12 +337,12 @@ func markedRow(removed Line, added Line) Row {
 		return Row{Old: removed, New: added}
 	}
 	return Row{
-		Old: withChanged(removed, Span{Start: prefix, End: len(removed.Text) - suffix}),
-		New: withChanged(added, Span{Start: prefix, End: len(added.Text) - suffix}),
+		Old: lineWithChanged(removed, Span{Start: prefix, End: len(removed.Text) - suffix}),
+		New: lineWithChanged(added, Span{Start: prefix, End: len(added.Text) - suffix}),
 	}
 }
 
-func withChanged(line Line, changed Span) Line {
+func lineWithChanged(line Line, changed Span) Line {
 	marked := line
 	marked.Changed = changed
 	return marked

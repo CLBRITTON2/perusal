@@ -37,12 +37,6 @@ func NewRules(config Config) (Rules, error) {
 	return Rules{Config: config, AgentSID: sid}, nil
 }
 
-// Repositories are in focus file order, each once. Refusals hold an error for each path that failed a check.
-type Focus struct {
-	Repositories []gitrepo.Repository
-	Refusals     []error
-}
-
 type Result struct {
 	Focus Focus
 	Err   error

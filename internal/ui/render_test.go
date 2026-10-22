@@ -33,7 +33,7 @@ func TestRenderUnifiedListsRemovedLinesAboveAddedOnes(t *testing.T) {
 		},
 	}}}
 
-	got := strippedLines(lineTexts(renderUnified(fileDiff, 6))[1:])
+	got := strippedLines(lineTexts(renderFileDiff(fileDiff, renderUnified, 6))[1:])
 
 	want := []string{"1 1 a ", "2   b ", "3   c ", "  2 B ", "  3 C ", "  4 d ", "4 5 e "}
 	if !slices.Equal(got, want) {
@@ -126,7 +126,7 @@ func wrapsALongLineAndPadsTheOtherSide(t *testing.T) {
 		},
 	}}}
 
-	lines := lineTexts(renderSideBySide(fileDiff, 21))
+	lines := lineTexts(renderFileDiff(fileDiff, renderSideBySide, 21))
 
 	got := strippedLines(lines[1:])
 	want := []string{"7 old     │7 abcd    ", "          │  efgh    ", "          │  ijklmnop"}
@@ -163,7 +163,7 @@ func everyRowFillsTheWidthExactly(t *testing.T) {
 	}}}
 
 	for _, width := range []int{40, 41, 120} {
-		for index, line := range lineTexts(renderSideBySide(fileDiff, width)) {
+		for index, line := range lineTexts(renderFileDiff(fileDiff, renderSideBySide, width)) {
 			if got := ansi.StringWidth(line); got != width {
 				t.Errorf("width %d, row %d: %d cells: %q", width, index, got, ansi.Strip(line))
 			}

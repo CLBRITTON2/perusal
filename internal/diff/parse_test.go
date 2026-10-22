@@ -18,6 +18,34 @@ func TestParseFiles(t *testing.T) {
 	t.Run("readsPathsGitQuotedOrEndedWithATab", readsPathsGitQuotedOrEndedWithATab)
 }
 
+func TestParseFile(t *testing.T) {
+	text := strings.Join([]string{
+		"diff --git a/a.txt b/a.txt",
+		"deleted file mode 100644",
+		"--- a/a.txt",
+		"+++ /dev/null",
+		"@@ -1 +0,0 @@",
+		"-old",
+		"diff --git a/b.txt b/b.txt",
+		"new file mode 100644",
+		"--- /dev/null",
+		"+++ b/b.txt",
+		"@@ -0,0 +1 @@",
+		"+new",
+		"",
+	}, "\n")
+
+	fileDiff, err := ParseFile(text)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if fileDiff.Change != FileModified || len(fileDiff.Hunks) != 2 || fileDiff.Hunks[0].Rows[0].Old.Text != "old" ||
+		fileDiff.Hunks[1].Rows[0].New.Text != "new" {
+		t.Fatalf("got %+v, want the deletion's hunk then the addition's as one modified file", fileDiff)
+	}
+}
+
 func readsPathsGitQuotedOrEndedWithATab(t *testing.T) {
 	text := strings.Join([]string{
 		"diff --git a/old name.txt b/old name.txt",
@@ -128,7 +156,7 @@ func neverSplitsACharacter(t *testing.T) {
 }
 
 func marksNothingInAnUnevenBlockOrBetweenUnrelatedLines(t *testing.T) {
-	uneven, err := ParseUnified("@@ -1,2 +1 @@\n-same a\n-same b\n+same c\n")
+	uneven, err := parseUnified("@@ -1,2 +1 @@\n-same a\n-same b\n+same c\n")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -143,7 +171,7 @@ func marksNothingInAnUnevenBlockOrBetweenUnrelatedLines(t *testing.T) {
 
 func onlyRow(t *testing.T, text string) Row {
 	t.Helper()
-	fileDiff, err := ParseUnified(text)
+	fileDiff, err := parseUnified(text)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -166,7 +194,7 @@ func pairsRemovedWithAddedAndPadsTheShorterSide(t *testing.T) {
 		"",
 	}, "\n")
 
-	fileDiff, err := ParseUnified(text)
+	fileDiff, err := parseUnified(text)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -188,7 +216,7 @@ func pairsRemovedWithAddedAndPadsTheShorterSide(t *testing.T) {
 func numbersLinesFromEachHunkStart(t *testing.T) {
 	text := "@@ -1 +1,2 @@\n a\n+b\n@@ -40,2 +41,1 @@\n-c\n d\n"
 
-	fileDiff, err := ParseUnified(text)
+	fileDiff, err := parseUnified(text)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -206,7 +234,7 @@ func numbersLinesFromEachHunkStart(t *testing.T) {
 func startsANewPairingWhenRemovalsFollowAdditions(t *testing.T) {
 	text := "@@ -1,2 +1,2 @@\n-a\n+b\n-c\n+d\n"
 
-	fileDiff, err := ParseUnified(text)
+	fileDiff, err := parseUnified(text)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -221,7 +249,7 @@ func startsANewPairingWhenRemovalsFollowAdditions(t *testing.T) {
 }
 
 func rejectsUnknownLinePrefix(t *testing.T) {
-	_, err := ParseUnified("@@ -1 +1 @@\n*a\n")
+	_, err := parseUnified("@@ -1 +1 @@\n*a\n")
 
 	if err == nil || !strings.Contains(err.Error(), "line 2") {
 		t.Fatalf("got error %v, want an error naming line 2", err)

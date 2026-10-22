@@ -397,16 +397,12 @@ func isExitCodeOne(err error) bool {
 }
 
 func (r Repository) git(ctx context.Context, args ...string) ([]byte, error) {
-	return runGit(ctx, r.Dir, args)
+	return runGitWithInput(ctx, r.Dir, args, "")
 }
 
 func (r Repository) run(ctx context.Context, args ...string) error {
 	_, err := r.git(ctx, args...)
 	return err
-}
-
-func runGit(ctx context.Context, dir string, args []string) ([]byte, error) {
-	return runGitWithInput(ctx, dir, args, "")
 }
 
 func runGitWithInput(ctx context.Context, dir string, args []string, input string) ([]byte, error) {

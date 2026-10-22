@@ -4,7 +4,6 @@ import (
 	"bytes"
 	"errors"
 	"fmt"
-	"slices"
 	"strconv"
 	"strings"
 )
@@ -61,12 +60,14 @@ func parseStatus(output []byte) (Status, error) {
 		return Status{}, errors.New("parse git status: no output, want at least the branch headers")
 	}
 	status := Status{Files: []FileStatus{}}
+	hasAheadBehind := false
 	entries := bytes.Split(bytes.TrimSuffix(output, []byte{0}), []byte{0})
 	for i := 0; i < len(entries); i++ {
 		entry := string(entries[i])
 		kind, rest, _ := strings.Cut(entry, " ")
 		switch kind {
 		case "#":
+			hasAheadBehind = hasAheadBehind || strings.HasPrefix(rest, "branch.ab ")
 			withHeader, err := statusWithHeader(status, rest)
 			if err != nil {
 				return Status{}, fmt.Errorf("parse git status entry %q: %w", entry, err)
@@ -94,13 +95,9 @@ func parseStatus(output []byte) (Status, error) {
 			return Status{}, fmt.Errorf("parse git status entry %q: unknown entry kind %q", entry, kind)
 		}
 	}
-	status.UpstreamGone = status.Upstream != "" && !hasAheadBehind(entries)
+	// git omits the branch.ab header when the upstream ref is missing.
+	status.UpstreamGone = status.Upstream != "" && !hasAheadBehind
 	return status, nil
-}
-
-// git omits the branch.ab header when the upstream ref is missing.
-func hasAheadBehind(entries [][]byte) bool {
-	return slices.ContainsFunc(entries, func(entry []byte) bool { return bytes.HasPrefix(entry, []byte("# branch.ab ")) })
 }
 
 func statusWithHeader(status Status, header string) (Status, error) {

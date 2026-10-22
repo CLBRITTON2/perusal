@@ -30,10 +30,10 @@ func TestTheOverviewListsTheFocusedRepositoriesFirstAndMarksThem(t *testing.T) {
 	m := focusOnSeveral(t, map[string]bool{"C:/dev/cwd": false, "C:/dev/first": true, "C:/dev/second": false})
 	m = update(t, m, tea.KeyPressMsg{Code: 'o', Text: "o"})
 
-	m = update(t, m, overviewLoadedMsg{rows: []overviewRow{
-		repositoryRow{FoundRepository: listedAt("elsewhere", "C:/dev/elsewhere")},
-		repositoryRow{FoundRepository: listedAt("first", "C:/dev/first")},
-		repositoryRow{FoundRepository: listedAt("second", "C:/dev/second")},
+	m = update(t, m, overviewMsg{rows: []overviewRow{
+		repositoryRow{FoundRepository: foundAt("elsewhere", "C:/dev/elsewhere")},
+		repositoryRow{FoundRepository: foundAt("first", "C:/dev/first")},
+		repositoryRow{FoundRepository: foundAt("second", "C:/dev/second")},
 	}, failures: []string{}})
 
 	lines := listLines(m.overview, m.overviewCells, "no repositories found", 118, m.paneInnerHeight())
@@ -60,7 +60,7 @@ func opensTheFirstFocusedRepositoryWithUncommittedChanges(t *testing.T) {
 func aFocusThatStillNamesTheReviewedRepositoryKeepsItAndShowsTheRefusals(t *testing.T) {
 	m := focusOnSeveral(t, map[string]bool{"C:/dev/cwd": false, "C:/dev/first": true, "C:/dev/second": false})
 
-	m = update(t, m, RepositoriesFocused{
+	m = update(t, m, focus.Focus{
 		Repositories: []gitrepo.Repository{{Dir: "C:/dev/other"}, {Dir: "C:/dev/first"}},
 		Refusals:     []error{errors.New("C:/dev/notes: no .git")},
 	})
@@ -73,17 +73,17 @@ func aFocusThatStillNamesTheReviewedRepositoryKeepsItAndShowsTheRefusals(t *test
 func focusOnSeveral(t *testing.T, uncommitted map[string]bool) Model {
 	t.Helper()
 	focused := []gitrepo.Repository{{Dir: "C:/dev/cwd"}, {Dir: "C:/dev/first"}, {Dir: "C:/dev/second"}}
-	m := update(t, New(listNothing), tea.WindowSizeMsg{Width: 120, Height: 30})
-	m = update(t, m, RepositoriesFocused{Repositories: focused, Refusals: []error{}})
-	return update(t, m, uncommittedLoadedMsg{focused: focused, uncommitted: uncommitted})
+	m := update(t, New(findNothing), tea.WindowSizeMsg{Width: 120, Height: 30})
+	m = update(t, m, focus.Focus{Repositories: focused, Refusals: []error{}})
+	return update(t, m, uncommittedMsg{focused: focused, uncommitted: uncommitted})
 }
 
 func TestEnterInTheOverviewReviewsTheSelectedRepositoryAndKeepsTheFocus(t *testing.T) {
 	m := focusOnSeveral(t, map[string]bool{"C:/dev/cwd": false, "C:/dev/first": true, "C:/dev/second": false})
 	m = update(t, m, tea.KeyPressMsg{Code: 'o', Text: "o"})
-	m = update(t, m, overviewLoadedMsg{rows: []overviewRow{
-		repositoryRow{FoundRepository: listedAt("first", "C:/dev/first")},
-		repositoryRow{FoundRepository: listedAt("org/elsewhere", "C:/dev/org/elsewhere")},
+	m = update(t, m, overviewMsg{rows: []overviewRow{
+		repositoryRow{FoundRepository: foundAt("first", "C:/dev/first")},
+		repositoryRow{FoundRepository: foundAt("org/elsewhere", "C:/dev/org/elsewhere")},
 	}, failures: []string{}})
 	screen := ansi.Strip(m.renderScreen())
 
@@ -108,7 +108,7 @@ func TestARefusedRepositoryIsAMutedRowWithItsSummaryAndEnterShowsTheReason(t *te
 	}
 	m := update(t, New(list), tea.WindowSizeMsg{Width: 120, Height: 30})
 	m = update(t, m, tea.KeyPressMsg{Code: 'o', Text: "o"})
-	m = update(t, m, overviewRequest{listRepositories: list}.load())
+	m = update(t, m, overviewRequest{findRepositories: list}.load())
 	screen := ansi.Strip(m.renderScreen())
 
 	next, cmd := m.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
@@ -133,18 +133,18 @@ func TestPullInTheOverview(t *testing.T) {
 }
 
 func theRowShowsPullingUntilThePulledRowReplacesIt(t *testing.T) {
-	m := overviewOfTwo(t)
+	m := overviewWithTwoRepositories(t)
 	next, cmd := m.Update(tea.KeyPressMsg{Code: 'p', Text: "p"})
 	m = asModel(t, next)
 	pulling := ansi.Strip(m.renderScreen())
 	pulled := repositoryRow{
-		FoundRepository: listedAt("first", "C:/dev/first"),
+		FoundRepository: foundAt("first", "C:/dev/first"),
 		status: gitrepo.Status{
 			Branch: "main", Tracking: gitrepo.Tracking{Upstream: "origin/main"}, HasCommits: true,
 		},
 	}
 
-	m = update(t, m, overviewPulledMsg{row: pulled})
+	m = update(t, m, pullMsg{row: pulled})
 
 	if cmd == nil || !strings.Contains(pulling, "pulling...") {
 		t.Fatalf("got command %v and screen %q, want a pull running and shown", cmd, pulling)
@@ -156,7 +156,7 @@ func theRowShowsPullingUntilThePulledRowReplacesIt(t *testing.T) {
 }
 
 func aRowWithNoUpstreamIsNotPulled(t *testing.T) {
-	m := update(t, overviewOfTwo(t), tea.KeyPressMsg{Code: 'j', Text: "j"})
+	m := update(t, overviewWithTwoRepositories(t), tea.KeyPressMsg{Code: 'j', Text: "j"})
 	next, cmd := m.Update(tea.KeyPressMsg{Code: 'p', Text: "p"})
 	m = asModel(t, next)
 
@@ -166,8 +166,8 @@ func aRowWithNoUpstreamIsNotPulled(t *testing.T) {
 }
 
 func aRowWhoseUpstreamWasDeletedIsExplained(t *testing.T) {
-	m := update(t, overviewOfTwo(t), overviewLoadedMsg{rows: []overviewRow{repositoryRow{
-		FoundRepository: listedAt("first", "C:/dev/first"),
+	m := update(t, overviewWithTwoRepositories(t), overviewMsg{rows: []overviewRow{repositoryRow{
+		FoundRepository: foundAt("first", "C:/dev/first"),
 		status: gitrepo.Status{
 			Branch: "fix", Tracking: gitrepo.Tracking{Upstream: "origin/fix", UpstreamGone: true}, HasCommits: true,
 		},
@@ -181,8 +181,8 @@ func aRowWhoseUpstreamWasDeletedIsExplained(t *testing.T) {
 }
 
 func aFinishedRowIsSwitchedThoughItTracksNoUpstream(t *testing.T) {
-	m := update(t, overviewOfTwo(t), overviewLoadedMsg{rows: []overviewRow{repositoryRow{
-		FoundRepository: listedAt("first", "C:/dev/first"),
+	m := update(t, overviewWithTwoRepositories(t), overviewMsg{rows: []overviewRow{repositoryRow{
+		FoundRepository: foundAt("first", "C:/dev/first"),
 		status:          gitrepo.Status{Branch: "fix", HasCommits: true, Files: []gitrepo.FileStatus{}},
 		defaultBranch:   "origin/main",
 		finished:        true,
@@ -210,6 +210,7 @@ func TestMayBeFinished(t *testing.T) {
 			status: gitrepo.Status{Branch: "fix", Tracking: gitrepo.Tracking{Upstream: "origin/fix"}},
 		},
 		"aBranchWithChanges": {status: gitrepo.Status{Branch: "fix", Files: changed}},
+		"aDetachedHead":      {status: gitrepo.Status{}},
 		"theDefaultBranchWithItsRemoteGone": {
 			status: gitrepo.Status{Branch: "main", Tracking: gitrepo.Tracking{Upstream: "origin/main", UpstreamGone: true}},
 		},
@@ -222,22 +223,22 @@ func TestMayBeFinished(t *testing.T) {
 	}
 }
 
-func overviewOfTwo(t *testing.T) Model {
+func overviewWithTwoRepositories(t *testing.T) Model {
 	t.Helper()
 	m := focusOnSeveral(t, map[string]bool{"C:/dev/cwd": false, "C:/dev/first": true, "C:/dev/second": false})
 	m = update(t, m, tea.KeyPressMsg{Code: 'o', Text: "o"})
-	return update(t, m, overviewLoadedMsg{rows: []overviewRow{
+	return update(t, m, overviewMsg{rows: []overviewRow{
 		repositoryRow{
-			FoundRepository: listedAt("first", "C:/dev/first"),
+			FoundRepository: foundAt("first", "C:/dev/first"),
 			status: gitrepo.Status{
 				Branch: "main", Tracking: gitrepo.Tracking{Upstream: "origin/main", Behind: 2}, HasCommits: true,
 			},
 		},
-		repositoryRow{FoundRepository: listedAt("org/elsewhere", "C:/dev/org/elsewhere")},
+		repositoryRow{FoundRepository: foundAt("org/elsewhere", "C:/dev/org/elsewhere")},
 	}, failures: []string{}})
 }
 
-func listedAt(relativePath string, dir string) focus.FoundRepository {
+func foundAt(relativePath string, dir string) focus.FoundRepository {
 	return focus.FoundRepository{RelativePath: relativePath, Repository: gitrepo.Repository{Dir: dir}}
 }
 
@@ -250,16 +251,16 @@ func TestWholeFile(t *testing.T) {
 func keepsTheTopLineOnScreenBothWays(t *testing.T) {
 	hunks := diff.FileDiff{Hunks: []diff.Hunk{contextHunk(10, 24), contextHunk(40, 54), contextHunk(70, 84)}}
 	wholeFile := diff.FileDiff{Hunks: []diff.Hunk{contextHunk(1, 100)}}
-	m := reviewing(t, gitrepo.Status{Files: twoFiles()})
+	m := reviewingRepository(t, gitrepo.Status{Files: twoFiles()})
 	m = update(t, m, tea.WindowSizeMsg{Width: 120, Height: 16})
-	m = update(t, m, diffLoadedMsg{dir: "C:/dev/repo", path: "a.go", contextLines: hunkContext, fileDiff: hunks})
+	m = update(t, m, diffMsg{dir: "C:/dev/repo", path: "a.go", contextLines: hunkContext, fileDiff: hunks})
 	m.diffView.SetYOffset(20)
 
 	m = update(t, m, tea.KeyPressMsg{Code: 'f', Text: "f"})
-	m = update(t, m, diffLoadedMsg{dir: "C:/dev/repo", path: "a.go", contextLines: wholeFileContext, fileDiff: wholeFile})
+	m = update(t, m, diffMsg{dir: "C:/dev/repo", path: "a.go", contextLines: wholeFileContext, fileDiff: wholeFile})
 	wholeFileOffset := m.diffView.YOffset()
 	m = update(t, m, tea.KeyPressMsg{Code: 'f', Text: "f"})
-	m = update(t, m, diffLoadedMsg{dir: "C:/dev/repo", path: "a.go", contextLines: hunkContext, fileDiff: hunks})
+	m = update(t, m, diffMsg{dir: "C:/dev/repo", path: "a.go", contextLines: hunkContext, fileDiff: hunks})
 
 	if wholeFileOffset != 43 || m.diffView.YOffset() != 20 {
 		t.Fatalf("got offsets %d then %d, want line 43 on top at 43 then back at 20", wholeFileOffset, m.diffView.YOffset())
@@ -276,14 +277,14 @@ func contextHunk(first int, last int) diff.Hunk {
 }
 
 func dropsAFileDiffLoadedWithTheOtherContext(t *testing.T) {
-	m := reviewing(t, gitrepo.Status{Files: twoFiles()})
+	m := reviewingRepository(t, gitrepo.Status{Files: twoFiles()})
 	next, reload := m.Update(tea.KeyPressMsg{Code: 'f', Text: "f"})
 	m = asModel(t, next)
 
-	m = update(t, m, diffLoadedMsg{dir: "C:/dev/repo", path: "a.go", contextLines: hunkContext,
+	m = update(t, m, diffMsg{dir: "C:/dev/repo", path: "a.go", contextLines: hunkContext,
 		fileDiff: diff.FileDiff{Hunks: []diff.Hunk{{Header: "@@ -5 +5 @@"}}}})
 	afterStaleLoad := m.fileDiff
-	m = update(t, m, diffLoadedMsg{dir: "C:/dev/repo", path: "a.go", contextLines: wholeFileContext,
+	m = update(t, m, diffMsg{dir: "C:/dev/repo", path: "a.go", contextLines: wholeFileContext,
 		fileDiff: diff.FileDiff{Hunks: []diff.Hunk{{Header: "@@ -1,9 +1,9 @@"}}}})
 
 	if reload == nil || len(afterStaleLoad.Hunks) != 0 || len(m.fileDiff.Hunks) != 1 || m.fileDiff.Hunks[0].Header != "@@ -1,9 +1,9 @@" {
@@ -294,7 +295,7 @@ func dropsAFileDiffLoadedWithTheOtherContext(t *testing.T) {
 func reloadsACommitOnlyWhileItWasLoadedWithTheOtherContext(t *testing.T) {
 	commit := gitrepo.Commit{Hash: strings.Repeat("1", 40), Message: "Add tree"}
 	m := logOf(t, []gitrepo.Commit{commit})
-	m = update(t, m, commitDiffLoadedMsg{dir: "C:/dev/repo", hash: commit.Hash, contextLines: hunkContext,
+	m = update(t, m, commitDiffMsg{dir: "C:/dev/repo", hash: commit.Hash, contextLines: hunkContext,
 		sections: []diff.FileSection{{Path: "a.go"}}})
 	hunkContextLoad := m.loadSelectedCommitDiff()
 
@@ -308,7 +309,7 @@ func reloadsACommitOnlyWhileItWasLoadedWithTheOtherContext(t *testing.T) {
 }
 
 func TestDiscardOpensOnTheSelectedFile(t *testing.T) {
-	m := reviewing(t, gitrepo.Status{Files: twoFiles()})
+	m := reviewingRepository(t, gitrepo.Status{Files: twoFiles()})
 	m = update(t, m, tea.KeyPressMsg{Code: 'j', Text: "j"})
 
 	m = update(t, m, tea.KeyPressMsg{Code: 'x', Text: "x"})
@@ -320,23 +321,23 @@ func TestDiscardOpensOnTheSelectedFile(t *testing.T) {
 	}
 }
 
-func listNothing(context.Context) (focus.Found, error) {
+func findNothing(context.Context) (focus.Found, error) {
 	return focus.Found{Repositories: []focus.FoundRepository{}, Refusals: []focus.FoundRefusal{}}, nil
 }
 
-func focusOn(dir string) RepositoriesFocused {
-	return RepositoriesFocused{Repositories: []gitrepo.Repository{{Dir: dir}}, Refusals: []error{}}
+func focusOnOne(dir string) focus.Focus {
+	return focus.Focus{Repositories: []gitrepo.Repository{{Dir: dir}}, Refusals: []error{}}
 }
 
-func reviewing(t *testing.T, status gitrepo.Status) Model {
+func reviewingRepository(t *testing.T, status gitrepo.Status) Model {
 	t.Helper()
-	m := update(t, New(listNothing), tea.WindowSizeMsg{Width: 120, Height: 30})
-	m = update(t, m, focusOn("C:/dev/repo"))
-	return update(t, m, statusLoadedMsg{dir: "C:/dev/repo", status: status})
+	m := update(t, New(findNothing), tea.WindowSizeMsg{Width: 120, Height: 30})
+	m = update(t, m, focusOnOne("C:/dev/repo"))
+	return update(t, m, statusMsg{dir: "C:/dev/repo", status: status})
 }
 
 func TestFullscreenDiffCoversTheListsSoAClickThereSelectsNothing(t *testing.T) {
-	m := reviewing(t, gitrepo.Status{Files: twoFiles()})
+	m := reviewingRepository(t, gitrepo.Status{Files: twoFiles()})
 
 	m = update(t, m, tea.KeyPressMsg{Code: 'd', Text: "d"})
 	m = update(t, m, tea.MouseClickMsg{X: 3, Y: 3, Button: tea.MouseLeft})
@@ -359,14 +360,14 @@ func TestADivergedBranchOffersAForcePush(t *testing.T) {
 
 func pressPush(t *testing.T, status gitrepo.Status) Model {
 	t.Helper()
-	return update(t, reviewing(t, status), tea.KeyPressMsg{Code: 'P', Text: "P"})
+	return update(t, reviewingRepository(t, status), tea.KeyPressMsg{Code: 'P', Text: "P"})
 }
 
 func TestRightClickingAnOlderPushedCommitOffersToAmendItWithAForcePushWarning(t *testing.T) {
-	m := reviewing(t, gitrepo.Status{
+	m := reviewingRepository(t, gitrepo.Status{
 		Branch: "fix", Tracking: gitrepo.Tracking{Upstream: "origin/fix", Ahead: 1}, Files: twoFiles(), HasCommits: true,
 	})
-	m = update(t, m, logLoadedMsg{dir: "C:/dev/repo", limit: logPageSize, commits: []gitrepo.Commit{
+	m = update(t, m, logMsg{dir: "C:/dev/repo", limit: logPageSize, commits: []gitrepo.Commit{
 		{Hash: strings.Repeat("1", 40), Parents: []string{strings.Repeat("2", 40)}},
 		{Hash: strings.Repeat("2", 40), ShortHash: "2222222", Summary: "Fix wrap"},
 	}})
@@ -390,6 +391,7 @@ func TestLog(t *testing.T) {
 	t.Run("searchNeedsEveryWordInAnyOrder", searchNeedsEveryWordInAnyOrder)
 	t.Run("searchLooksAtTheHashAuthorAndRefs", searchLooksAtTheHashAuthorAndRefs)
 	t.Run("clickingTheFoldedLogOpensIt", clickingTheFoldedLogOpensIt)
+	t.Run("clickingTheFoldedChangesDuringASearchClosesIt", clickingTheFoldedChangesDuringASearchClosesIt)
 	t.Run("nearingTheEndOfAFullPageLoadsTheNextOne", nearingTheEndOfAFullPageLoadsTheNextOne)
 	t.Run("aShortLogIsTheWholeHistory", aShortLogIsTheWholeHistory)
 	t.Run("aReloadReadWithTheOldLimitIsDropped", aReloadReadWithTheOldLimitIsDropped)
@@ -397,8 +399,8 @@ func TestLog(t *testing.T) {
 }
 
 func clickingTheFoldedLogOpensIt(t *testing.T) {
-	m := reviewing(t, gitrepo.Status{Files: twoFiles(), HasCommits: true})
-	m = update(t, m, logLoadedMsg{dir: "C:/dev/repo", limit: logPageSize, commits: []gitrepo.Commit{
+	m := reviewingRepository(t, gitrepo.Status{Files: twoFiles(), HasCommits: true})
+	m = update(t, m, logMsg{dir: "C:/dev/repo", limit: logPageSize, commits: []gitrepo.Commit{
 		{Hash: strings.Repeat("1", 40)}, {Hash: strings.Repeat("2", 40)},
 	}})
 
@@ -410,14 +412,26 @@ func clickingTheFoldedLogOpensIt(t *testing.T) {
 	}
 }
 
+func clickingTheFoldedChangesDuringASearchClosesIt(t *testing.T) {
+	m := logOf(t, []gitrepo.Commit{{Hash: strings.Repeat("1", 40)}})
+	m = update(t, m, tea.KeyPressMsg{Code: '/', Text: "/"})
+
+	m = update(t, m, tea.MouseClickMsg{X: 3, Y: m.foldedPaneY(), Button: tea.MouseLeft})
+
+	if m.view != viewChanges || m.mode != modeBrowsing {
+		t.Fatalf("got view %d, mode %d, want the changes view browsing", m.view, m.mode)
+	}
+}
+
 func expandingACommitListsItsFilesUnderIt(t *testing.T) {
 	first := gitrepo.Commit{Hash: strings.Repeat("1", 40), Message: "Add tree"}
 	second := gitrepo.Commit{Hash: strings.Repeat("2", 40), Message: "Fix wrap"}
 	m := logOf(t, []gitrepo.Commit{first, second})
-	m = update(t, m, commitDiffLoadedMsg{dir: "C:/dev/repo", hash: first.Hash, contextLines: hunkContext, sections: []diff.FileSection{
-		{Path: "a.go", FileDiff: diff.FileDiff{Change: diff.FileAdded}},
-		{Path: "b.go", FileDiff: diff.FileDiff{Change: diff.FileModified}},
-	}})
+	m = update(t, m, commitDiffMsg{
+		dir: "C:/dev/repo", hash: first.Hash, contextLines: hunkContext, sections: []diff.FileSection{
+			{Path: "a.go", FileDiff: diff.FileDiff{Change: diff.FileAdded}},
+			{Path: "b.go", FileDiff: diff.FileDiff{Change: diff.FileModified}},
+		}})
 
 	m = update(t, m, tea.KeyPressMsg{Code: tea.KeyEnter})
 	m = update(t, m, tea.KeyPressMsg{Code: 'j', Text: "j"})
@@ -486,8 +500,8 @@ func searchLooksAtTheHashAuthorAndRefs(t *testing.T) {
 
 func logOf(t *testing.T, commits []gitrepo.Commit) Model {
 	t.Helper()
-	m := update(t, New(listNothing), focusOn("C:/dev/repo"))
-	m = update(t, m, logLoadedMsg{dir: "C:/dev/repo", limit: logPageSize, commits: commits})
+	m := update(t, New(findNothing), focusOnOne("C:/dev/repo"))
+	m = update(t, m, logMsg{dir: "C:/dev/repo", limit: logPageSize, commits: commits})
 	return update(t, m, tea.KeyPressMsg{Code: tea.KeyTab})
 }
 
@@ -506,7 +520,7 @@ func selectionFollowsTheCommitWhenNewOnesArriveAbove(t *testing.T) {
 	added := gitrepo.Commit{Hash: strings.Repeat("3", 40)}
 	m := update(t, logOf(t, []gitrepo.Commit{first, second}), tea.KeyPressMsg{Code: 'j', Text: "j"})
 
-	m = update(t, m, logLoadedMsg{dir: "C:/dev/repo", limit: logPageSize, commits: []gitrepo.Commit{added, first, second}})
+	m = update(t, m, logMsg{dir: "C:/dev/repo", limit: logPageSize, commits: []gitrepo.Commit{added, first, second}})
 
 	if m.selectedCommitHash() != second.Hash {
 		t.Fatalf("got selected commit %q, want %q", m.selectedCommitHash(), second.Hash)
@@ -514,10 +528,10 @@ func selectionFollowsTheCommitWhenNewOnesArriveAbove(t *testing.T) {
 }
 
 func dropsFilesLoadedForThePreviousRepository(t *testing.T) {
-	m := update(t, New(listNothing), focusOn("C:/dev/old"))
-	m = update(t, m, focusOn("C:/dev/new"))
+	m := update(t, New(findNothing), focusOnOne("C:/dev/old"))
+	m = update(t, m, focusOnOne("C:/dev/new"))
 
-	m = update(t, m, statusLoadedMsg{dir: "C:/dev/old", status: gitrepo.Status{Branch: "master", Files: twoFiles()}})
+	m = update(t, m, statusMsg{dir: "C:/dev/old", status: gitrepo.Status{Branch: "master", Files: twoFiles()}})
 
 	if len(m.status.Files) != 0 || m.status.Branch != "" {
 		t.Fatalf("got files %v on branch %q from the previous repository", m.status.Files, m.status.Branch)
@@ -525,11 +539,11 @@ func dropsFilesLoadedForThePreviousRepository(t *testing.T) {
 }
 
 func rejectionClearsTheReviewAndThePopup(t *testing.T) {
-	m := update(t, New(listNothing), focusOn("C:/dev/repo"))
-	m = update(t, m, statusLoadedMsg{dir: "C:/dev/repo", status: gitrepo.Status{Branch: "master", Files: twoFiles()}})
+	m := update(t, New(findNothing), focusOnOne("C:/dev/repo"))
+	m = update(t, m, statusMsg{dir: "C:/dev/repo", status: gitrepo.Status{Branch: "master", Files: twoFiles()}})
 	m = update(t, m, tea.KeyPressMsg{Code: 'c', Text: "c"})
 
-	m = update(t, m, FocusRejected{Reason: "outside\nthe dev directory"})
+	m = update(t, m, FocusRejection{Reason: "outside\nthe dev directory"})
 
 	if m.repository.Dir != "" || len(m.status.Files) != 0 || m.popup.kind != noPopup || m.rejection != "outside | the dev directory" {
 		t.Fatalf("got repository %q, %d files, popup %d, rejection %q", m.repository.Dir, len(m.status.Files), m.popup.kind,
@@ -538,11 +552,11 @@ func rejectionClearsTheReviewAndThePopup(t *testing.T) {
 }
 
 func refocusingTheSameRepositoryKeepsTheSelection(t *testing.T) {
-	m := update(t, New(listNothing), focusOn("C:/dev/repo"))
-	m = update(t, m, statusLoadedMsg{dir: "C:/dev/repo", status: gitrepo.Status{Branch: "master", Files: twoFiles()}})
+	m := update(t, New(findNothing), focusOnOne("C:/dev/repo"))
+	m = update(t, m, statusMsg{dir: "C:/dev/repo", status: gitrepo.Status{Branch: "master", Files: twoFiles()}})
 	m = update(t, m, tea.KeyPressMsg{Code: 'j', Text: "j"})
 
-	m = update(t, m, focusOn("C:/dev/repo"))
+	m = update(t, m, focusOnOne("C:/dev/repo"))
 
 	if m.selectedChange != 1 || len(m.status.Files) != 2 {
 		t.Fatalf("got selection %d of %d files, want 1 of 2", m.selectedChange, len(m.status.Files))
@@ -595,7 +609,7 @@ func aReloadReadWithTheOldLimitIsDropped(t *testing.T) {
 	m := update(t, logOf(t, numberedCommits(logPageSize)), tea.WindowSizeMsg{Width: 120, Height: 30})
 	m, _ = selectLogRow(t, m, logPageSize-1)
 
-	m = update(t, m, logLoadedMsg{dir: "C:/dev/repo", limit: logPageSize, commits: numberedCommits(2)})
+	m = update(t, m, logMsg{dir: "C:/dev/repo", limit: logPageSize, commits: numberedCommits(2)})
 
 	if len(m.commits) != logPageSize || m.selectedCommit != logPageSize-1 {
 		t.Fatalf("got %d commits, selected %d, want the page kept", len(m.commits), m.selectedCommit)

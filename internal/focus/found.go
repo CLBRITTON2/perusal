@@ -16,6 +16,12 @@ var (
 	ErrWorkTreeMismatch   = errors.New("git resolved a different work tree than the one checked")
 )
 
+// Repositories are in focus file order, each once. Refusals hold an error for each path that failed a check.
+type Focus struct {
+	Repositories []gitrepo.Repository
+	Refusals     []error
+}
+
 // RelativePath has forward slashes.
 type FoundRepository struct {
 	RelativePath string

@@ -24,13 +24,7 @@ const (
 	wholeFileContext = math.MaxInt32
 )
 
-// Refusals are the focused paths that failed a check, shown so a refused repository is never silently skipped.
-type RepositoriesFocused struct {
-	Repositories []gitrepo.Repository
-	Refusals     []error
-}
-
-type FocusRejected struct {
+type FocusRejection struct {
 	Reason string
 }
 
@@ -42,60 +36,60 @@ func nextPoll() tea.Cmd {
 
 // The messages below carry dir, the repository they came from, so a result that lands after a switch is dropped.
 
-type statusLoadedMsg struct {
+type statusMsg struct {
 	dir              string
 	status           gitrepo.Status
 	stagedLineCounts diff.LineCounts
 }
 
-type diffLoadedMsg struct {
+type diffMsg struct {
 	dir          string
 	path         string
 	contextLines int
 	fileDiff     diff.FileDiff
 }
 
-// logLoadedMsg carries the limit it was read with, so a reload still in flight when the limit grows is dropped.
-type logLoadedMsg struct {
+// logMsg carries the limit it was read with, so a reload still in flight when the limit grows is dropped.
+type logMsg struct {
 	dir      string
 	limit    int
 	commits  []gitrepo.Commit
 	loadedAt time.Time
 }
 
-type commitDiffLoadedMsg struct {
+type commitDiffMsg struct {
 	dir          string
 	hash         string
 	contextLines int
 	sections     []diff.FileSection
 }
 
-// uncommittedLoadedMsg carries the focused repositories it checked instead of a dir.
-type uncommittedLoadedMsg struct {
+// uncommittedMsg carries the focused repositories it checked instead of a dir.
+type uncommittedMsg struct {
 	focused     []gitrepo.Repository
 	uncommitted map[string]bool
 }
 
-type indexChangedMsg struct {
+type indexChangeMsg struct {
 	dir string
 }
 
-type committedMsg struct {
+type commitMsg struct {
 	dir     string
 	summary string
 }
 
-type popupSucceededMsg struct {
+type popupSuccessMsg struct {
 	dir    string
 	notice string
 }
 
-type popupFailedMsg struct {
+type popupFailureMsg struct {
 	dir string
 	err error
 }
 
-type gitFailedMsg struct {
+type gitFailureMsg struct {
 	err error
 }
 
@@ -106,39 +100,39 @@ type repositoryRequest struct {
 func (r repositoryRequest) loadStatus() tea.Msg {
 	status, err := r.repository.Status(context.Background())
 	if err != nil {
-		return gitFailedMsg{err: err}
+		return gitFailureMsg{err: err}
 	}
 	stagedLineCounts, err := r.repository.StagedLineCounts(context.Background())
 	if err != nil {
-		return gitFailedMsg{err: err}
+		return gitFailureMsg{err: err}
 	}
-	return statusLoadedMsg{dir: r.repository.Dir, status: status, stagedLineCounts: stagedLineCounts}
+	return statusMsg{dir: r.repository.Dir, status: status, stagedLineCounts: stagedLineCounts}
 }
 
 func (r repositoryRequest) stageAll() tea.Msg {
-	return indexChanged(r.repository.Dir, r.repository.StageAll(context.Background()))
+	return indexChangeResult(r.repository.Dir, r.repository.StageAll(context.Background()))
 }
 
 func (r repositoryRequest) unstageAll() tea.Msg {
-	return indexChanged(r.repository.Dir, r.repository.UnstageAll(context.Background()))
+	return indexChangeResult(r.repository.Dir, r.repository.UnstageAll(context.Background()))
 }
 
 func (r repositoryRequest) discardAll() tea.Msg {
 	return popupResult(r.repository.Dir, r.repository.DiscardAll(context.Background()), "discarded all changes")
 }
 
-func indexChanged(dir string, err error) tea.Msg {
+func indexChangeResult(dir string, err error) tea.Msg {
 	if err != nil {
-		return gitFailedMsg{err: err}
+		return gitFailureMsg{err: err}
 	}
-	return indexChangedMsg{dir: dir}
+	return indexChangeMsg{dir: dir}
 }
 
 func popupResult(dir string, err error, notice string) tea.Msg {
 	if err != nil {
-		return popupFailedMsg{dir: dir, err: err}
+		return popupFailureMsg{dir: dir, err: err}
 	}
-	return popupSucceededMsg{dir: dir, notice: notice}
+	return popupSuccessMsg{dir: dir, notice: notice}
 }
 
 type focusedRequest struct {
@@ -150,11 +144,11 @@ func (r focusedRequest) loadUncommitted() tea.Msg {
 	for _, repository := range r.repositories {
 		status, err := repository.Status(context.Background())
 		if err != nil {
-			return gitFailedMsg{err: err}
+			return gitFailureMsg{err: err}
 		}
 		uncommitted[repository.Dir] = len(status.Files) > 0
 	}
-	return uncommittedLoadedMsg{focused: r.repositories, uncommitted: uncommitted}
+	return uncommittedMsg{focused: r.repositories, uncommitted: uncommitted}
 }
 
 type logRequest struct {
@@ -165,9 +159,9 @@ type logRequest struct {
 func (r logRequest) load() tea.Msg {
 	commits, err := r.repository.Log(context.Background(), r.limit)
 	if err != nil {
-		return gitFailedMsg{err: err}
+		return gitFailureMsg{err: err}
 	}
-	return logLoadedMsg{dir: r.repository.Dir, limit: r.limit, commits: commits, loadedAt: time.Now()}
+	return logMsg{dir: r.repository.Dir, limit: r.limit, commits: commits, loadedAt: time.Now()}
 }
 
 type pushRequest struct {
@@ -207,25 +201,25 @@ type fileDiffRequest struct {
 func (r fileDiffRequest) load() tea.Msg {
 	text, err := r.repository.FileDiff(context.Background(), r.file, r.contextLines)
 	if err != nil {
-		return gitFailedMsg{err: err}
+		return gitFailureMsg{err: err}
 	}
-	fileDiff, err := diff.ParseUnified(text)
+	fileDiff, err := diff.ParseFile(text)
 	if err != nil {
-		return gitFailedMsg{err: fmt.Errorf("parse diff of %s: %w", r.file.Path, err)}
+		return gitFailureMsg{err: fmt.Errorf("parse diff of %s: %w", r.file.Path, err)}
 	}
 	highlighted, err := highlight.FileDiff(r.file.Path, fileDiff)
 	if err != nil {
-		return gitFailedMsg{err: err}
+		return gitFailureMsg{err: err}
 	}
-	return diffLoadedMsg{dir: r.repository.Dir, path: r.file.Path, contextLines: r.contextLines, fileDiff: highlighted}
+	return diffMsg{dir: r.repository.Dir, path: r.file.Path, contextLines: r.contextLines, fileDiff: highlighted}
 }
 
 func (r fileRequest) stage() tea.Msg {
-	return indexChanged(r.repository.Dir, r.repository.Stage(context.Background(), r.file))
+	return indexChangeResult(r.repository.Dir, r.repository.Stage(context.Background(), r.file))
 }
 
 func (r fileRequest) unstage() tea.Msg {
-	return indexChanged(r.repository.Dir, r.repository.Unstage(context.Background(), r.file))
+	return indexChangeResult(r.repository.Dir, r.repository.Unstage(context.Background(), r.file))
 }
 
 func (r fileRequest) discard() tea.Msg {
@@ -241,21 +235,21 @@ type commitDiffRequest struct {
 func (r commitDiffRequest) load() tea.Msg {
 	text, err := r.repository.CommitDiff(context.Background(), r.hash, r.contextLines)
 	if err != nil {
-		return gitFailedMsg{err: err}
+		return gitFailureMsg{err: err}
 	}
 	sections, err := diff.ParseFiles(text)
 	if err != nil {
-		return gitFailedMsg{err: fmt.Errorf("parse diff of commit %s: %w", r.hash, err)}
+		return gitFailureMsg{err: fmt.Errorf("parse diff of commit %s: %w", r.hash, err)}
 	}
 	highlighted := []diff.FileSection{}
 	for _, section := range sections {
 		fileDiff, err := highlight.FileDiff(section.Path, section.FileDiff)
 		if err != nil {
-			return gitFailedMsg{err: fmt.Errorf("commit %s: %w", r.hash, err)}
+			return gitFailureMsg{err: fmt.Errorf("commit %s: %w", r.hash, err)}
 		}
 		highlighted = append(highlighted, diff.FileSection{Path: section.Path, FileDiff: fileDiff})
 	}
-	return commitDiffLoadedMsg{dir: r.repository.Dir, hash: r.hash, contextLines: r.contextLines, sections: highlighted}
+	return commitDiffMsg{dir: r.repository.Dir, hash: r.hash, contextLines: r.contextLines, sections: highlighted}
 }
 
 type commitRequest struct {
@@ -266,7 +260,7 @@ type commitRequest struct {
 func (r commitRequest) commit() tea.Msg {
 	summary, err := r.repository.Commit(context.Background(), r.message)
 	if err != nil {
-		return popupFailedMsg{dir: r.repository.Dir, err: err}
+		return popupFailureMsg{dir: r.repository.Dir, err: err}
 	}
-	return committedMsg{dir: r.repository.Dir, summary: summary}
+	return commitMsg{dir: r.repository.Dir, summary: summary}
 }
