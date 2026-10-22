@@ -47,8 +47,10 @@ var (
 )
 
 var (
-	changesHelp  = []key.Binding{downKey, stageKey, stageAllKey, discardKey, commitKey, pushKey, switchViewKey, scrollDownKey, fullscreenKey, wholeFileKey, unifiedKey, branchesKey, overviewKey, quitKey}
-	logHelp      = []key.Binding{downKey, expandKey, searchKey, amendKey, commitKey, pushKey, switchViewKey, scrollDownKey, fullscreenKey, wholeFileKey, unifiedKey, branchesKey, overviewKey, quitKey}
+	reviewHelp = []key.Binding{commitKey, pushKey, switchViewKey, scrollDownKey, fullscreenKey, wholeFileKey, unifiedKey,
+		branchesKey, overviewKey, quitKey}
+	changesHelp  = append([]key.Binding{downKey, stageKey, stageAllKey, discardKey}, reviewHelp...)
+	logHelp      = append([]key.Binding{downKey, expandKey, searchKey, amendKey}, reviewHelp...)
 	overviewHelp = []key.Binding{downKey, openRepositoryKey, pullKey, closeOverviewKey, quitKey}
 	branchesHelp = []key.Binding{downKey, switchBranchKey, deleteBranchKey, closeBranchesKey, quitKey}
 	searchHelp   = []key.Binding{keepSearchKey, clearSearchKey}

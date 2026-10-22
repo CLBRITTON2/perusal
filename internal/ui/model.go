@@ -628,7 +628,7 @@ func (m Model) openPushPopup() (tea.Model, tea.Cmd) {
 		return m.withConfirmation(confirmation{
 			lines: []string{
 				titleStyle.Render("push " + headName(m.status) + " to " + upstream),
-				textStyle.Render(commitCount(m.status.Ahead)),
+				textStyle.Render(counted(m.status.Ahead, "commit")),
 			},
 			confirmKey:  confirmPushKey,
 			run:         request.push,
@@ -638,8 +638,8 @@ func (m Model) openPushPopup() (tea.Model, tea.Cmd) {
 	return m.withConfirmation(confirmation{
 		lines: []string{
 			titleStyle.Render("force push " + headName(m.status) + " to " + upstream),
-			textStyle.Render("replaces " + commitCount(m.status.Behind) + " on " + upstream + " with " +
-				commitCount(m.status.Ahead)),
+			textStyle.Render("replaces " + counted(m.status.Behind, "commit") + " on " + upstream + " with " +
+				counted(m.status.Ahead, "commit")),
 		},
 		confirmKey:  confirmForceKey,
 		run:         request.forcePush,
@@ -658,7 +658,7 @@ func (m Model) openAmendPopup() Model {
 	lines := []string{
 		titleStyle.Render("amend " + sanitizeText(target.ShortHash)),
 		textStyle.Render(sanitizeText(target.Summary)),
-		textStyle.Render("with " + fileCount(m.stagedFileCount()) + " staged"),
+		textStyle.Render("with " + counted(m.stagedFileCount(), "file") + " staged"),
 	}
 	if target.Hash != m.commits[0].Hash {
 		lines = append(lines, warningStyle.Render("rewrites every commit above it"))
@@ -698,7 +698,7 @@ func (m Model) discardConfirmation(file gitrepo.FileStatus) confirmation {
 func (m Model) discardAllConfirmation() confirmation {
 	return confirmation{
 		lines: []string{
-			titleStyle.Render("discard " + fileCount(len(m.status.Files))),
+			titleStyle.Render("discard " + counted(len(m.status.Files), "file")),
 			textStyle.Render("deletes untracked files and puts the rest back to HEAD"),
 			warningStyle.Render("this cannot be undone"),
 		},
@@ -988,7 +988,6 @@ func (m Model) withDiffContent() Model {
 	return m
 }
 
-// withDiffKeptInPlace shows the diff after its source reloaded with the line the reader was on at the same screen row.
 func (m Model) withDiffKeptInPlace(previous []renderedLine) Model {
 	offset := m.diffView.YOffset()
 	lines := m.diffLines()
@@ -1421,18 +1420,11 @@ func (m Model) renderPopup(lines []string, runningText string, bindings []key.Bi
 	return popupStyle.Width(width + 4).Render(strings.Join(lines, "\n") + "\n\n" + status)
 }
 
-func commitCount(count int) string {
+func counted(count int, noun string) string {
 	if count == 1 {
-		return "1 commit"
+		return "1 " + noun
 	}
-	return strconv.Itoa(count) + " commits"
-}
-
-func fileCount(count int) string {
-	if count == 1 {
-		return "1 file"
-	}
-	return strconv.Itoa(count) + " files"
+	return strconv.Itoa(count) + " " + noun + "s"
 }
 
 func renderField(view string, focused bool, innerWidth int, innerHeight int) string {

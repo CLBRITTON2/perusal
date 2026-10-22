@@ -90,7 +90,6 @@ type popupSucceededMsg struct {
 	notice string
 }
 
-// popupFailedMsg is the failure of the git run an open popup started.
 type popupFailedMsg struct {
 	dir string
 	err error
