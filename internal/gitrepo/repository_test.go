@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"io/fs"
+	"math"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -118,6 +119,43 @@ func countsAnUnbornBranch(t *testing.T) {
 	if err != nil || got != (diff.LineCounts{Added: 2, Removed: 0}) {
 		t.Fatalf("got %+v, %v, want +2 -0", got, err)
 	}
+}
+
+func TestTheLargestContextGitParsesShowsTheWholeFile(t *testing.T) {
+	work := repositoryWithHistory(t, []string{"1\n2\n3\n4\n5\n6\n7\n8\n9", "1\n2\n3\n4\n5\n6\n7\n8\nnine"})
+	writeFile(t, filepath.Join(work, "a.txt"), "one\n2\n3\n4\n5\n6\n7\n8\nnine\n")
+	head, err := runGit(context.Background(), work, []string{"rev-parse", "HEAD"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	repository := Repository{Dir: work}
+	file := FileStatus{Path: "a.txt", IndexStatus: '.', WorktreeStatus: 'M'}
+	hash := strings.TrimSpace(string(head))
+
+	got := []string{}
+	for _, contextLines := range []int{1, math.MaxInt32} {
+		fileDiff, fileErr := repository.FileDiff(context.Background(), file, contextLines)
+		commitDiff, commitErr := repository.CommitDiff(context.Background(), hash, contextLines)
+		if fileErr != nil || commitErr != nil {
+			t.Fatalf("got %v, %v", fileErr, commitErr)
+		}
+		got = append(got, hunkHeaders(fileDiff)+" "+hunkHeaders(commitDiff))
+	}
+
+	want := []string{"@@ -1,2 +1,2 @@ @@ -8,2 +8,2 @@", "@@ -1,9 +1,9 @@ @@ -1,9 +1,9 @@"}
+	if !slices.Equal(got, want) {
+		t.Fatalf("got %q, want %q", got, want)
+	}
+}
+
+func hunkHeaders(text string) string {
+	headers := []string{}
+	for _, line := range strings.Split(text, "\n") {
+		if strings.HasPrefix(line, "@@ ") {
+			headers = append(headers, line)
+		}
+	}
+	return strings.Join(headers, " ")
 }
 
 func TestDefaultBranch(t *testing.T) {

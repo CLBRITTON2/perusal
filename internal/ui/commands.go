@@ -10,6 +10,7 @@ import (
 
 	"github.com/CLBRITTON2/perusal/internal/diff"
 	"github.com/CLBRITTON2/perusal/internal/gitrepo"
+	"github.com/CLBRITTON2/perusal/internal/highlight"
 )
 
 const (
@@ -17,6 +18,10 @@ const (
 	pollInterval = 2 * time.Second
 	// git parses --max-count into a 32-bit int.
 	wholeHistory = math.MaxInt32
+	// git's own default.
+	hunkContext = 3
+	// git parses --unified into a 32-bit int.
+	wholeFileContext = math.MaxInt32
 )
 
 // Refusals are the focused paths that failed a check, shown so a refused repository is never silently skipped.
@@ -44,9 +49,10 @@ type statusLoadedMsg struct {
 }
 
 type diffLoadedMsg struct {
-	dir      string
-	path     string
-	fileDiff diff.FileDiff
+	dir          string
+	path         string
+	contextLines int
+	fileDiff     diff.FileDiff
 }
 
 // logLoadedMsg carries the limit it was read with, so a reload still in flight when the limit grows is dropped.
@@ -58,9 +64,10 @@ type logLoadedMsg struct {
 }
 
 type commitDiffLoadedMsg struct {
-	dir      string
-	hash     string
-	sections []diff.FileSection
+	dir          string
+	hash         string
+	contextLines int
+	sections     []diff.FileSection
 }
 
 // uncommittedLoadedMsg carries the focused repositories it checked instead of a dir, and maps each Dir to whether it
@@ -208,8 +215,14 @@ type fileRequest struct {
 	file       gitrepo.FileStatus
 }
 
-func (r fileRequest) loadDiff() tea.Msg {
-	text, err := r.repository.FileDiff(context.Background(), r.file)
+type fileDiffRequest struct {
+	repository   gitrepo.Repository
+	file         gitrepo.FileStatus
+	contextLines int
+}
+
+func (r fileDiffRequest) load() tea.Msg {
+	text, err := r.repository.FileDiff(context.Background(), r.file, r.contextLines)
 	if err != nil {
 		return gitFailedMsg{err: err}
 	}
@@ -217,7 +230,11 @@ func (r fileRequest) loadDiff() tea.Msg {
 	if err != nil {
 		return gitFailedMsg{err: fmt.Errorf("parse diff of %s: %w", r.file.Path, err)}
 	}
-	return diffLoadedMsg{dir: r.repository.Dir, path: r.file.Path, fileDiff: fileDiff}
+	highlighted, err := highlight.FileDiff(r.file.Path, fileDiff)
+	if err != nil {
+		return gitFailedMsg{err: err}
+	}
+	return diffLoadedMsg{dir: r.repository.Dir, path: r.file.Path, contextLines: r.contextLines, fileDiff: highlighted}
 }
 
 func (r fileRequest) stage() tea.Msg {
@@ -236,12 +253,13 @@ func (r fileRequest) discard() tea.Msg {
 }
 
 type commitDiffRequest struct {
-	repository gitrepo.Repository
-	hash       string
+	repository   gitrepo.Repository
+	hash         string
+	contextLines int
 }
 
 func (r commitDiffRequest) load() tea.Msg {
-	text, err := r.repository.CommitDiff(context.Background(), r.hash)
+	text, err := r.repository.CommitDiff(context.Background(), r.hash, r.contextLines)
 	if err != nil {
 		return gitFailedMsg{err: err}
 	}
@@ -249,7 +267,15 @@ func (r commitDiffRequest) load() tea.Msg {
 	if err != nil {
 		return gitFailedMsg{err: fmt.Errorf("parse diff of commit %s: %w", r.hash, err)}
 	}
-	return commitDiffLoadedMsg{dir: r.repository.Dir, hash: r.hash, sections: sections}
+	highlighted := []diff.FileSection{}
+	for _, section := range sections {
+		fileDiff, err := highlight.FileDiff(section.Path, section.FileDiff)
+		if err != nil {
+			return gitFailedMsg{err: fmt.Errorf("commit %s: %w", r.hash, err)}
+		}
+		highlighted = append(highlighted, diff.FileSection{Path: section.Path, FileDiff: fileDiff})
+	}
+	return commitDiffLoadedMsg{dir: r.repository.Dir, hash: r.hash, contextLines: r.contextLines, sections: highlighted}
 }
 
 type commitRequest struct {

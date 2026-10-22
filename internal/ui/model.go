@@ -68,6 +68,8 @@ type Model struct {
 	rejection        string
 	view             viewKind
 	diffFullscreen   bool
+	wholeFile        bool
+	unified          bool
 	status           gitrepo.Status
 	stagedLineCounts diff.LineCounts
 	selected         int
@@ -83,6 +85,7 @@ type Model struct {
 	// logOffset counts rows of the log tree, commit and file rows alike.
 	logOffset          int
 	commitFiles        map[string][]diff.FileSection
+	commitContext      map[string]int
 	expanded           map[string]bool
 	logFilter          searchTerms
 	searching          bool
@@ -134,6 +137,7 @@ func New(list Lister) Model {
 		logLimit:       logPageSize,
 		selectedFile:   commitRow,
 		commitFiles:    map[string][]diff.FileSection{},
+		commitContext:  map[string]int{},
 		expanded:       map[string]bool{},
 		searchInput:    searchInput,
 		diffView:       viewport.New(),
@@ -179,7 +183,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.stagedLineCounts = msg.stagedLineCounts
 		return m.withStatus(msg.status)
 	case diffLoadedMsg:
-		if msg.dir != m.repository.Dir || msg.path != m.selectedPath() {
+		if msg.dir != m.repository.Dir || msg.path != m.selectedPath() || msg.contextLines != m.contextLines() {
 			return m, nil
 		}
 		if msg.path != m.diffPath && m.view == viewChanges {
@@ -194,11 +198,13 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		return m.withCommits(msg.commits, msg.loadedAt)
 	case commitDiffLoadedMsg:
-		if msg.dir != m.repository.Dir {
+		if msg.dir != m.repository.Dir || msg.contextLines != m.contextLines() {
 			return m, nil
 		}
 		m.commitFiles = maps.Clone(m.commitFiles)
 		m.commitFiles[msg.hash] = msg.sections
+		m.commitContext = maps.Clone(m.commitContext)
+		m.commitContext[msg.hash] = msg.contextLines
 		return m.withDiffContent().withListScrolled(), nil
 	case indexChangedMsg:
 		if msg.dir != m.repository.Dir {
@@ -357,6 +363,13 @@ func (m Model) updateBrowsing(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	case key.Matches(msg, fullscreenKey):
 		m.diffFullscreen = !m.diffFullscreen
 		return m.withLayout(), nil
+	case key.Matches(msg, wholeFileKey):
+		m.wholeFile = !m.wholeFile
+		m.diffView.SetYOffset(0)
+		return m, tea.Batch(m.loadSelectedDiff(), m.loadSelectedCommitDiff())
+	case key.Matches(msg, unifiedKey):
+		m.unified = !m.unified
+		return m.withDiffContent(), nil
 	case key.Matches(msg, expandKey) && m.view == viewLog:
 		return m.toggleExpanded()
 	case key.Matches(msg, searchKey) && m.view == viewLog:
@@ -433,6 +446,8 @@ func (m Model) withRepository(repository gitrepo.Repository, rejection string) M
 	next.rejection = rejection
 	next.view = m.view
 	next.diffFullscreen = m.diffFullscreen
+	next.wholeFile = m.wholeFile
+	next.unified = m.unified
 	next.width = m.width
 	next.height = m.height
 	return next.withLayout()
@@ -818,16 +833,23 @@ func (m Model) loadSelectedDiff() tea.Cmd {
 	if len(m.status.Files) == 0 {
 		return nil
 	}
-	return fileRequest{repository: m.repository, file: m.status.Files[m.selected]}.loadDiff
+	return fileDiffRequest{repository: m.repository, file: m.status.Files[m.selected], contextLines: m.contextLines()}.load
 }
 
 func (m Model) loadSelectedCommitDiff() tea.Cmd {
 	hash := m.selectedCommitHash()
 	_, loaded := m.commitFiles[hash]
-	if m.view != viewLog || hash == "" || loaded {
+	if m.view != viewLog || hash == "" || (loaded && m.commitContext[hash] == m.contextLines()) {
 		return nil
 	}
-	return commitDiffRequest{repository: m.repository, hash: hash}.load
+	return commitDiffRequest{repository: m.repository, hash: hash, contextLines: m.contextLines()}.load
+}
+
+func (m Model) contextLines() int {
+	if m.wholeFile {
+		return wholeFileContext
+	}
+	return hunkContext
 }
 
 func (m Model) selectedPath() string {
@@ -866,14 +888,21 @@ func (m Model) diffLines() []string {
 	sections, loaded := m.commitFiles[m.selectedCommitHash()]
 	switch {
 	case m.view == viewLog && loaded && m.selectedFile != commitRow:
-		return renderFileDiff(sections[m.selectedFile].FileDiff, width)
+		return renderFileDiff(sections[m.selectedFile].FileDiff, m.changeLayout(), width)
 	case m.view == viewLog && loaded:
-		return renderCommit(m.commits[m.selectedCommit], sections, width)
+		return renderCommit(m.commits[m.selectedCommit], sections, m.changeLayout(), width)
 	case m.view == viewChanges && m.diffPath != "":
-		return renderFileDiff(m.fileDiff, width)
+		return renderFileDiff(m.fileDiff, m.changeLayout(), width)
 	default:
 		return []string{}
 	}
+}
+
+func (m Model) changeLayout() diffLayout {
+	if m.unified {
+		return renderUnified
+	}
+	return renderSideBySide
 }
 
 func (m Model) withListScrolled() Model {

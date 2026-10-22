@@ -5,8 +5,9 @@ writes the code and you read every line before it lands: a slimmed-down lazygit 
 
 ## What it does
 
-- Lists the working tree's changed files and shows each as a side-by-side diff, or one-sided for an added or deleted
-  file. In a block that removes and adds as many lines, each pair marks the part that changed.
+- Lists the working tree's changed files and shows each as a side-by-side or unified diff, or one-sided for an added
+  or deleted file. In a block that removes and adds as many lines, each pair marks the part that changed.
+- Highlights the code's syntax in every diff, picking the language by file name.
 - Stages, unstages, commits, amends and pushes.
 - Browses the log with a commit graph, expands a commit into its files, and searches by hash, author, ref or message.
 - Refreshes every 2 seconds, so the review keeps up with edits as they happen.
@@ -41,6 +42,8 @@ perusal -repo <dir>  # review the repository <dir> is in
 | `a` | changes | stage or unstage everything |
 | `x` `X` | changes | discard the file or every change, after a confirm. Untracked files are deleted, ignored ones stay |
 | `d` | anywhere | show the diff fullscreen, `d` again brings the lists back |
+| `f` | anywhere | show the whole file around the changes, `f` again shows only the changed parts |
+| `u` | anywhere | show the diff unified, removed lines above added ones, `u` again shows it side by side |
 | `c` | anywhere | open the commit popup |
 | `P` | anywhere | open the push popup |
 | `A` | log | amend the selected commit with the staged changes |

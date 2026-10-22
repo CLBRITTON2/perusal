@@ -18,12 +18,20 @@ const (
 	LineAdded
 )
 
-// Changed is the part of Text that differs from the line paired with it, empty when none is marked.
+// Changed is the part of Text that differs from the line paired with it, empty when none is marked. Tokens are
+// sorted and cover only the colored parts of Text.
 type Line struct {
 	Kind    LineKind
 	Number  int
 	Text    string
 	Changed Span
+	Tokens  []Token
+}
+
+// Color is a #rrggbb foreground.
+type Token struct {
+	Span  Span
+	Color string
 }
 
 // Span is a byte range of a line's Text, End excluded.

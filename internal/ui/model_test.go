@@ -224,6 +224,45 @@ func overviewOfTwo(t *testing.T) Model {
 	}, problems: []string{}})
 }
 
+func TestWholeFile(t *testing.T) {
+	t.Run("dropsAFileDiffLoadedWithTheOtherContext", dropsAFileDiffLoadedWithTheOtherContext)
+	t.Run("reloadsACommitOnlyWhileItWasLoadedWithTheOtherContext", reloadsACommitOnlyWhileItWasLoadedWithTheOtherContext)
+}
+
+func dropsAFileDiffLoadedWithTheOtherContext(t *testing.T) {
+	m := update(t, New(listNothing), tea.WindowSizeMsg{Width: 120, Height: 30})
+	m = update(t, m, focusOn("C:/dev/repo"))
+	m = update(t, m, statusLoadedMsg{dir: "C:/dev/repo", status: gitrepo.Status{Files: twoFiles()}})
+	next, reload := m.Update(tea.KeyPressMsg{Code: 'f', Text: "f"})
+	m = asModel(t, next)
+
+	m = update(t, m, diffLoadedMsg{dir: "C:/dev/repo", path: "a.go", contextLines: hunkContext,
+		fileDiff: diff.FileDiff{Hunks: []diff.Hunk{{Header: "@@ -5 +5 @@"}}}})
+	stale := m.fileDiff
+	m = update(t, m, diffLoadedMsg{dir: "C:/dev/repo", path: "a.go", contextLines: wholeFileContext,
+		fileDiff: diff.FileDiff{Hunks: []diff.Hunk{{Header: "@@ -1,9 +1,9 @@"}}}})
+
+	if reload == nil || len(stale.Hunks) != 0 || len(m.fileDiff.Hunks) != 1 || m.fileDiff.Hunks[0].Header != "@@ -1,9 +1,9 @@" {
+		t.Fatalf("got reload %v, stale %v, shown %v, want only the whole file diff shown", reload, stale, m.fileDiff)
+	}
+}
+
+func reloadsACommitOnlyWhileItWasLoadedWithTheOtherContext(t *testing.T) {
+	commit := gitrepo.Commit{Hash: strings.Repeat("1", 40), Message: "Add tree"}
+	m := logOf(t, []gitrepo.Commit{commit})
+	m = update(t, m, commitDiffLoadedMsg{dir: "C:/dev/repo", hash: commit.Hash, contextLines: hunkContext,
+		sections: []diff.FileSection{{Path: "a.go"}}})
+	loadedAtFirst := m.loadSelectedCommitDiff()
+
+	m = update(t, m, tea.KeyPressMsg{Code: 'f', Text: "f"})
+	wholeFile := m.loadSelectedCommitDiff()
+	m = update(t, m, tea.KeyPressMsg{Code: 'f', Text: "f"})
+
+	if loadedAtFirst != nil || wholeFile == nil || m.loadSelectedCommitDiff() != nil {
+		t.Fatalf("got loads %v, %v, %v, want only the whole file one", loadedAtFirst, wholeFile, m.loadSelectedCommitDiff())
+	}
+}
+
 func TestDiscardOpensOnTheSelectedFile(t *testing.T) {
 	m := update(t, New(listNothing), tea.WindowSizeMsg{Width: 120, Height: 30})
 	m = update(t, m, focusOn("C:/dev/repo"))
@@ -328,7 +367,7 @@ func expandingACommitListsItsFilesUnderIt(t *testing.T) {
 	first := gitrepo.Commit{Hash: strings.Repeat("1", 40), Message: "Add tree"}
 	second := gitrepo.Commit{Hash: strings.Repeat("2", 40), Message: "Fix wrap"}
 	m := logOf(t, []gitrepo.Commit{first, second})
-	m = update(t, m, commitDiffLoadedMsg{dir: "C:/dev/repo", hash: first.Hash, sections: []diff.FileSection{
+	m = update(t, m, commitDiffLoadedMsg{dir: "C:/dev/repo", hash: first.Hash, contextLines: hunkContext, sections: []diff.FileSection{
 		{Path: "a.go", FileDiff: diff.FileDiff{Change: diff.FileAdded}},
 		{Path: "b.go", FileDiff: diff.FileDiff{Change: diff.FileModified}},
 	}})

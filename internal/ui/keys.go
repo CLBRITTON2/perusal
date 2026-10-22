@@ -23,6 +23,8 @@ var (
 	scrollDownKey     = key.NewBinding(key.WithKeys("ctrl+d", "pgdown"), key.WithHelp("^d/^u", "scroll"))
 	scrollUpKey       = key.NewBinding(key.WithKeys("ctrl+u", "pgup"))
 	fullscreenKey     = key.NewBinding(key.WithKeys("d"), key.WithHelp("d", "fullscreen"))
+	wholeFileKey      = key.NewBinding(key.WithKeys("f"), key.WithHelp("f", "whole file"))
+	unifiedKey        = key.NewBinding(key.WithKeys("u"), key.WithHelp("u", "unified"))
 	overviewKey       = key.NewBinding(key.WithKeys("o"), key.WithHelp("o", "overview"))
 	openRepositoryKey = key.NewBinding(key.WithKeys("enter"), key.WithHelp("enter", "open"))
 	pullKey           = key.NewBinding(key.WithKeys("p"), key.WithHelp("p", "pull"))
@@ -45,8 +47,8 @@ var (
 )
 
 var (
-	changesHelp      = []key.Binding{downKey, stageKey, stageAllKey, discardKey, commitKey, pushKey, switchViewKey, scrollDownKey, fullscreenKey, branchesKey, overviewKey, quitKey}
-	logHelp          = []key.Binding{downKey, expandKey, searchKey, amendKey, commitKey, pushKey, switchViewKey, scrollDownKey, fullscreenKey, branchesKey, overviewKey, quitKey}
+	changesHelp      = []key.Binding{downKey, stageKey, stageAllKey, discardKey, commitKey, pushKey, switchViewKey, scrollDownKey, fullscreenKey, wholeFileKey, unifiedKey, branchesKey, overviewKey, quitKey}
+	logHelp          = []key.Binding{downKey, expandKey, searchKey, amendKey, commitKey, pushKey, switchViewKey, scrollDownKey, fullscreenKey, wholeFileKey, unifiedKey, branchesKey, overviewKey, quitKey}
 	overviewHelp     = []key.Binding{downKey, openRepositoryKey, pullKey, closeOverviewKey, quitKey}
 	branchesHelp     = []key.Binding{downKey, switchBranchKey, deleteBranchKey, closeBranchesKey, quitKey}
 	searchHelp       = []key.Binding{keepSearchKey, clearSearchKey}

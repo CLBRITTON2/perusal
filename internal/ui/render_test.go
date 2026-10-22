@@ -5,6 +5,7 @@ import (
 	"strings"
 	"testing"
 
+	"charm.land/lipgloss/v2"
 	"github.com/charmbracelet/x/ansi"
 
 	"github.com/CLBRITTON2/perusal/internal/diff"
@@ -20,6 +21,26 @@ func TestRenderSideBySide(t *testing.T) {
 	t.Run("wrapsALongLineAndPadsTheOtherSide", wrapsALongLineAndPadsTheOtherSide)
 }
 
+func TestRenderUnifiedListsRemovedLinesAboveAddedOnes(t *testing.T) {
+	fileDiff := diff.FileDiff{Hunks: []diff.Hunk{{
+		Header: "@@ -1,4 +1,5 @@",
+		Rows: []diff.Row{
+			{Left: diff.Line{Kind: diff.LineContext, Number: 1, Text: "a"}, Right: diff.Line{Kind: diff.LineContext, Number: 1, Text: "a"}},
+			{Left: diff.Line{Kind: diff.LineRemoved, Number: 2, Text: "b"}, Right: diff.Line{Kind: diff.LineAdded, Number: 2, Text: "B"}},
+			{Left: diff.Line{Kind: diff.LineRemoved, Number: 3, Text: "c"}, Right: diff.Line{Kind: diff.LineAdded, Number: 3, Text: "C"}},
+			{Left: diff.Line{Kind: diff.LineBlank}, Right: diff.Line{Kind: diff.LineAdded, Number: 4, Text: "d"}},
+			{Left: diff.Line{Kind: diff.LineContext, Number: 4, Text: "e"}, Right: diff.Line{Kind: diff.LineContext, Number: 5, Text: "e"}},
+		},
+	}}}
+
+	got := strippedLines(renderUnified(fileDiff, 6)[1:])
+
+	want := []string{"1 1 a ", "2   b ", "3   c ", "  2 B ", "  3 C ", "  4 d ", "4 5 e "}
+	if !slices.Equal(got, want) {
+		t.Fatalf("got\n%q\nwant\n%q", got, want)
+	}
+}
+
 func TestRenderFileDiff(t *testing.T) {
 	t.Run("showsANewFileAcrossTheWholeWidth", showsANewFileAcrossTheWholeWidth)
 }
@@ -29,9 +50,24 @@ func TestTheChangedPartKeepsItsHighlightPastATabAndAWrap(t *testing.T) {
 
 	lines := wrapSide(line, 1, 12)
 
-	if len(lines) != 3 || !strings.Contains(lines[0], addedChangedStyle.Render("C")) ||
-		!strings.Contains(lines[1], addedChangedStyle.Render("HANGED")) || strings.Contains(lines[1], addedChangedStyle.Render("HANGED ")) {
-		t.Fatalf("got %q, want C highlighted at the end of the first segment and HANGED at the start of the second", lines)
+	got := strippedLines(lines)
+	want := []string{"1     keep  ", "  CHANGED   ", "  tail      "}
+	if !slices.Equal(got, want) || !strings.Contains(lines[1], addedChangedStyle.Render("CHANGED")+addedTextStyle.Render("   ")) {
+		t.Fatalf("got\n%q\nwant\n%q with only CHANGED highlighted", got, want)
+	}
+}
+
+func TestATokenSpanningTheChangedPartKeepsBothItsColorAndTheChangedBackground(t *testing.T) {
+	line := diff.Line{Kind: diff.LineAdded, Number: 1, Text: "\tret value", Changed: diff.Span{Start: 4, End: 10},
+		Tokens: []diff.Token{{Span: diff.Span{Start: 1, End: 7}, Color: "#31748f"}}}
+
+	lines := wrapSide(line, 1, 40)
+
+	want := addedTextStyle.Foreground(lipgloss.Color("#31748f")).Render("ret") +
+		addedChangedStyle.Foreground(lipgloss.Color("#31748f")).Render(" va") +
+		addedChangedStyle.Render("lue")
+	if len(lines) != 1 || !strings.Contains(lines[0], want) {
+		t.Fatalf("got %q, want %q", lines, want)
 	}
 }
 
@@ -63,7 +99,7 @@ func showsANewFileAcrossTheWholeWidth(t *testing.T) {
 		},
 	}}}
 
-	lines := renderFileDiff(fileDiff, 21)
+	lines := renderFileDiff(fileDiff, renderSideBySide, 21)
 
 	got := strippedLines(lines[1:])
 	want := []string{"1 package x          ", "2                    "}
@@ -77,14 +113,14 @@ func wrapsALongLineAndPadsTheOtherSide(t *testing.T) {
 		Header: "@@ -7 +7 @@",
 		Rows: []diff.Row{
 			{Left: diff.Line{Kind: diff.LineRemoved, Number: 7, Text: "old"},
-				Right: diff.Line{Kind: diff.LineAdded, Number: 7, Text: "abcdefghijklmnopqrst"}},
+				Right: diff.Line{Kind: diff.LineAdded, Number: 7, Text: "abcd efgh ijklmnop"}},
 		},
 	}}}
 
 	lines := renderSideBySide(fileDiff, 21)
 
 	got := strippedLines(lines[1:])
-	want := []string{"7 old     │7 abcdefgh", "          │  ijklmnop", "          │  qrst    "}
+	want := []string{"7 old     │7 abcd    ", "          │  efgh    ", "          │  ijklmnop"}
 	if !slices.Equal(got, want) {
 		t.Fatalf("got\n%q\nwant\n%q", got, want)
 	}

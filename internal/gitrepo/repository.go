@@ -107,24 +107,26 @@ func ParseLog(output []byte) ([]Commit, error) {
 	return commits, nil
 }
 
-// A merge is diffed against its first parent.
-func (r Repository) CommitDiff(ctx context.Context, hash string) (string, error) {
+// A merge is diffed against its first parent. contextLines is git's --unified.
+func (r Repository) CommitDiff(ctx context.Context, hash string, contextLines int) (string, error) {
 	if !commitHash.MatchString(hash) {
 		return "", fmt.Errorf("show commit %q in %s: not a full commit hash", hash, r.Dir)
 	}
 	output, err := runGit(ctx, r.Dir, []string{"show", "--format=", "--no-color", "--no-ext-diff", "--find-renames",
-		"--diff-merges=first-parent", hash, "--"})
+		"--unified=" + strconv.Itoa(contextLines), "--diff-merges=first-parent", hash, "--"})
 	if err != nil {
 		return "", err
 	}
 	return string(output), nil
 }
 
-func (r Repository) FileDiff(ctx context.Context, file FileStatus) (string, error) {
+// contextLines is git's --unified. An untracked file's diff always shows the whole file.
+func (r Repository) FileDiff(ctx context.Context, file FileStatus, contextLines int) (string, error) {
 	if file.IsUntracked() {
 		return r.untrackedFileDiff(ctx, file.Path)
 	}
-	args := []string{"diff", "HEAD", "--no-color", "--no-ext-diff", "--find-renames", "--", file.Path}
+	args := []string{"diff", "HEAD", "--no-color", "--no-ext-diff", "--find-renames",
+		"--unified=" + strconv.Itoa(contextLines), "--", file.Path}
 	if file.OriginalPath != "" {
 		args = append(args, file.OriginalPath)
 	}
