@@ -1,11 +1,12 @@
 # perusal
 
-A small terminal git client for reading diffs, like a stripped-down lazygit. The diff gets most of the screen, and it
-refreshes every couple of seconds so you can watch changes land. It also stages, commits, amends, pushes, browses the
-log and switches branches.
+A small terminal git client for reading diffs, a stripped-down [lazygit](https://github.com/jesseduffield/lazygit).
+The diff gets most of the screen and the working tree is reread every 2 seconds. It also stages, commits, amends,
+pushes, browses the log and switches branches, among other things.
 
-I use it to manage repos on Windows with an LLM running as its own user account, which is what follow mode is for.
-lazygit, gitui and tig cover most of the same ground and more.
+On Windows, follow mode also tracks an LLM coding agent that runs as its own user account: `perusal follow` shows
+the diffs of whichever repository the agent is working in. lazygit, [gitui](https://github.com/gitui-org/gitui) and
+[tig](https://github.com/jonas/tig) cover most of the same ground and more.
 
 perusal runs your local `git` for everything. There is no GitHub API and no login: a push uses whatever credentials
 git already has.
@@ -93,10 +94,11 @@ working in, and switches as the agent moves between them. It reads
 
 - `agentAccount` is the Windows account the agent runs as.
 - `focusFile` holds one absolute path per line, the directories the agent is working in, and is rewritten whenever
-  they change. Something on the agent side has to write it, such as a herdr plugin, and its first line is where the
-  agent's focused session works, such as its pane's directory. perusal opens the first repository with uncommitted
-  changes, or the first one when all are clean. A new list that starts with the same repository and still names the
-  one under review keeps it open, and a path that fails a check below is shown in the footer.
+  they change. Something on the agent side has to write it, such as a [herdr](https://github.com/herdrdev/herdr)
+  plugin, and its first line is where the agent's focused session works, such as its pane's directory. perusal opens
+  the first repository with uncommitted changes, or the first one when all are clean. A new list that starts with the
+  same repository and still names the one under review keeps it open, and a path that fails a check below is shown in
+  the footer.
 - `agentDir` and `ownerDir` are one directory as the agent and you reach it. perusal maps a path under `agentDir`
   to the same path under `ownerDir`, and refuses anything outside it.
 
