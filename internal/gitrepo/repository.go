@@ -65,8 +65,28 @@ func (r Repository) Status(ctx context.Context) (Status, error) {
 
 // commitGraph needs --topo-order. Fails on an unborn branch.
 func (r Repository) Log(ctx context.Context, limit int) ([]Commit, error) {
+	return r.logRevisions(ctx, limit, []string{})
+}
+
+// LogAhead lists, newest first, at most limit of the commits HEAD has that ref lacks.
+func (r Repository) LogAhead(ctx context.Context, ref string, limit int) ([]Commit, error) {
+	return r.logRevisions(ctx, limit, []string{ref + "..HEAD"})
+}
+
+// LogBehind lists, newest first, at most limit of the commits ref has that HEAD lacks.
+func (r Repository) LogBehind(ctx context.Context, ref string, limit int) ([]Commit, error) {
+	return r.logRevisions(ctx, limit, []string{"HEAD.." + ref})
+}
+
+// LogOnNoRemote lists, newest first, at most limit of the commits in HEAD that no remote-tracking branch holds.
+func (r Repository) LogOnNoRemote(ctx context.Context, limit int) ([]Commit, error) {
+	return r.logRevisions(ctx, limit, []string{"HEAD", "--not", "--remotes"})
+}
+
+func (r Repository) logRevisions(ctx context.Context, limit int, revisions []string) ([]Commit, error) {
 	format := strings.Join([]string{"%H", "%h", "%P", "%D", "%an", "%at", "%B"}, logFieldSeparator)
-	output, err := r.git(ctx, "log", "-z", "--topo-order", "--max-count="+strconv.Itoa(limit), "--format="+format)
+	output, err := r.git(ctx, slices.Concat([]string{"log", "-z", "--topo-order", "--max-count=" + strconv.Itoa(limit),
+		"--format=" + format}, revisions, []string{"--"})...)
 	if err != nil {
 		return nil, err
 	}

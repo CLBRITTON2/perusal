@@ -252,6 +252,35 @@ func aBranchWithNoUpstreamIsPublished(t *testing.T) {
 	}
 }
 
+func TestTheOverviewDetailsTheSelectedRepository(t *testing.T) {
+	m := update(t, overviewWithTwoRepositories(t), overviewMsg{rows: []overviewRow{
+		repositoryRow{
+			FoundRepository: foundAt("first", "C:/dev/first"),
+			status: gitrepo.Status{
+				Branch: "main", Tracking: gitrepo.Tracking{Upstream: "origin/main", Ahead: 1, Behind: 1}, HasCommits: true,
+				Files: []gitrepo.FileStatus{{Path: "edited.go", IndexStatus: ' ', WorktreeStatus: 'M'}},
+			},
+			outgoing: []gitrepo.Commit{{ShortHash: "aaa1111", Summary: "Add the local change"}},
+			incoming: []gitrepo.Commit{{ShortHash: "bbb2222", Summary: "Add the remote change"}},
+		},
+		repositoryRow{FoundRepository: foundAt("second", "C:/dev/second")},
+	}, failures: []string{}})
+	first := ansi.Strip(m.renderScreen())
+
+	m = update(t, m, tea.KeyPressMsg{Code: 'j', Text: "j"})
+
+	for _, want := range []string{"changes", " M edited.go", "outgoing", "aaa1111 Add the local change", "incoming",
+		"bbb2222 Add the remote change"} {
+		if !strings.Contains(first, want) {
+			t.Fatalf("got screen:\n%s\nwant %q", first, want)
+		}
+	}
+	if second := ansi.Strip(m.renderScreen()); strings.Contains(second, "edited.go") ||
+		strings.Contains(second, "aaa1111") {
+		t.Fatalf("got screen:\n%s\nwant the details of second only", second)
+	}
+}
+
 func TestMayBeFinished(t *testing.T) {
 	changed := []gitrepo.FileStatus{{Path: "a.go", IndexStatus: ' ', WorktreeStatus: 'M'}}
 	for name, test := range map[string]struct {

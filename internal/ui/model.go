@@ -1129,7 +1129,7 @@ func (m Model) changeLayout() diffLayout {
 func (m Model) withListScrolled() Model {
 	m.logOffset = scrolledOffset(m.logOffset, max(m.selectedLogRow(m.visibleLogRows()), 0), m.listInnerHeight())
 	m.changesOffset = scrolledOffset(m.changesOffset, m.selectedChange, m.listInnerHeight())
-	m.overview = m.overview.scrolled(m.paneInnerHeight())
+	m.overview = m.overview.scrolled(m.overviewTableInnerHeight())
 	m.branches.selectableList = m.branches.scrolled(m.paneInnerHeight())
 	return m
 }
@@ -1235,8 +1235,7 @@ func (m Model) renderScreen() string {
 func (m Model) renderColumns() string {
 	switch {
 	case m.mode == modeOverview:
-		return renderListPane("repositories", m.overview, m.overviewCells, "no repositories found", m.width-2,
-			m.paneInnerHeight())
+		return m.renderOverview()
 	case m.mode == modeBranches:
 		return renderListPane("branches", m.branches.selectableList, m.branches.cells, "no branches yet", m.width-2,
 			m.paneInnerHeight())

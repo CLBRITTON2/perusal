@@ -8,9 +8,11 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"time"
 
 	"charm.land/bubbles/v2/key"
 	tea "charm.land/bubbletea/v2"
+	"charm.land/lipgloss/v2"
 	"github.com/charmbracelet/x/ansi"
 
 	"github.com/CLBRITTON2/perusal/internal/focus"
@@ -19,6 +21,8 @@ import (
 
 type RepositoryFinder func(context.Context) (focus.Found, error)
 
+const overviewCommitLimit = 50
+
 type overviewRow interface {
 	relativePath() string
 	cells() []string
@@ -26,7 +30,8 @@ type overviewRow interface {
 
 // commitsBehindDefault counts the commits HEAD lacks from defaultBranch, and stays 0 when defaultBranch is the
 // upstream, whose count the status already holds. commitsOnNoRemote is counted only for an unpublished branch.
-// finished is a branch p leaves for the default branch.
+// finished is a branch p leaves for the default branch. outgoing holds the commits P sends and incoming those p
+// brings, newest first and at most overviewCommitLimit of each.
 type repositoryRow struct {
 	focus.FoundRepository
 	status               gitrepo.Status
@@ -34,6 +39,9 @@ type repositoryRow struct {
 	commitsBehindDefault int
 	commitsOnNoRemote    int
 	finished             bool
+	outgoing             []gitrepo.Commit
+	incoming             []gitrepo.Commit
+	loadedAt             time.Time
 }
 
 type refusedRow struct {
@@ -149,10 +157,20 @@ func loadOverviewRow(found focus.FoundRepository) (repositoryRow, error) {
 	if err != nil {
 		return repositoryRow{}, err
 	}
-	row := repositoryRow{FoundRepository: found, status: status, defaultBranch: defaultBranch}
+	row := repositoryRow{FoundRepository: found, status: status, defaultBranch: defaultBranch, loadedAt: time.Now()}
 	if !status.HasCommits {
 		return row, nil
 	}
+	outgoing, err := loadOutgoing(ctx, found.Repository, status)
+	if err != nil {
+		return repositoryRow{}, err
+	}
+	row.outgoing = outgoing
+	incoming, err := loadIncoming(ctx, found.Repository, status)
+	if err != nil {
+		return repositoryRow{}, err
+	}
+	row.incoming = incoming
 	if status.Branch != "" && !status.IsPublished() {
 		onNoRemote, err := found.Repository.CommitsOnNoRemote(ctx)
 		if err != nil {
@@ -179,6 +197,24 @@ func loadOverviewRow(found focus.FoundRepository) (repositoryRow, error) {
 	}
 	row.commitsBehindDefault = behind
 	return row, nil
+}
+
+// The commits P sends: those past the upstream, or for an unpublished branch those no remote holds.
+func loadOutgoing(ctx context.Context, repository gitrepo.Repository, status gitrepo.Status) ([]gitrepo.Commit, error) {
+	switch {
+	case status.Branch == "":
+		return []gitrepo.Commit{}, nil
+	case status.IsPublished():
+		return repository.LogAhead(ctx, status.Upstream, overviewCommitLimit)
+	}
+	return repository.LogOnNoRemote(ctx, overviewCommitLimit)
+}
+
+func loadIncoming(ctx context.Context, repository gitrepo.Repository, status gitrepo.Status) ([]gitrepo.Commit, error) {
+	if status.Upstream == "" || status.UpstreamGone {
+		return []gitrepo.Commit{}, nil
+	}
+	return repository.LogBehind(ctx, status.Upstream, overviewCommitLimit)
 }
 
 func (r repositoryRow) relativePath() string {
@@ -238,10 +274,10 @@ func (m Model) updateOverview(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		m.mode = modeBrowsing
 		return m, nil
 	case key.Matches(msg, downKey):
-		m.overview = m.overview.withSelected(m.overview.selected + 1).scrolled(m.paneInnerHeight())
+		m.overview = m.overview.withSelected(m.overview.selected + 1).scrolled(m.overviewTableInnerHeight())
 		return m, nil
 	case key.Matches(msg, upKey):
-		m.overview = m.overview.withSelected(m.overview.selected - 1).scrolled(m.paneInnerHeight())
+		m.overview = m.overview.withSelected(m.overview.selected - 1).scrolled(m.overviewTableInnerHeight())
 		return m, nil
 	case key.Matches(msg, openRepositoryKey):
 		return m.withSelectedRepository(m.openRepositoryRow)
@@ -343,6 +379,56 @@ func (m Model) openRepositoryRow(row repositoryRow) (tea.Model, tea.Cmd) {
 		return m, nil
 	}
 	return m.withFocusedRepository(row.Repository)
+}
+
+// The table takes the top half and the selected repository's changes, outgoing and incoming commits the rest.
+func (m Model) renderOverview() string {
+	table := renderListPane("repositories", m.overview, m.overviewCells, "no repositories found", m.width-2,
+		m.overviewTableInnerHeight())
+	return lipgloss.JoinVertical(lipgloss.Left, table, m.renderOverviewDetails())
+}
+
+func (m Model) overviewTableInnerHeight() int {
+	return max(m.columnHeight()-m.columnHeight()/2-2, 0)
+}
+
+func (m Model) renderOverviewDetails() string {
+	height := max(m.columnHeight()/2-2, 0)
+	selected, _ := m.overview.selectedRow()
+	row, isRepository := selected.(repositoryRow)
+	if !isRepository {
+		return renderPane("", "", "", []string{}, m.width-2, height)
+	}
+	width := m.width / 3
+	lastWidth := m.width - 2*width
+	return lipgloss.JoinHorizontal(lipgloss.Top,
+		renderPane("changes", "", "", renderChangeRows(row.status.Files), width-2, height),
+		renderPane("outgoing", "", "", renderCommitRows(row.outgoing, row.loadedAt, "nothing to push", width-2),
+			width-2, height),
+		renderPane("incoming", "", "", renderCommitRows(row.incoming, row.loadedAt, "nothing to pull", lastWidth-2),
+			lastWidth-2, height))
+}
+
+func renderChangeRows(files []gitrepo.FileStatus) []string {
+	if len(files) == 0 {
+		return []string{mutedStyle.Render("clean")}
+	}
+	lines := []string{}
+	for _, file := range files {
+		lines = append(lines, renderFileRow(file))
+	}
+	return lines
+}
+
+func renderCommitRows(commits []gitrepo.Commit, loadedAt time.Time, emptyText string, width int) []string {
+	if len(commits) == 0 {
+		return []string{mutedStyle.Render(emptyText)}
+	}
+	lines := []string{}
+	for _, commit := range commits {
+		lines = append(lines, renderCommitRow(commit, searchTerms{}, loadedAt, width))
+	}
+	return lines
 }
 
 func (m Model) overviewCells(row overviewRow) []string {

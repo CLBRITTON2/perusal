@@ -380,6 +380,34 @@ func refusesADivergedBranch(t *testing.T) {
 	}
 }
 
+func TestLogAheadAndBehindListTheCommitsOnEachSide(t *testing.T) {
+	clone, _ := cloneBehindOther(t)
+	runSteps(t, clone, [][]string{
+		{"-C", clone, "commit", "--allow-empty", "--message", "Local"},
+		{"-C", clone, "fetch"},
+	})
+	repository := Repository{Dir: clone}
+
+	ahead, aheadErr := repository.LogAhead(context.Background(), "origin/main", 10)
+	behind, behindErr := repository.LogBehind(context.Background(), "origin/main", 10)
+
+	if aheadErr != nil || behindErr != nil || len(ahead) != 1 || ahead[0].Summary != "Local" || len(behind) != 1 ||
+		behind[0].Summary != "Pushed" {
+		t.Fatalf("got ahead %+v (%v), behind %+v (%v), want Local ahead and Pushed behind", ahead, aheadErr, behind,
+			behindErr)
+	}
+}
+
+func TestLogOnNoRemoteListsTheCommitsNoRemoteHolds(t *testing.T) {
+	_, clone, _ := featureTrackingMain(t)
+
+	commits, err := Repository{Dir: clone}.LogOnNoRemote(context.Background(), 10)
+
+	if err != nil || len(commits) != 1 || commits[0].Summary != "Feature" {
+		t.Fatalf("got %+v, %v, want only Feature", commits, err)
+	}
+}
+
 func cloneBehindOther(t *testing.T) (string, string) {
 	t.Helper()
 	remote, clone := pushedClone(t)
