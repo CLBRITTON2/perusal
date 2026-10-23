@@ -288,19 +288,24 @@ func (r Repository) Commit(ctx context.Context, message string) (string, error) 
 	return summary, nil
 }
 
-func (r Repository) Push(ctx context.Context) error {
-	return r.run(ctx, "push")
+func (r Repository) Push(ctx context.Context, branch string) error {
+	return r.run(ctx, "push", "origin", sameNameRefspec(branch))
 }
 
 // Publish pushes branch to the same name on origin and makes that its upstream.
 func (r Repository) Publish(ctx context.Context, branch string) error {
-	return r.run(ctx, "push", "--set-upstream", "origin", "refs/heads/"+branch)
+	return r.run(ctx, "push", "--set-upstream", "origin", sameNameRefspec(branch))
 }
 
 // git refuses unless the remote branch is still where it was last fetched and that tip is in the local reflog,
 // so a force push replaces only commits this branch already rewrote.
-func (r Repository) ForcePush(ctx context.Context) error {
-	return r.run(ctx, "push", "--force-with-lease", "--force-if-includes")
+func (r Repository) ForcePush(ctx context.Context, branch string) error {
+	return r.run(ctx, "push", "--force-with-lease", "--force-if-includes", "origin", sameNameRefspec(branch))
+}
+
+// A refspec with no destination lets push.default=upstream send the branch to whatever it tracks, main included.
+func sameNameRefspec(branch string) string {
+	return "refs/heads/" + branch + ":refs/heads/" + branch
 }
 
 // Reword replaces the message of hash, which below HEAD must be an ancestor with no merge above it. Below HEAD it

@@ -45,6 +45,11 @@ type Status struct {
 	Files      []FileStatus
 }
 
+// IsPublished reports whether the branch tracks its own name on origin, the only branch perusal pushes it to.
+func (s Status) IsPublished() bool {
+	return s.Branch != "" && s.Upstream == "origin/"+s.Branch && !s.UpstreamGone
+}
+
 type Tracking struct {
 	// Upstream is empty when the branch tracks nothing. Ahead and Behind are 0 then, and when UpstreamGone.
 	Upstream string

@@ -42,13 +42,13 @@ perusal -repo <dir>  # review the repository <dir> is in
 | `u` | anywhere | show the diff unified, removed lines above added ones, `u` again shows it side by side |
 | `n` `N` | anywhere | jump the diff to the next or previous change, wrapping around at either end |
 | `c` | anywhere | open the commit popup |
-| `P` | anywhere | open the push popup |
+| `P` | anywhere | push the branch to its own name on `origin`, or publish it there when it tracks anything else |
 | `A` | log | amend the selected commit with the staged changes |
 | `r` | log | reword the selected commit's message in the commit popup |
 | `b` | anywhere | list the local branches, `enter` switches to one, `D` deletes one after a confirm |
 | `o` | anywhere | in follow mode, open the overview of every repository under `ownerDir` |
 | `p` | overview | fast-forward the selected repository to its upstream, or a finished branch to the default one |
-| `P` | overview | push the selected repository, or publish a branch with no upstream to `origin` |
+| `P` | overview | push or publish the selected repository's branch |
 | `enter` | log | expand the commit into its files |
 | `/` | log | search, `enter` keeps it, `esc` clears it |
 | `?` | anywhere | list every key, `?` or `esc` closes it |
@@ -68,6 +68,9 @@ autosquash rebase, so every commit above it is rewritten, and a rebase that stop
 Reword changes only the message. Below `HEAD`, perusal recreates every commit above it with the same files and
 author, signed if `commit.gpgSign` is on, so staged and unstaged changes stay as they are. Below `HEAD`, amend and
 reword refuse a merge commit, the root commit and any commit with a merge above it.
+
+`P` pushes a branch only to its own name on `origin`. A branch that tracks anything else, such as one created from
+`origin/main`, is unpublished, and `P` publishes it to its own name and tracks that instead.
 
 When the branch and its upstream have diverged, as after amending a pushed commit, the push popup offers a force push
 instead. It pushes with `--force-with-lease --force-if-includes`, so git refuses if the upstream moved since your last
@@ -107,10 +110,9 @@ ahead of and behind its upstream, and how far it is behind `origin`'s default br
 names come first, marked `●`. One that fails a check below is listed muted, and `enter` on it shows why. `enter`
 reviews the selected one, `p` pulls it (fast-forward only, from its upstream rather than the default branch), `P`
 pushes it, and `esc` goes back. A branch is finished when it is clean, `origin`'s default branch holds all its commits,
-and it has no upstream or the remote deleted it. `p` then switches to the default branch and pulls that. A branch with
-no upstream shows `↑N no upstream`, the commits no remote-tracking branch holds, and `P` publishes it to the same name
-on `origin` and tracks it. A repository opened this way stays open until the focus file starts with a different
-repository or no longer names it.
+and it has no upstream or the remote deleted it. `p` then switches to the default branch and pulls that. An
+unpublished branch shows `↑N unpublished`, the commits no remote-tracking branch holds. A repository opened this way
+stays open until the focus file starts with a different repository or no longer names it.
 
 perusal runs git as you in a repository the agent chose, and git runs whatever that repository's `.git` tells it to:
 hooks, and config such as `core.fsmonitor`, `core.hooksPath` or `core.sshCommand` that names a program. An agent

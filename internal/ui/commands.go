@@ -166,15 +166,16 @@ func (r logRequest) load() tea.Msg {
 
 type pushRequest struct {
 	repository gitrepo.Repository
-	upstream   string
+	branch     string
 }
 
 func (r pushRequest) push() tea.Msg {
-	return popupResult(r.repository.Dir, r.repository.Push(context.Background()), "pushed to "+r.upstream)
+	return popupResult(r.repository.Dir, r.repository.Push(context.Background(), r.branch), "pushed to origin/"+r.branch)
 }
 
 func (r pushRequest) forcePush() tea.Msg {
-	return popupResult(r.repository.Dir, r.repository.ForcePush(context.Background()), "pushed to "+r.upstream)
+	return popupResult(r.repository.Dir, r.repository.ForcePush(context.Background(), r.branch),
+		"pushed to origin/"+r.branch)
 }
 
 type publishRequest struct {

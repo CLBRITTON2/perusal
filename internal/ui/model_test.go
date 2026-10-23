@@ -247,8 +247,7 @@ func aBranchWithNoUpstreamIsPublished(t *testing.T) {
 	m = update(t, m, tea.KeyPressMsg{Code: 'P', Text: "P"})
 
 	popup := ansi.Strip(m.renderConfirmPopup())
-	if !strings.Contains(screen, "↑2 no upstream") || !strings.Contains(popup, "publish feature to origin") ||
-		!strings.Contains(popup, "2 commits") {
+	if !strings.Contains(screen, "↑2 unpublished") || !strings.Contains(popup, "publish feature to origin") {
 		t.Fatalf("got screen:\n%s\npopup:\n%s\nwant the unpushed commits shown and offered", screen, popup)
 	}
 }
@@ -479,6 +478,18 @@ func TestADivergedBranchOffersAForcePush(t *testing.T) {
 	popup := ansi.Strip(m.renderConfirmPopup())
 	if m.popup.kind != confirmPopup || !strings.Contains(popup, "replaces 1 commit on origin/fix with 2 commits") {
 		t.Fatalf("got popup %d:\n%s", m.popup.kind, popup)
+	}
+}
+
+func TestABranchTrackingAnotherNameIsPublishedNotPushedThere(t *testing.T) {
+	m := pressPush(t, gitrepo.Status{
+		Branch: "enrollment-links", Tracking: gitrepo.Tracking{Upstream: "origin/main", Ahead: 1}, HasCommits: true,
+	})
+
+	popup := ansi.Strip(m.renderConfirmPopup())
+	if m.popup.kind != confirmPopup || !strings.Contains(popup, "publish enrollment-links to origin") ||
+		strings.Contains(popup, "origin/main") {
+		t.Fatalf("got popup %d:\n%s\nwant a publish that never names origin/main", m.popup.kind, popup)
 	}
 }
 

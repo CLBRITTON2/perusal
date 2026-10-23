@@ -22,6 +22,7 @@ func TestRunGit(t *testing.T) {
 
 func TestPush(t *testing.T) {
 	t.Run("sendsTheBranchToItsUpstream", sendsTheBranchToItsUpstream)
+	t.Run("sendsTheBranchToItsOwnNameEvenWhenItTracksAnother", sendsTheBranchToItsOwnNameEvenWhenItTracksAnother)
 }
 
 func TestPublishSendsANewBranchToOriginAndTracksIt(t *testing.T) {
@@ -93,7 +94,7 @@ func sendsTheBranchToItsUpstream(t *testing.T) {
 		{"-C", clone, "config", "branch.main.merge", "refs/heads/main"},
 	})
 
-	err := Repository{Dir: clone}.Push(context.Background())
+	err := Repository{Dir: clone}.Push(context.Background(), "main")
 
 	pushed, revParseErr := Repository{Dir: remote}.git(context.Background(), "rev-parse", "main")
 	head, headErr := Repository{Dir: clone}.git(context.Background(), "rev-parse", "HEAD")
@@ -573,7 +574,7 @@ func replacesTheUpstreamCommitThisBranchRewrote(t *testing.T) {
 	remote, clone := pushedClone(t)
 	runSteps(t, clone, [][]string{{"-C", clone, "commit", "--amend", "--allow-empty", "--message", "Rewritten"}})
 
-	err := Repository{Dir: clone}.ForcePush(context.Background())
+	err := Repository{Dir: clone}.ForcePush(context.Background(), "main")
 
 	if err != nil || revParse(t, remote, "main") != revParse(t, clone, "HEAD") {
 		t.Fatalf("got push error %v, remote main %s, want local HEAD %s", err, revParse(t, remote, "main"),
@@ -592,7 +593,7 @@ func refusesWhenTheRemoteMovedSinceTheLastFetch(t *testing.T) {
 	})
 	before := revParse(t, remote, "main")
 
-	err := Repository{Dir: clone}.ForcePush(context.Background())
+	err := Repository{Dir: clone}.ForcePush(context.Background(), "main")
 
 	if err == nil || revParse(t, remote, "main") != before {
 		t.Fatalf("got push error %v, remote main %s, want a refusal leaving it at %s", err, revParse(t, remote, "main"),
@@ -756,4 +757,42 @@ func blobAt(t *testing.T, dir string, object string) string {
 		t.Fatal(err)
 	}
 	return string(content)
+}
+
+func sendsTheBranchToItsOwnNameEvenWhenItTracksAnother(t *testing.T) {
+	remote, clone, main := featureTrackingMain(t)
+
+	err := Repository{Dir: clone}.Push(context.Background(), "feature")
+
+	assertFeaturePushedAndMainKept(t, remote, clone, main, err)
+}
+
+func TestPublishSendsABranchTrackingAnotherNameToItsOwn(t *testing.T) {
+	remote, clone, main := featureTrackingMain(t)
+
+	err := Repository{Dir: clone}.Publish(context.Background(), "feature")
+
+	assertFeaturePushedAndMainKept(t, remote, clone, main, err)
+}
+
+// push.default=upstream maps a refspec with no destination onto the branch it tracks.
+func featureTrackingMain(t *testing.T) (string, string, string) {
+	t.Helper()
+	remote, clone := pushedClone(t)
+	runSteps(t, clone, [][]string{
+		{"-C", clone, "switch", "--create", "feature", "--track", "origin/main"},
+		{"-C", clone, "commit", "--allow-empty", "--message", "Feature"},
+		{"-C", clone, "config", "push.default", "upstream"},
+	})
+	return remote, clone, revParse(t, remote, "main")
+}
+
+func assertFeaturePushedAndMainKept(t *testing.T, remote string, clone string, main string, pushErr error) {
+	t.Helper()
+	feature, featureErr := Repository{Dir: remote}.revParse(context.Background(), "feature")
+	if pushErr != nil || revParse(t, remote, "main") != main || featureErr != nil ||
+		feature != revParse(t, clone, "HEAD") {
+		t.Fatalf("got push error %v, remote main %s and feature %s (%v), want main left at %s and feature at local "+
+			"HEAD %s", pushErr, revParse(t, remote, "main"), feature, featureErr, main, revParse(t, clone, "HEAD"))
+	}
 }

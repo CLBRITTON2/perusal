@@ -25,7 +25,7 @@ type overviewRow interface {
 }
 
 // commitsBehindDefault counts the commits HEAD lacks from defaultBranch, and stays 0 when defaultBranch is the
-// upstream, whose count the status already holds. commitsOnNoRemote is counted only for a branch with no upstream.
+// upstream, whose count the status already holds. commitsOnNoRemote is counted only for an unpublished branch.
 // finished is a branch p leaves for the default branch.
 type repositoryRow struct {
 	focus.FoundRepository
@@ -153,7 +153,7 @@ func loadOverviewRow(found focus.FoundRepository) (repositoryRow, error) {
 	if !status.HasCommits {
 		return row, nil
 	}
-	if status.Upstream == "" && status.Branch != "" {
+	if status.Branch != "" && !status.IsPublished() {
 		onNoRemote, err := found.Repository.CommitsOnNoRemote(ctx)
 		if err != nil {
 			return repositoryRow{}, err
@@ -290,21 +290,7 @@ func (m Model) pullRepositoryRow(row repositoryRow) (tea.Model, tea.Cmd) {
 }
 
 func (m Model) pushRepositoryRow(row repositoryRow) (tea.Model, tea.Cmd) {
-	if row.status.Upstream != "" || row.status.Branch == "" {
-		return m.openPushPopup(row.Repository, row.status)
-	}
-	if row.commitsOnNoRemote == 0 {
-		return m.withFooterError("nothing to push"), nil
-	}
-	return m.withConfirmation(row.Repository.Dir, confirmation{
-		lines: []string{
-			titleStyle.Render("publish " + headName(row.status) + " to origin"),
-			textStyle.Render(pluralize(row.commitsOnNoRemote, "commit") + " no remote has"),
-		},
-		confirmKey:  confirmPushKey,
-		run:         publishRequest{repository: row.Repository, branch: row.status.Branch}.publish,
-		runningText: "publishing...",
-	}), nil
+	return m.openPushPopup(row.Repository, row.status)
 }
 
 func (m Model) reloadOverviewRow(dir string) tea.Cmd {
@@ -389,7 +375,7 @@ func renderUnpushed(row repositoryRow) string {
 	if row.commitsOnNoRemote == 0 {
 		return renderAheadBehind(row.status.Tracking)
 	}
-	return aheadStyle.Render("↑"+strconv.Itoa(row.commitsOnNoRemote)) + mutedStyle.Render(" no upstream")
+	return aheadStyle.Render("↑"+strconv.Itoa(row.commitsOnNoRemote)) + mutedStyle.Render(" unpublished")
 }
 
 func (r refusedRow) cells() []string {

@@ -685,13 +685,23 @@ func (m Model) withConfirmation(dir string, c confirmation) Model {
 }
 
 func (m Model) openPushPopup(repository gitrepo.Repository, status gitrepo.Status) (tea.Model, tea.Cmd) {
-	request := pushRequest{repository: repository, upstream: status.Upstream}
+	request := pushRequest{repository: repository, branch: status.Branch}
 	upstream := sanitizeText(status.Upstream)
 	switch {
 	case repository.Dir == "":
 		return m, nil
-	case status.Upstream == "":
-		return m.withFooterError("the branch tracks no upstream, so there is nowhere to push"), nil
+	case status.Branch == "":
+		return m.withFooterError("HEAD is detached, so there is no branch to push"), nil
+	case !status.IsPublished():
+		return m.withConfirmation(repository.Dir, confirmation{
+			lines: []string{
+				titleStyle.Render("publish " + headName(status) + " to origin"),
+				textStyle.Render("origin/" + headName(status) + " becomes its upstream"),
+			},
+			confirmKey:  confirmPushKey,
+			run:         publishRequest{repository: repository, branch: status.Branch}.publish,
+			runningText: "publishing...",
+		}), nil
 	case status.Ahead == 0:
 		return m.withFooterError("nothing to push"), nil
 	case status.Behind == 0:
