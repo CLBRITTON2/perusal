@@ -33,6 +33,8 @@ var (
 	overviewKey       = key.NewBinding(key.WithKeys("o"), key.WithHelp("o", "overview"))
 	openRepositoryKey = key.NewBinding(key.WithKeys("enter"), key.WithHelp("enter", "open"))
 	pullKey           = key.NewBinding(key.WithKeys("p"), key.WithHelp("p", "pull"))
+	fetchKey          = key.NewBinding(key.WithKeys("f"), key.WithHelp("f/F", "fetch"))
+	fetchAllKey       = key.NewBinding(key.WithKeys("F"))
 	closeOverviewKey  = key.NewBinding(key.WithKeys("esc", "o"), key.WithHelp("esc", "close"))
 	branchesKey       = key.NewBinding(key.WithKeys("b"), key.WithHelp("b", "branches"))
 	switchBranchKey   = key.NewBinding(key.WithKeys("enter"), key.WithHelp("enter", "switch"))
@@ -63,7 +65,7 @@ var (
 	reviewHelp   = []key.Binding{commitKey, pushKey, switchViewKey, keyListKey, quitKey}
 	changesHelp  = slices.Concat(changesKeys, reviewHelp)
 	logHelp      = slices.Concat(logKeys, reviewHelp)
-	overviewHelp = []key.Binding{downKey, openRepositoryKey, pullKey, pushKey, closeOverviewKey, quitKey}
+	overviewHelp = []key.Binding{downKey, openRepositoryKey, fetchKey, pullKey, pushKey, closeOverviewKey, quitKey}
 	branchesHelp = []key.Binding{downKey, switchBranchKey, deleteBranchKey, closeBranchesKey, quitKey}
 	searchHelp   = []key.Binding{keepSearchKey, clearSearchKey}
 	commitHelp   = []key.Binding{nextFieldKey, submitKey, cancelKey}

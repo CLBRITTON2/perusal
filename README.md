@@ -47,6 +47,7 @@ perusal -repo <dir>  # review the repository <dir> is in
 | `r` | log | reword the selected commit's message in the commit popup |
 | `b` | anywhere | list the local branches, `enter` switches to one, `D` deletes one after a confirm |
 | `o` | anywhere | in follow mode, open the overview of every repository under `ownerDir` |
+| `f` `F` | overview | fetch the selected repository or every one, dropping the remote branches that were deleted |
 | `p` | overview | fast-forward the selected repository to its upstream, or a finished branch to the default one |
 | `P` | overview | push or publish the selected repository's branch |
 | `enter` | log | expand the commit into its files |
@@ -108,13 +109,14 @@ working in, and switches as the agent moves between them. It reads
 The overview (`o`) lists every repository under `ownerDir` with its branch, its uncommitted file count, how far it is
 ahead of and behind its upstream, and how far it is behind `origin`'s default branch. The repositories the focus file
 names come first, marked `●`. One that fails a check below is listed muted, and `enter` on it shows why. `enter`
-reviews the selected one, `p` pulls it (fast-forward only, from its upstream rather than the default branch), `P`
-pushes it, and `esc` goes back. A branch is finished when it is clean, `origin`'s default branch holds all its commits,
-and it has no upstream or the remote deleted it. `p` then switches to the default branch and pulls that. An
-unpublished branch shows `↑N unpublished`, the commits no remote-tracking branch holds. Below the table, the selected
-repository's changed files are listed beside the commits `P` would push and the commits `p` would pull. perusal never
-fetches, so those last ones are as of your last fetch. A repository opened this way stays open until the focus file
-starts with a different repository or no longer names it.
+reviews the selected one, `f` fetches it and `F` fetches them all (`git fetch --prune`), `p` pulls it (fast-forward
+only, from its upstream rather than the default branch), `P` pushes it, and `esc` goes back. A branch is finished when
+it is clean, `origin`'s default branch holds all its commits, and it has no upstream or the remote deleted it. `p` then
+switches to the default branch and pulls that. An unpublished branch shows `↑N unpublished`, the commits no
+remote-tracking branch holds. Below the table, the selected repository's changed files are listed beside the commits
+`P` would push and the commits `p` would pull. perusal fetches only on `f` and `F`, so those last ones are as of the
+last fetch. A repository opened this way stays open until the focus file starts with a different repository or no
+longer names it.
 
 perusal runs git as you in a repository the agent chose, and git runs whatever that repository's `.git` tells it to:
 hooks, and config such as `core.fsmonitor`, `core.hooksPath` or `core.sshCommand` that names a program. An agent

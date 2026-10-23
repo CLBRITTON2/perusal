@@ -158,14 +158,14 @@ func theRowShowsPullingUntilThePulledRowReplacesIt(t *testing.T) {
 		},
 	}
 
-	m = update(t, m, pullMsg{row: pulled})
+	m = update(t, m, syncedMsg{row: pulled, notice: "pulled first"})
 
 	if cmd == nil || !strings.Contains(pulling, "pulling...") {
 		t.Fatalf("got command %v and screen %q, want a pull running and shown", cmd, pulling)
 	}
-	if !reflect.DeepEqual(m.overview.rows[0], pulled) || len(m.pulling) != 0 || m.footer.text != "pulled first" {
-		t.Fatalf("got row %+v, pulling %v, footer %q, want the pulled row in place", m.overview.rows[0],
-			m.pulling, m.footer.text)
+	if !reflect.DeepEqual(m.overview.rows[0], pulled) || len(m.syncing) != 0 || m.footer.text != "pulled first" {
+		t.Fatalf("got row %+v, syncing %v, footer %q, want the pulled row in place", m.overview.rows[0],
+			m.syncing, m.footer.text)
 	}
 }
 
@@ -174,8 +174,8 @@ func aRowWithNoUpstreamIsNotPulled(t *testing.T) {
 	next, cmd := m.Update(tea.KeyPressMsg{Code: 'p', Text: "p"})
 	m = asModel(t, next)
 
-	if cmd != nil || len(m.pulling) != 0 || !m.footer.isError {
-		t.Fatalf("got command %v, pulling %v, footer %q, want a refusal", cmd, m.pulling, m.footer.text)
+	if cmd != nil || len(m.syncing) != 0 || !m.footer.isError {
+		t.Fatalf("got command %v, syncing %v, footer %q, want a refusal", cmd, m.syncing, m.footer.text)
 	}
 }
 
@@ -204,8 +204,44 @@ func aFinishedRowIsSwitchedThoughItTracksNoUpstream(t *testing.T) {
 	next, cmd := m.Update(tea.KeyPressMsg{Code: 'p', Text: "p"})
 	m = asModel(t, next)
 
-	if cmd == nil || !m.pulling["C:/dev/first"] || m.footer.isError {
-		t.Fatalf("got command %v, pulling %v, footer %q, want the switch running", cmd, m.pulling, m.footer.text)
+	if cmd == nil || m.syncing["C:/dev/first"] != "pulling..." || m.footer.isError {
+		t.Fatalf("got command %v, syncing %v, footer %q, want the switch running", cmd, m.syncing, m.footer.text)
+	}
+}
+
+func TestFetchInTheOverview(t *testing.T) {
+	t.Run("fetchesOnlyTheSelectedRow", fetchesOnlyTheSelectedRow)
+	t.Run("fetchAllFetchesEveryRepositoryAndNamesTheFailures", fetchAllFetchesEveryRepositoryAndNamesTheFailures)
+}
+
+func fetchesOnlyTheSelectedRow(t *testing.T) {
+	next, cmd := overviewWithTwoRepositories(t).Update(tea.KeyPressMsg{Code: 'f', Text: "f"})
+	m := asModel(t, next)
+
+	if cmd == nil || !reflect.DeepEqual(m.syncing, map[string]string{"C:/dev/first": "fetching..."}) {
+		t.Fatalf("got command %v, syncing %v, want first fetching", cmd, m.syncing)
+	}
+}
+
+func fetchAllFetchesEveryRepositoryAndNamesTheFailures(t *testing.T) {
+	next, cmd := overviewWithTwoRepositories(t).Update(tea.KeyPressMsg{Code: 'F', Text: "F"})
+	m := asModel(t, next)
+	fetching := ansi.Strip(m.renderScreen())
+	fetched := repositoryRow{
+		FoundRepository: foundAt("first", "C:/dev/first"),
+		status:          gitrepo.Status{Branch: "main", Tracking: gitrepo.Tracking{Upstream: "origin/main", Behind: 5}},
+	}
+
+	m = update(t, m, fetchedAllMsg{dirs: []string{"C:/dev/first", "C:/dev/org/elsewhere"},
+		rows: []repositoryRow{fetched}, failures: []string{"run git fetch --prune in C:/dev/org/elsewhere: exit status 128"}})
+
+	if cmd == nil || strings.Count(fetching, "fetching...") != 2 {
+		t.Fatalf("got command %v and screen:\n%s\nwant both rows fetching", cmd, fetching)
+	}
+	if !reflect.DeepEqual(m.overview.rows[0], fetched) || len(m.syncing) != 0 ||
+		m.footer.text != "fetch failed: run git fetch --prune in C:/dev/org/elsewhere: exit status 128" {
+		t.Fatalf("got row %+v, syncing %v, footer %q, want first fetched and the failure named", m.overview.rows[0],
+			m.syncing, m.footer.text)
 	}
 }
 

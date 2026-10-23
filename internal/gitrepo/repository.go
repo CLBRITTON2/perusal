@@ -289,6 +289,11 @@ func (r Repository) DiscardAll(ctx context.Context) error {
 	return r.run(ctx, "clean", "--force", "-d", "--", ".")
 }
 
+// Fetch fetches the current branch's remote, or origin, and drops the remote-tracking branches it no longer has.
+func (r Repository) Fetch(ctx context.Context) error {
+	return r.run(ctx, "fetch", "--prune")
+}
+
 func (r Repository) Pull(ctx context.Context) error {
 	return r.run(ctx, "pull", "--ff-only", "--no-rebase")
 }

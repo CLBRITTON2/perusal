@@ -130,8 +130,8 @@ type Model struct {
 	footer           footer
 
 	overview selectableList[overviewRow]
-	// pulling holds the Dir of each repository an overview pull is running in.
-	pulling  map[string]bool
+	// syncing maps the Dir of each repository an overview pull or fetch is running in to what its row shows.
+	syncing  map[string]string
 	branches branchList
 
 	repository gitrepo.Repository
@@ -189,7 +189,7 @@ func New(findRepositories RepositoryFinder) Model {
 	return Model{
 		findRepositories:   findRepositories,
 		overview:           selectableList[overviewRow]{rows: []overviewRow{}},
-		pulling:            map[string]bool{},
+		syncing:            map[string]string{},
 		branches:           branchList{selectableList: selectableList[branchRow]{rows: []branchRow{}}},
 		focused:            []gitrepo.Repository{},
 		status:             gitrepo.Status{Files: []gitrepo.FileStatus{}},
@@ -325,12 +325,14 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		m = m.withModeClosed(modeBranches).withFooterNotice("switched to " + msg.branch)
 		return m, m.reloadStatus()
-	case pullMsg:
-		return m.withOverviewPulled(msg)
+	case syncedMsg:
+		return m.withOverviewSynced(msg)
+	case fetchedAllMsg:
+		return m.withOverviewFetchedAll(msg)
 	case overviewRowMsg:
 		return m.withOverviewRow(msg.row), nil
 	case syncFailureMsg:
-		m.pulling = withoutDir(m.pulling, msg.dir)
+		m.syncing = withoutDirs(m.syncing, []string{msg.dir})
 		return m.withFooterError(msg.err.Error()), nil
 	case popupFailureMsg:
 		if msg.dir != m.popup.dir {
@@ -530,7 +532,7 @@ func (m Model) withRepository(repository gitrepo.Repository, rejection string) M
 	next.display = m.display
 	next.mode = modeAfterSwitch(m.mode)
 	next.overview = m.overview
-	next.pulling = m.pulling
+	next.syncing = m.syncing
 	next.repository = repository
 	next.rejection = rejection
 	return next.withLayout()

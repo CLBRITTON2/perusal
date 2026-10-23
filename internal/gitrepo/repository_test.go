@@ -420,6 +420,28 @@ func cloneBehindOther(t *testing.T) (string, string) {
 	return clone, otherClone
 }
 
+func TestFetchBringsTheRemoteCommitsAndPrunesItsDeletedBranches(t *testing.T) {
+	remote, clone := pushedClone(t)
+	otherClone := filepath.Join(t.TempDir(), "other")
+	runSteps(t, clone, [][]string{
+		{"-C", clone, "push", "origin", "main:gone"},
+		{"clone", remote, otherClone},
+		{"-C", otherClone, "commit", "--allow-empty", "--message", "Pushed"},
+		{"-C", otherClone, "push"},
+		{"-C", otherClone, "push", "origin", "--delete", "gone"},
+	})
+	repository := Repository{Dir: clone}
+
+	err := repository.Fetch(context.Background())
+
+	behind, behindErr := repository.CommitsBehind(context.Background(), "origin/main")
+	_, goneErr := repository.revParse(context.Background(), "origin/gone")
+	if err != nil || behindErr != nil || behind != 1 || goneErr == nil {
+		t.Fatalf("got %v, %d behind (%v), origin/gone error %v, want 1 behind and origin/gone pruned", err, behind,
+			behindErr, goneErr)
+	}
+}
+
 func TestABranchMergedAndDeletedOnTheRemote(t *testing.T) {
 	t.Run("hasItsUpstreamGone", hasItsUpstreamGone)
 	t.Run("isMergedIntoTheDefaultBranchUntilItChangesAFile", isMergedIntoTheDefaultBranchUntilItChangesAFile)

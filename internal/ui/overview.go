@@ -58,8 +58,17 @@ type overviewFailureMsg struct {
 	err error
 }
 
-type pullMsg struct {
-	row repositoryRow
+// notice is the footer text for the pull or fetch that loaded row.
+type syncedMsg struct {
+	row    repositoryRow
+	notice string
+}
+
+// dirs are every repository the fetch ran in, failed or not.
+type fetchedAllMsg struct {
+	dirs     []string
+	rows     []repositoryRow
+	failures []string
 }
 
 type overviewRowMsg struct {
@@ -84,7 +93,43 @@ func (r pullRequest) pull() tea.Msg {
 	if err != nil {
 		return syncFailureMsg{dir: dir, err: err}
 	}
-	return pullMsg{row: row}
+	return syncedMsg{row: row, notice: "pulled " + r.found.RelativePath}
+}
+
+type fetchRequest struct {
+	found focus.FoundRepository
+}
+
+func (r fetchRequest) fetch() tea.Msg {
+	row, err := fetchRow(r.found)
+	if err != nil {
+		return syncFailureMsg{dir: r.found.Repository.Dir, err: err}
+	}
+	return syncedMsg{row: row, notice: "fetched " + r.found.RelativePath}
+}
+
+type fetchAllRequest struct {
+	found []focus.FoundRepository
+}
+
+func (r fetchAllRequest) fetchAll() tea.Msg {
+	rows, failures := loadRows(r.found, fetchRow)
+	return fetchedAllMsg{dirs: dirsOf(r.found), rows: rows, failures: failures}
+}
+
+func fetchRow(found focus.FoundRepository) (repositoryRow, error) {
+	if err := found.Repository.Fetch(context.Background()); err != nil {
+		return repositoryRow{}, err
+	}
+	return loadOverviewRow(found)
+}
+
+func dirsOf(found []focus.FoundRepository) []string {
+	dirs := []string{}
+	for _, repository := range found {
+		dirs = append(dirs, repository.Repository.Dir)
+	}
+	return dirs
 }
 
 type overviewRowRequest struct {
@@ -120,23 +165,10 @@ func (r overviewRequest) load() tea.Msg {
 	if err != nil {
 		return overviewFailureMsg{err: err}
 	}
-	results := make([]repositoryRow, len(found.Repositories))
-	errs := make([]error, len(found.Repositories))
-	var group sync.WaitGroup
-	for index, repository := range found.Repositories {
-		group.Go(func() {
-			results[index], errs[index] = loadOverviewRow(repository)
-		})
-	}
-	group.Wait()
+	loaded, failures := loadRows(found.Repositories, loadOverviewRow)
 	rows := []overviewRow{}
-	failures := []string{}
-	for index, row := range results {
-		if errs[index] != nil {
-			failures = append(failures, errs[index].Error())
-		} else {
-			rows = append(rows, row)
-		}
+	for _, row := range loaded {
+		rows = append(rows, row)
 	}
 	for _, refused := range found.Refusals {
 		rows = append(rows, refusedRow{FoundRefusal: refused})
@@ -145,6 +177,30 @@ func (r overviewRequest) load() tea.Msg {
 		return strings.Compare(a.relativePath(), b.relativePath())
 	})
 	return overviewMsg{rows: rows, failures: failures}
+}
+
+// loadRows runs load in every repository at once and returns the rows it loaded and the errors of the rest.
+func loadRows(found []focus.FoundRepository, load func(focus.FoundRepository) (repositoryRow, error)) ([]repositoryRow,
+	[]string) {
+	results := make([]repositoryRow, len(found))
+	errs := make([]error, len(found))
+	var group sync.WaitGroup
+	for index, repository := range found {
+		group.Go(func() {
+			results[index], errs[index] = load(repository)
+		})
+	}
+	group.Wait()
+	rows := []repositoryRow{}
+	failures := []string{}
+	for index, row := range results {
+		if errs[index] != nil {
+			failures = append(failures, errs[index].Error())
+		} else {
+			rows = append(rows, row)
+		}
+	}
+	return rows, failures
 }
 
 func loadOverviewRow(found focus.FoundRepository) (repositoryRow, error) {
@@ -281,6 +337,10 @@ func (m Model) updateOverview(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		return m, nil
 	case key.Matches(msg, openRepositoryKey):
 		return m.withSelectedRepository(m.openRepositoryRow)
+	case key.Matches(msg, fetchKey):
+		return m.withSelectedRepository(m.fetchRepositoryRow)
+	case key.Matches(msg, fetchAllKey):
+		return m.fetchAll()
 	case key.Matches(msg, pullKey):
 		return m.withSelectedRepository(m.pullRepositoryRow)
 	case key.Matches(msg, pushKey):
@@ -307,7 +367,7 @@ func (m Model) withSelectedRepository(act func(repositoryRow) (tea.Model, tea.Cm
 func (m Model) pullRepositoryRow(row repositoryRow) (tea.Model, tea.Cmd) {
 	var pull tea.Cmd
 	switch {
-	case m.pulling[row.Repository.Dir]:
+	case m.syncing[row.Repository.Dir] != "":
 		return m, nil
 	case row.finished:
 		pull = switchRequest{found: row.FoundRepository, branch: localBranch(row.defaultBranch)}.switchAndPull
@@ -319,10 +379,38 @@ func (m Model) pullRepositoryRow(row repositoryRow) (tea.Model, tea.Cmd) {
 	default:
 		pull = pullRequest{found: row.FoundRepository}.pull
 	}
-	pulling := maps.Clone(m.pulling)
-	pulling[row.Repository.Dir] = true
-	m.pulling = pulling
-	return m, pull
+	return m.withSyncing([]string{row.Repository.Dir}, "pulling..."), pull
+}
+
+func (m Model) fetchRepositoryRow(row repositoryRow) (tea.Model, tea.Cmd) {
+	if m.syncing[row.Repository.Dir] != "" {
+		return m, nil
+	}
+	return m.withSyncing([]string{row.Repository.Dir}, "fetching..."), fetchRequest{found: row.FoundRepository}.fetch
+}
+
+// Skips the repositories a pull or fetch is already running in.
+func (m Model) fetchAll() (tea.Model, tea.Cmd) {
+	found := []focus.FoundRepository{}
+	for _, row := range m.overview.rows {
+		foundRow, isRepository := row.(repositoryRow)
+		if isRepository && m.syncing[foundRow.Repository.Dir] == "" {
+			found = append(found, foundRow.FoundRepository)
+		}
+	}
+	if len(found) == 0 {
+		return m, nil
+	}
+	return m.withSyncing(dirsOf(found), "fetching..."), fetchAllRequest{found: found}.fetchAll
+}
+
+func (m Model) withSyncing(dirs []string, text string) Model {
+	syncing := maps.Clone(m.syncing)
+	for _, dir := range dirs {
+		syncing[dir] = text
+	}
+	m.syncing = syncing
+	return m
 }
 
 func (m Model) pushRepositoryRow(row repositoryRow) (tea.Model, tea.Cmd) {
@@ -347,11 +435,27 @@ func localBranch(defaultBranch string) string {
 	return strings.TrimPrefix(defaultBranch, "origin/")
 }
 
-func (m Model) withOverviewPulled(msg pullMsg) (tea.Model, tea.Cmd) {
+func (m Model) withOverviewSynced(msg syncedMsg) (tea.Model, tea.Cmd) {
 	repository := msg.row.Repository
-	m.pulling = withoutDir(m.pulling, repository.Dir)
-	m = m.withOverviewRow(msg.row).withFooterNotice("pulled " + msg.row.RelativePath)
+	m.syncing = withoutDirs(m.syncing, []string{repository.Dir})
+	m = m.withOverviewRow(msg.row).withFooterNotice(msg.notice)
 	if repository != m.repository {
+		return m, nil
+	}
+	return m, m.reloadStatus()
+}
+
+func (m Model) withOverviewFetchedAll(msg fetchedAllMsg) (tea.Model, tea.Cmd) {
+	m.syncing = withoutDirs(m.syncing, msg.dirs)
+	for _, row := range msg.rows {
+		m = m.withOverviewRow(row)
+	}
+	if len(msg.failures) > 0 {
+		m = m.withFooterError("fetch failed: " + strings.Join(msg.failures, ", "))
+	} else {
+		m = m.withFooterNotice("fetched every repository")
+	}
+	if !slices.Contains(msg.dirs, m.repository.Dir) {
 		return m, nil
 	}
 	return m, m.reloadStatus()
@@ -367,9 +471,11 @@ func (m Model) withOverviewRow(row repositoryRow) Model {
 	return m
 }
 
-func withoutDir(set map[string]bool, dir string) map[string]bool {
+func withoutDirs(set map[string]string, dirs []string) map[string]string {
 	remaining := maps.Clone(set)
-	delete(remaining, dir)
+	for _, dir := range dirs {
+		delete(remaining, dir)
+	}
 	return remaining
 }
 
@@ -434,8 +540,8 @@ func renderCommitRows(commits []gitrepo.Commit, loadedAt time.Time, emptyText st
 func (m Model) overviewCells(row overviewRow) []string {
 	cells := append([]string{m.renderFocusMark(row)}, row.cells()...)
 	foundRow, isRepository := row.(repositoryRow)
-	if isRepository && m.pulling[foundRow.Repository.Dir] {
-		cells = append(cells, mutedStyle.Render("pulling..."))
+	if isRepository && m.syncing[foundRow.Repository.Dir] != "" {
+		cells = append(cells, mutedStyle.Render(m.syncing[foundRow.Repository.Dir]))
 	}
 	return cells
 }
