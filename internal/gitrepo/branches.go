@@ -3,6 +3,7 @@ package gitrepo
 import (
 	"context"
 	"fmt"
+	"slices"
 	"strconv"
 	"strings"
 )
@@ -68,10 +69,16 @@ type RemoteBranch struct {
 	Name string
 }
 
-// RemoteBranches skips each remote's HEAD. Name drops only the first path segment, so a remote named with a slash
-// gets a wrong Name.
+// RemoteBranches skips each remote's HEAD.
 func (r Repository) RemoteBranches(ctx context.Context) ([]RemoteBranch, error) {
-	format := strings.Join([]string{"%(symref)", "%(refname:lstrip=2)", "%(refname:lstrip=3)"}, refFieldSeparator)
+	remotesOutput, err := r.git(ctx, "remote")
+	if err != nil {
+		return nil, err
+	}
+	remotes := strings.Fields(string(remotesOutput))
+	// Longest first, since a remote name may hold a slash: team/fork/main belongs to team/fork rather than team.
+	slices.SortFunc(remotes, func(first string, second string) int { return len(second) - len(first) })
+	format := strings.Join([]string{"%(symref)", "%(refname:lstrip=2)"}, refFieldSeparator)
 	output, err := r.git(ctx, "for-each-ref", "--format="+format, "refs/remotes")
 	if err != nil {
 		return nil, err
@@ -79,13 +86,19 @@ func (r Repository) RemoteBranches(ctx context.Context) ([]RemoteBranch, error) 
 	branches := []RemoteBranch{}
 	for line := range strings.Lines(string(output)) {
 		fields := strings.Split(strings.TrimSuffix(line, "\n"), fieldSeparator)
-		if len(fields) != 3 {
-			return nil, fmt.Errorf("parse git for-each-ref line %q: want 3 fields, got %d", line, len(fields))
+		if len(fields) != 2 {
+			return nil, fmt.Errorf("parse git for-each-ref line %q: want 2 fields, got %d", line, len(fields))
 		}
 		if fields[0] != "" {
 			continue
 		}
-		branches = append(branches, RemoteBranch{Ref: fields[1], Name: fields[2]})
+		ref := fields[1]
+		index := slices.IndexFunc(remotes, func(remote string) bool { return strings.HasPrefix(ref, remote+"/") })
+		if index < 0 {
+			return nil, fmt.Errorf("name the remote of refs/remotes/%s in %s: no remote in %q matches it, "+
+				"git update-ref -d refs/remotes/%s deletes it", ref, r.Dir, remotes, ref)
+		}
+		branches = append(branches, RemoteBranch{Ref: ref, Name: strings.TrimPrefix(ref, remotes[index]+"/")})
 	}
 	return branches, nil
 }

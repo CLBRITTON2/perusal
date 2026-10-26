@@ -161,7 +161,11 @@ func (r Repository) FileDiff(ctx context.Context, file FileStatus, contextLines 
 		}
 		return string(output), nil
 	}
-	args := slices.Concat([]string{"diff", "HEAD"}, diffFlags, []string{"--find-renames",
+	base, err := r.headOrEmptyTree(ctx)
+	if err != nil {
+		return "", err
+	}
+	args := slices.Concat([]string{"diff", base}, diffFlags, []string{"--find-renames",
 		"--unified=" + strconv.Itoa(contextLines), "--"}, file.pathspec())
 	output, err := r.git(ctx, args...)
 	if err != nil {
@@ -261,11 +265,19 @@ func (r Repository) StageAll(ctx context.Context) error {
 }
 
 func (r Repository) UnstageAll(ctx context.Context) error {
-	return r.run(ctx, "restore", "--staged", "--", ".")
+	base, err := r.headOrEmptyTree(ctx)
+	if err != nil {
+		return err
+	}
+	return r.run(ctx, "restore", "--source="+base, "--staged", "--", ".")
 }
 
 func (r Repository) Unstage(ctx context.Context, file FileStatus) error {
-	return r.run(ctx, append([]string{"restore", "--staged", "--"}, file.pathspec()...)...)
+	base, err := r.headOrEmptyTree(ctx)
+	if err != nil {
+		return err
+	}
+	return r.run(ctx, slices.Concat([]string{"restore", "--source=" + base, "--staged", "--"}, file.pathspec())...)
 }
 
 // A renamed file gets its original path back.
@@ -273,12 +285,21 @@ func (r Repository) Discard(ctx context.Context, file FileStatus) error {
 	if file.IsUntracked() {
 		return r.run(ctx, "clean", "--force", "--", file.Path)
 	}
-	return r.run(ctx, append([]string{"restore", "--source=HEAD", "--staged", "--worktree", "--"}, file.pathspec()...)...)
+	base, err := r.headOrEmptyTree(ctx)
+	if err != nil {
+		return err
+	}
+	return r.run(ctx, slices.Concat([]string{"restore", "--source=" + base, "--staged", "--worktree", "--"},
+		file.pathspec())...)
 }
 
 // DiscardAll leaves the work tree as HEAD has it, except for ignored files and nested repositories.
 func (r Repository) DiscardAll(ctx context.Context) error {
-	if err := r.run(ctx, "restore", "--source=HEAD", "--staged", "--worktree", "--", "."); err != nil {
+	base, err := r.headOrEmptyTree(ctx)
+	if err != nil {
+		return err
+	}
+	if err := r.run(ctx, "restore", "--source="+base, "--staged", "--worktree", "--", "."); err != nil {
 		return err
 	}
 	return r.run(ctx, "clean", "--force", "-d", "--", ".")
@@ -515,6 +536,23 @@ func (r Repository) checkRewritable(ctx context.Context, hash string) error {
 		return fmt.Errorf("%w %s in %s: a merge sits between it and HEAD", ErrCannotRewrite, hash, r.Dir)
 	}
 	return nil
+}
+
+// headOrEmptyTree is HEAD, or the empty tree on an unborn branch, where git refuses HEAD as a revision.
+func (r Repository) headOrEmptyTree(ctx context.Context) (string, error) {
+	hasCommits, err := r.gitSucceeds(ctx, "rev-parse", "--verify", "--quiet", "HEAD^{commit}")
+	if err != nil {
+		return "", err
+	}
+	if hasCommits {
+		return "HEAD", nil
+	}
+	// Hashed rather than hardcoded, since the empty tree's hash differs between SHA-1 and SHA-256 repositories.
+	output, err := r.git(ctx, "hash-object", "-t", "tree", "--stdin")
+	if err != nil {
+		return "", err
+	}
+	return strings.TrimSpace(string(output)), nil
 }
 
 func (r Repository) revParse(ctx context.Context, revision string) (string, error) {

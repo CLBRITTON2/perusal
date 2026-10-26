@@ -79,12 +79,17 @@ func (r repositoryRequest) loadBranches() tea.Msg {
 	if err := errors.Join(errs...); err != nil {
 		return branchesFailureMsg{dir: dir, err: err}
 	}
-	for _, remoteBranch := range remoteBranches {
-		if !slices.ContainsFunc(branches, func(branch gitrepo.Branch) bool { return branch.Name == remoteBranch.Name }) {
-			rows = append(rows, branchRow{remoteBranch: remoteBranch})
-		}
+	for _, remoteBranch := range remoteOnlyBranches(branches, remoteBranches) {
+		rows = append(rows, branchRow{remoteBranch: remoteBranch})
 	}
 	return branchesMsg{dir: dir, rows: rows, defaultBranch: defaultBranch}
+}
+
+// remoteOnlyBranches drops each remote branch a local branch of the same name shadows, the ones the list hides.
+func remoteOnlyBranches(branches []gitrepo.Branch, remoteBranches []gitrepo.RemoteBranch) []gitrepo.RemoteBranch {
+	return slices.DeleteFunc(slices.Clone(remoteBranches), func(remoteBranch gitrepo.RemoteBranch) bool {
+		return slices.ContainsFunc(branches, func(branch gitrepo.Branch) bool { return branch.Name == remoteBranch.Name })
+	})
 }
 
 func (r repositoryRequest) fetchBranches() tea.Msg {

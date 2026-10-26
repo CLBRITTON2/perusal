@@ -63,6 +63,21 @@ func TestRemoteBranchesListsEachRemoteBranchButNotARemoteHEAD(t *testing.T) {
 	}
 }
 
+func TestRemoteBranchesNamesABranchOfARemoteNamedWithASlash(t *testing.T) {
+	remote, clone := pushedClone(t)
+	runSteps(t, clone, [][]string{
+		{"-C", clone, "remote", "add", "team/fork", remote},
+		{"-C", clone, "fetch", "team/fork"},
+	})
+
+	branches, err := Repository{Dir: clone}.RemoteBranches(context.Background())
+
+	want := []RemoteBranch{{Ref: "origin/main", Name: "main"}, {Ref: "team/fork/main", Name: "main"}}
+	if err != nil || !reflect.DeepEqual(branches, want) {
+		t.Fatalf("got %+v, %v, want %+v", branches, err, want)
+	}
+}
+
 func TestSwitchTrackingCreatesTheBranchFromTheNamedRemoteBranch(t *testing.T) {
 	clone := cloneWithTwoRemotes(t)
 	repository := Repository{Dir: clone}

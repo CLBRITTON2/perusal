@@ -61,8 +61,9 @@ commits from either field, and `esc` cancels. The changes pane shows how many li
 remove. The mouse works too: click a row to select it, click the folded pane to open it, right-click a commit to
 amend it. The wheel moves the selection over a list and scrolls the diff anywhere else.
 
-The top line names the repository and its branch, then counts its local branches, its remote branches and its work
-trees, as in `4 branches (37 remote) · 2 work trees`. In a linked work tree, made by `git worktree add`, it also names
+The top line names the repository and its branch, then counts its local branches, the remote branches with no local
+branch of the same name (the ones the branch list shows) and its work trees, as in
+`4 branches (37 remote) · 2 work trees`. In a linked work tree, made by `git worktree add`, it also names
 the repository's main one, as in `work tree of repo`.
 
 On quit, perusal saves which list was showing and the `d`, `f` and `u` toggles to `perusal\state.json` in the user

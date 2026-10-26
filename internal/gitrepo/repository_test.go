@@ -335,6 +335,81 @@ func discardAllKeepsIgnoredFiles(t *testing.T) {
 	}
 }
 
+func TestOnAnUnbornBranch(t *testing.T) {
+	t.Run("diffsAFileAgainstNothing", diffsAFileAgainstNothing)
+	t.Run("unstagesAFile", unstagesAFile)
+	t.Run("unstagesEverything", unstagesEverything)
+	t.Run("discardsAFile", discardsAFile)
+	t.Run("discardsEverything", discardsEverything)
+}
+
+func diffsAFileAgainstNothing(t *testing.T) {
+	repository, file := unbornWithStagedFile(t)
+
+	got, err := repository.FileDiff(context.Background(), file, 3)
+
+	if err != nil || hunkHeaders(got) != "@@ -0,0 +1,2 @@" {
+		t.Fatalf("got %q, %v, want both lines added", got, err)
+	}
+}
+
+func unstagesAFile(t *testing.T) {
+	repository, file := unbornWithStagedFile(t)
+
+	err := repository.Unstage(context.Background(), file)
+
+	assertOnlyUntracked(t, repository, err, "staged.txt")
+}
+
+func unstagesEverything(t *testing.T) {
+	repository, _ := unbornWithStagedFile(t)
+
+	err := repository.UnstageAll(context.Background())
+
+	assertOnlyUntracked(t, repository, err, "staged.txt")
+}
+
+func discardsAFile(t *testing.T) {
+	repository, file := unbornWithStagedFile(t)
+	writeFile(t, filepath.Join(repository.Dir, "kept.txt"), "kept\n")
+
+	err := repository.Discard(context.Background(), file)
+
+	assertOnlyUntracked(t, repository, err, "kept.txt")
+}
+
+func discardsEverything(t *testing.T) {
+	repository, _ := unbornWithStagedFile(t)
+	writeFile(t, filepath.Join(repository.Dir, "untracked.txt"), "u\n")
+
+	err := repository.DiscardAll(context.Background())
+
+	status, statusErr := repository.Status(context.Background())
+	if err != nil || statusErr != nil || len(status.Files) != 0 {
+		t.Fatalf("got %+v, %v, %v, want a clean work tree", status.Files, err, statusErr)
+	}
+}
+
+// unbornWithStagedFile makes a repository with no commits whose staged.txt is staged and then changed again.
+func unbornWithStagedFile(t *testing.T) (Repository, FileStatus) {
+	t.Helper()
+	clone := t.TempDir()
+	runSteps(t, clone, [][]string{{"init", "--initial-branch=main", clone}})
+	writeFile(t, filepath.Join(clone, "staged.txt"), "a\n")
+	runSteps(t, clone, [][]string{{"-C", clone, "add", "staged.txt"}})
+	writeFile(t, filepath.Join(clone, "staged.txt"), "a\nb\n")
+	return Repository{Dir: clone}, FileStatus{Path: "staged.txt", IndexStatus: 'A', WorktreeStatus: 'M'}
+}
+
+func assertOnlyUntracked(t *testing.T, repository Repository, err error, path string) {
+	t.Helper()
+	status, statusErr := repository.Status(context.Background())
+	if err != nil || statusErr != nil || len(status.Files) != 1 || status.Files[0].Path != path ||
+		!status.Files[0].IsUntracked() {
+		t.Fatalf("got %+v, %v, %v, want only %s, untracked", status.Files, err, statusErr, path)
+	}
+}
+
 func changedWorkTree(t *testing.T) string {
 	t.Helper()
 	clone := repositoryWithHistory(t, []string{"1"})

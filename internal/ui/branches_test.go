@@ -1,6 +1,7 @@
 package ui
 
 import (
+	"slices"
 	"strings"
 	"testing"
 
@@ -171,6 +172,23 @@ func closesTheListAndReloadsTheStatus(t *testing.T) {
 	if switching == nil || reloading == nil || m.mode == modeBranches || m.footer.text != "switched to wip" {
 		t.Fatalf("got switch %v, reload %v, mode %d, footer %q, want the list closed after the switch", switching,
 			reloading, m.mode, m.footer.text)
+	}
+}
+
+func TestRemoteOnlyBranchesDropsEachOneALocalBranchShadows(t *testing.T) {
+	local := []gitrepo.Branch{{Name: "main"}, {Name: "fix/y"}}
+	remote := []gitrepo.RemoteBranch{
+		{Ref: "origin/main", Name: "main"},
+		{Ref: "origin/fix/x", Name: "fix/x"},
+		{Ref: "team/fork/fix/y", Name: "fix/y"},
+		{Ref: "team/fork/main-old", Name: "main-old"},
+	}
+
+	got := remoteOnlyBranches(local, remote)
+
+	want := []gitrepo.RemoteBranch{remote[1], remote[3]}
+	if !slices.Equal(got, want) {
+		t.Fatalf("got %+v, want %+v", got, want)
 	}
 }
 

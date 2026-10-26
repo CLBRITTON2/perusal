@@ -122,7 +122,8 @@ func (r repositoryRequest) loadStatus() tea.Msg {
 		return gitFailureMsg{err: err}
 	}
 	return statusMsg{dir: r.repository.Dir, status: status, stagedLineCounts: stagedLineCounts,
-		branchCount: len(branches), remoteBranchCount: len(remoteBranches), workTrees: workTrees}
+		branchCount: len(branches), remoteBranchCount: len(remoteOnlyBranches(branches, remoteBranches)),
+		workTrees: workTrees}
 }
 
 func (r repositoryRequest) stageAll() tea.Msg {
