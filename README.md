@@ -146,6 +146,11 @@ names the work tree back. git then runs with that folder pinned, so a later rewr
 overview lists a work tree beside its repository, such as `repo-side` next to `repo`, but not one nested inside it,
 such as one under `repo\.claude\worktrees`. The focus file still opens that one.
 
+The agent can still rename the work tree folder that holds a checked `.git` and plant its own `.git` at the old path.
+So perusal keeps a handle open in each `.git` it checked, or in a linked work tree's folder there, until it exits.
+Windows refuses to rename a folder with a handle open inside it, so while perusal runs neither the agent nor you can
+move such a repository or rename any folder above it.
+
 From an elevated prompt, for each repository under `ownerDir`, take ownership if the agent cloned it, add the deny,
 then reset everything inside `.git` to the inherited ACL, which drops any grant made directly on it:
 

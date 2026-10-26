@@ -5,12 +5,15 @@ package focus
 import (
 	"context"
 	"errors"
+	"io/fs"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"slices"
 	"strings"
 	"testing"
+
+	"golang.org/x/sys/windows"
 )
 
 func TestMapPath(t *testing.T) {
@@ -265,6 +268,47 @@ func opensThroughAJunctionAsItsRealPath(t *testing.T) {
 	}
 }
 
+func TestACheckedRepositoryCannotBeMovedAside(t *testing.T) {
+	cases := []struct {
+		name    string
+		focused string
+	}{
+		{"afterItsMainWorkTreeOpens", agentDevDir + `\repo`},
+		{"afterItsLinkedWorkTreeOpens", agentDevDir + `\repo-side`},
+	}
+	for _, testCase := range cases {
+		t.Run(testCase.name, func(t *testing.T) {
+			devDir := t.TempDir()
+			repository, _ := repositoryWithWorkTree(t, devDir)
+			denyGuests(t, filepath.Join(repository, ".git"), deniedWriteMask)
+			rules := guestRules(t, devDir, focusFileHolding(t, testCase.focused))
+			if _, err := resolve(context.Background(), rules); err != nil {
+				t.Fatal(err)
+			}
+
+			err := os.Rename(repository, repository+"-moved")
+
+			if !errors.Is(err, fs.ErrPermission) {
+				t.Fatalf("got %v, want %v", err, fs.ErrPermission)
+			}
+		})
+	}
+}
+
+func TestARefusedRepositoryCanStillBeMoved(t *testing.T) {
+	devDir := t.TempDir()
+	repository := filepath.Join(devDir, "repo")
+	gitInit(t, repository)
+	_, err := resolve(context.Background(), guestRules(t, devDir, focusFileHolding(t, agentDevDir+`\repo`)))
+	if !errors.Is(err, ErrGitDirUnprotected) {
+		t.Fatalf("got %v, want %v", err, ErrGitDirUnprotected)
+	}
+
+	if err := os.Rename(repository, repository+"-moved"); err != nil {
+		t.Fatal(err)
+	}
+}
+
 // repositoryWithWorkTree makes devDir/repo with one commit and its linked work tree devDir/repo-side on branch side.
 func repositoryWithWorkTree(t *testing.T, devDir string) (string, string) {
 	t.Helper()
@@ -301,7 +345,13 @@ func mustGit(t *testing.T, args ...string) {
 func guestRules(t *testing.T, devDir string, focusFile string) Rules {
 	t.Helper()
 	config := Config{FocusFile: focusFile, AgentDir: agentDevDir, OwnerDir: devDir}
-	return Rules{Config: config, AgentSID: parsedGuestsSID(t)}
+	rules := Rules{Config: config, AgentSID: parsedGuestsSID(t), held: &heldGitDirs{handles: map[string]windows.Handle{}}}
+	t.Cleanup(func() {
+		if err := rules.held.release(); err != nil {
+			t.Error(err)
+		}
+	})
+	return rules
 }
 
 func focusFileHolding(t *testing.T, agentPath string) string {

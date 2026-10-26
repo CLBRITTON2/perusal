@@ -25,6 +25,7 @@ const maximumPointerFileBytes = 4096
 type Rules struct {
 	Config
 	AgentSID *windows.SID
+	held     *heldGitDirs
 }
 
 func NewRules(config Config) (Rules, error) {
@@ -35,7 +36,7 @@ func NewRules(config Config) (Rules, error) {
 	if accountType != windows.SidTypeUser {
 		return Rules{}, fmt.Errorf("account %s is not a user account (SID type %d)", config.AgentAccount, accountType)
 	}
-	return Rules{Config: config, AgentSID: sid}, nil
+	return Rules{Config: config, AgentSID: sid, held: &heldGitDirs{handles: map[string]windows.Handle{}}}, nil
 }
 
 type Result struct {
@@ -143,7 +144,7 @@ func resolvePath(ctx context.Context, rules Rules, agentPath string) (gitrepo.Re
 	if err != nil {
 		return gitrepo.Repository{}, err
 	}
-	return openWorkTree(ctx, rules.AgentSID, workTree)
+	return openWorkTree(ctx, rules, workTree)
 }
 
 // FindRepositories lists every work tree under the owner directory, checked as resolve checks a focused one. It does
@@ -162,7 +163,7 @@ func FindRepositories(ctx context.Context, rules Rules) (Found, error) {
 			return fmt.Errorf("name %s below %s: %w", path, rules.OwnerDir, err)
 		}
 		name := filepath.ToSlash(relativePath)
-		repository, isWorkTree, err := openIfWorkTree(ctx, rules.AgentSID, path, listErr)
+		repository, isWorkTree, err := openIfWorkTree(ctx, rules, path, listErr)
 		switch {
 		case err != nil:
 			found.Refusals = append(found.Refusals, FoundRefusal{RelativePath: name, Err: err})
@@ -182,11 +183,11 @@ func FindRepositories(ctx context.Context, rules Rules) (Found, error) {
 // OpenWorkTree opens dir, a work tree git listed, after the checks a focused one gets. dir may be outside the owner
 // directory, since git read it from a .git that passed them.
 func OpenWorkTree(ctx context.Context, rules Rules, dir string) (gitrepo.Repository, error) {
-	return openWorkTree(ctx, rules.AgentSID, filepath.FromSlash(dir))
+	return openWorkTree(ctx, rules, filepath.FromSlash(dir))
 }
 
 // listErr is the error WalkDir hit listing dir.
-func openIfWorkTree(ctx context.Context, agentSID *windows.SID, dir string, listErr error) (
+func openIfWorkTree(ctx context.Context, rules Rules, dir string, listErr error) (
 	gitrepo.Repository, bool, error,
 ) {
 	if listErr != nil {
@@ -196,7 +197,7 @@ func openIfWorkTree(ctx context.Context, agentSID *windows.SID, dir string, list
 	if err != nil || !isWorkTree {
 		return gitrepo.Repository{}, false, err
 	}
-	repository, err := openWorkTree(ctx, agentSID, dir)
+	repository, err := openWorkTree(ctx, rules, dir)
 	if err != nil {
 		return gitrepo.Repository{}, false, err
 	}
@@ -204,8 +205,8 @@ func openIfWorkTree(ctx context.Context, agentSID *windows.SID, dir string, list
 }
 
 // The owner's git runs the config and hooks of a .git, so one the agent could write is refused.
-func openWorkTree(ctx context.Context, agentSID *windows.SID, workTree string) (gitrepo.Repository, error) {
-	gitDir, err := checkedGitDir(agentSID, workTree)
+func openWorkTree(ctx context.Context, rules Rules, workTree string) (gitrepo.Repository, error) {
+	gitDir, err := checkedGitDir(rules, workTree)
 	if err != nil {
 		return gitrepo.Repository{}, err
 	}
@@ -225,14 +226,15 @@ func openWorkTree(ctx context.Context, agentSID *windows.SID, workTree string) (
 }
 
 // checkedGitDir returns the git directory to pin, empty for a .git directory, which git finds itself.
-func checkedGitDir(agentSID *windows.SID, workTree string) (string, error) {
+func checkedGitDir(rules Rules, workTree string) (string, error) {
 	dotGit := filepath.Join(workTree, ".git")
 	info, err := os.Lstat(dotGit)
 	if err != nil {
 		return "", fmt.Errorf("inspect %s: %w", dotGit, err)
 	}
 	if !info.Mode().IsRegular() {
-		return "", verifyGitDir(dotGit, agentSID)
+		_, err := rules.held.hold(dotGit, func(string) error { return verifyGitDir(dotGit, rules.AgentSID) })
+		return "", err
 	}
 	// A linked work tree's .git file names its admin folder <repository .git>/worktrees/<id>. The agent can rewrite
 	// that file, so the folder must sit in a checked .git and name this work tree back in its own gitdir file.
@@ -244,30 +246,28 @@ func checkedGitDir(agentSID *windows.SID, workTree string) (string, error) {
 	if !found {
 		return "", fmt.Errorf("%w: %s holds %q, want gitdir: <path>", ErrNotLinkedWorkTree, dotGit, content)
 	}
-	adminDir, err := finalPath(absoluteFrom(workTree, named))
-	if err != nil {
-		return "", err
-	}
-	worktrees := filepath.Dir(adminDir)
-	if !strings.EqualFold(filepath.Base(worktrees), "worktrees") {
-		return "", fmt.Errorf("%w: %s names %s, which is not in a worktrees folder", ErrNotLinkedWorkTree, dotGit, adminDir)
-	}
-	if err := verifyGitDir(filepath.Dir(worktrees), agentSID); err != nil {
-		return "", err
-	}
-	backPointer, err := readAtMost(filepath.Join(adminDir, "gitdir"), maximumPointerFileBytes, ErrNotLinkedWorkTree)
-	if err != nil {
-		return "", err
-	}
-	namedBack := filepath.Dir(absoluteFrom(adminDir, strings.TrimRight(backPointer, "\r\n")))
-	same, err := isSameDirectory(namedBack, workTree)
-	if err != nil {
-		return "", err
-	}
-	if !same {
-		return "", fmt.Errorf("%w: %s names %s, which belongs to %s", ErrNotLinkedWorkTree, dotGit, adminDir, namedBack)
-	}
-	return adminDir, nil
+	return rules.held.hold(absoluteFrom(workTree, named), func(adminDir string) error {
+		worktrees := filepath.Dir(adminDir)
+		if !strings.EqualFold(filepath.Base(worktrees), "worktrees") {
+			return fmt.Errorf("%w: %s names %s, which is not in a worktrees folder", ErrNotLinkedWorkTree, dotGit, adminDir)
+		}
+		if err := verifyGitDir(filepath.Dir(worktrees), rules.AgentSID); err != nil {
+			return err
+		}
+		backPointer, err := readAtMost(filepath.Join(adminDir, "gitdir"), maximumPointerFileBytes, ErrNotLinkedWorkTree)
+		if err != nil {
+			return err
+		}
+		namedBack := filepath.Dir(absoluteFrom(adminDir, strings.TrimRight(backPointer, "\r\n")))
+		same, err := isSameDirectory(namedBack, workTree)
+		if err != nil {
+			return err
+		}
+		if !same {
+			return fmt.Errorf("%w: %s names %s, which belongs to %s", ErrNotLinkedWorkTree, dotGit, adminDir, namedBack)
+		}
+		return nil
+	})
 }
 
 // git writes relative paths in worktree files when worktree.useRelativePaths is set.

@@ -3,11 +3,13 @@
 package focus
 
 import (
+	"errors"
 	"fmt"
 	"io/fs"
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"unsafe"
 
 	"golang.org/x/sys/windows"
@@ -81,34 +83,71 @@ func verifyGitDir(gitDir string, agent *windows.SID) error {
 	})
 }
 
-// finalPath resolves the junctions and links on the way to path, since the agent could re-point one after the check.
-func finalPath(path string) (string, error) {
+// heldGitDirs keeps a handle open in each checked git directory, keyed by its final path. Windows refuses to rename a
+// folder with a handle open inside it, so the agent cannot move a work tree aside and plant its own .git at the
+// checked path.
+type heldGitDirs struct {
+	mutex   sync.Mutex
+	handles map[string]windows.Handle
+}
+
+// hold opens path before verify runs on its final path, and keeps it open only when verify passes. The final path has
+// the junctions and links on the way to path resolved, since the agent could re-point one after the check.
+func (h *heldGitDirs) hold(path string, verify func(final string) error) (string, error) {
 	name, err := windows.UTF16PtrFromString(path)
 	if err != nil {
 		return "", fmt.Errorf("encode path %s: %w", path, err)
 	}
-	// Backup semantics opens a directory, and access 0 is enough to read its name.
+	// Backup semantics opens a directory, access 0 is enough to read its name, and a reparse point at path is held
+	// itself, not its target.
 	handle, err := windows.CreateFile(name, 0,
 		windows.FILE_SHARE_READ|windows.FILE_SHARE_WRITE|windows.FILE_SHARE_DELETE, nil, windows.OPEN_EXISTING,
-		windows.FILE_FLAG_BACKUP_SEMANTICS, 0)
+		windows.FILE_FLAG_BACKUP_SEMANTICS|windows.FILE_FLAG_OPEN_REPARSE_POINT, 0)
 	if err != nil {
 		return "", fmt.Errorf("open %s: %w", path, err)
 	}
-	defer windows.CloseHandle(handle)
 	buffer := make([]uint16, windows.MAX_LONG_PATH)
 	// Flags 0 are FILE_NAME_NORMALIZED and VOLUME_NAME_DOS, which x/sys/windows lacks.
 	length, err := windows.GetFinalPathNameByHandle(handle, &buffer[0], uint32(len(buffer)), 0)
-	if err != nil {
-		return "", fmt.Errorf("resolve %s: %w", path, err)
+	resolved := windows.UTF16ToString(buffer[:min(int(length), len(buffer))])
+	final := strings.TrimPrefix(resolved, `\\?\`)
+	var refusal error
+	switch {
+	case err != nil:
+		refusal = fmt.Errorf("resolve %s: %w", path, err)
+	case int(length) >= len(buffer):
+		refusal = fmt.Errorf("resolve %s: the final path is over %d characters", path, len(buffer))
+	case strings.HasPrefix(resolved, `\\?\UNC\`):
+		refusal = fmt.Errorf("%w: %s resolves to the network path %s", ErrGitDirUnprotected, path, resolved)
+	default:
+		refusal = verify(final)
 	}
-	if int(length) >= len(buffer) {
-		return "", fmt.Errorf("resolve %s: the final path is over %d characters", path, len(buffer))
+	if refusal != nil {
+		return "", errors.Join(refusal, windows.CloseHandle(handle))
 	}
-	final := windows.UTF16ToString(buffer[:length])
-	if strings.HasPrefix(final, `\\?\UNC\`) {
-		return "", fmt.Errorf("%w: %s resolves to the network path %s", ErrGitDirUnprotected, path, final)
+	h.mutex.Lock()
+	defer h.mutex.Unlock()
+	if _, held := h.handles[final]; held {
+		if err := windows.CloseHandle(handle); err != nil {
+			return "", fmt.Errorf("close the second handle on %s: %w", final, err)
+		}
+		return final, nil
 	}
-	return strings.TrimPrefix(final, `\\?\`), nil
+	h.handles[final] = handle
+	return final, nil
+}
+
+func (h *heldGitDirs) release() error {
+	h.mutex.Lock()
+	defer h.mutex.Unlock()
+	errs := []error{}
+	for final, handle := range h.handles {
+		if err := windows.CloseHandle(handle); err != nil {
+			errs = append(errs, fmt.Errorf("close the handle on %s: %w", final, err))
+		}
+	}
+	h.handles = map[string]windows.Handle{}
+	return errors.Join(errs...)
 }
 
 // os.Open does not share delete access, which would make the publisher's replace fail.
