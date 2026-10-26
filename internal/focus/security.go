@@ -7,6 +7,7 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
+	"strings"
 	"unsafe"
 
 	"golang.org/x/sys/windows"
@@ -89,6 +90,36 @@ func deniesAgentWrites(ace *windows.ACCESS_ALLOWED_ACE, agent *windows.SID) bool
 	}
 	// The SID starts at SidStart and runs past the end of the Go struct, as in the Win32 ACCESS_DENIED_ACE.
 	return (*windows.SID)(unsafe.Pointer(&ace.SidStart)).Equals(agent)
+}
+
+// finalPath resolves the junctions and links on the way to path, since the agent could re-point one after the check.
+func finalPath(path string) (string, error) {
+	name, err := windows.UTF16PtrFromString(path)
+	if err != nil {
+		return "", fmt.Errorf("encode path %s: %w", path, err)
+	}
+	// Backup semantics opens a directory, and access 0 is enough to read its name.
+	handle, err := windows.CreateFile(name, 0,
+		windows.FILE_SHARE_READ|windows.FILE_SHARE_WRITE|windows.FILE_SHARE_DELETE, nil, windows.OPEN_EXISTING,
+		windows.FILE_FLAG_BACKUP_SEMANTICS, 0)
+	if err != nil {
+		return "", fmt.Errorf("open %s: %w", path, err)
+	}
+	defer windows.CloseHandle(handle)
+	buffer := make([]uint16, windows.MAX_LONG_PATH)
+	// Flags 0 are FILE_NAME_NORMALIZED and VOLUME_NAME_DOS, which x/sys/windows lacks.
+	length, err := windows.GetFinalPathNameByHandle(handle, &buffer[0], uint32(len(buffer)), 0)
+	if err != nil {
+		return "", fmt.Errorf("resolve %s: %w", path, err)
+	}
+	if int(length) >= len(buffer) {
+		return "", fmt.Errorf("resolve %s: the final path is over %d characters", path, len(buffer))
+	}
+	final := windows.UTF16ToString(buffer[:length])
+	if strings.HasPrefix(final, `\\?\UNC\`) {
+		return "", fmt.Errorf("%w: %s resolves to the network path %s", ErrGitDirUnprotected, path, final)
+	}
+	return strings.TrimPrefix(final, `\\?\`), nil
 }
 
 // os.Open does not share delete access, which would make the publisher's replace fail.

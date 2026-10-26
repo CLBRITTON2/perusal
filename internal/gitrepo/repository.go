@@ -18,6 +18,9 @@ import (
 
 type Repository struct {
 	Dir string // the working tree's top level
+	// GitDir, when set, is the git directory git uses instead of the one it would find from Dir, so a linked work
+	// tree's .git file cannot redirect it. Empty lets git find it.
+	GitDir string
 }
 
 type Commit struct {
@@ -47,12 +50,13 @@ var ErrCannotRewrite = errors.New("cannot rewrite")
 
 var commitHash = regexp.MustCompile(`^(?:[0-9a-f]{40}|[0-9a-f]{64})$`)
 
-func Open(ctx context.Context, dir string) (Repository, error) {
-	output, err := Repository{Dir: dir}.git(ctx, "rev-parse", "--show-toplevel")
+// Open resolves r.Dir to the top level of its working tree and keeps r.GitDir.
+func Open(ctx context.Context, r Repository) (Repository, error) {
+	output, err := r.git(ctx, "rev-parse", "--show-toplevel")
 	if err != nil {
-		return Repository{}, fmt.Errorf("open repository %s: %w", dir, err)
+		return Repository{}, fmt.Errorf("open repository %s: %w", r.Dir, err)
 	}
-	return Repository{Dir: strings.TrimSpace(string(output))}, nil
+	return Repository{Dir: strings.TrimSpace(string(output)), GitDir: r.GitDir}, nil
 }
 
 func (r Repository) Status(ctx context.Context) (Status, error) {
@@ -305,7 +309,7 @@ func (r Repository) Switch(ctx context.Context, branch string) error {
 
 // The message goes on stdin to keep it out of the error text.
 func (r Repository) Commit(ctx context.Context, message string) (string, error) {
-	output, err := runGit(ctx, r.Dir, []string{"commit", "--file", "-"}, message, []string{})
+	output, err := runGit(ctx, r, []string{"commit", "--file", "-"}, message, []string{})
 	if err != nil {
 		return "", err
 	}
@@ -346,13 +350,13 @@ func (r Repository) Reword(ctx context.Context, hash string, message string) err
 	}
 	if hash == head {
 		// --only with no paths leaves the staged changes out of the amended commit.
-		_, err := runGit(ctx, r.Dir, []string{"commit", "--amend", "--only", "--file", "-"}, message, []string{})
+		_, err := runGit(ctx, r, []string{"commit", "--amend", "--only", "--file", "-"}, message, []string{})
 		return err
 	}
 	if err := r.checkRewritable(ctx, hash); err != nil {
 		return err
 	}
-	cleanMessage, err := runGit(ctx, r.Dir, []string{"stripspace"}, message, []string{})
+	cleanMessage, err := runGit(ctx, r, []string{"stripspace"}, message, []string{})
 	if err != nil {
 		return err
 	}
@@ -443,7 +447,7 @@ func (r Repository) commitTree(ctx context.Context, object commitObject, parent 
 		return "", fmt.Errorf("parse author %q in %s: want name <email> time zone", object.author, r.Dir)
 	}
 	args := slices.Concat([]string{"commit-tree", object.tree, "-p", parent, "-F", "-"}, signFlags)
-	output, err := runGit(ctx, r.Dir, args, object.message,
+	output, err := runGit(ctx, r, args, object.message,
 		[]string{"GIT_AUTHOR_NAME=" + name, "GIT_AUTHOR_EMAIL=" + email, "GIT_AUTHOR_DATE=" + date})
 	if err != nil {
 		return "", err
@@ -559,7 +563,7 @@ func isExitCodeOne(err error) bool {
 }
 
 func (r Repository) git(ctx context.Context, args ...string) ([]byte, error) {
-	return runGit(ctx, r.Dir, args, "", []string{})
+	return runGit(ctx, r, args, "", []string{})
 }
 
 func (r Repository) run(ctx context.Context, args ...string) error {
@@ -568,20 +572,28 @@ func (r Repository) run(ctx context.Context, args ...string) error {
 }
 
 // environment adds to the inherited one.
-func runGit(ctx context.Context, dir string, args []string, input string, environment []string) ([]byte, error) {
+func runGit(ctx context.Context, r Repository, args []string, input string, environment []string) ([]byte, error) {
 	command := exec.CommandContext(ctx, "git", args...)
-	command.Dir = dir
+	command.Dir = r.Dir
 	// A credential prompt would fight the TUI for the terminal, so git fails instead of asking.
 	// Optional locks off: polling git status would otherwise take index.lock and fail the owner's own git add.
-	command.Env = slices.Concat(os.Environ(), []string{"GIT_TERMINAL_PROMPT=0", "GIT_OPTIONAL_LOCKS=0"}, environment)
+	command.Env = slices.Concat(os.Environ(), []string{"GIT_TERMINAL_PROMPT=0", "GIT_OPTIONAL_LOCKS=0"},
+		pinnedGitDir(r), environment)
 	command.Stdin = strings.NewReader(input)
 	var stderr bytes.Buffer
 	command.Stderr = &stderr
 	output, err := command.Output()
 	if err != nil {
 		// Carries stdout too: git commit with nothing staged explains itself only there.
-		return output, fmt.Errorf("run git %s in %s: %w: %s", strings.Join(args, " "), dir, err,
+		return output, fmt.Errorf("run git %s in %s: %w: %s", strings.Join(args, " "), r.Dir, err,
 			strings.TrimSpace(stderr.String()+"\n"+string(output)))
 	}
 	return output, nil
+}
+
+func pinnedGitDir(r Repository) []string {
+	if r.GitDir == "" {
+		return []string{}
+	}
+	return []string{"GIT_DIR=" + r.GitDir, "GIT_WORK_TREE=" + r.Dir}
 }

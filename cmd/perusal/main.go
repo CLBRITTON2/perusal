@@ -59,7 +59,7 @@ func runReview(args []string) error {
 }
 
 func review(repositoryPath string) error {
-	repository, err := gitrepo.Open(context.Background(), repositoryPath)
+	repository, err := gitrepo.Open(context.Background(), gitrepo.Repository{Dir: repositoryPath})
 	if err != nil {
 		return err
 	}
@@ -67,7 +67,9 @@ func review(repositoryPath string) error {
 	if err != nil {
 		return err
 	}
-	model, err := startingModel(listWithoutFollow, statePath)
+	model, err := startingModel(listWithoutFollow, func(ctx context.Context, dir string) (gitrepo.Repository, error) {
+		return gitrepo.Open(ctx, gitrepo.Repository{Dir: dir})
+	}, statePath)
 	if err != nil {
 		return err
 	}

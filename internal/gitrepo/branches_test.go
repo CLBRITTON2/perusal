@@ -31,6 +31,22 @@ func TestBranchesListsEachLocalBranchWithItsUpstream(t *testing.T) {
 	}
 }
 
+func TestBranchesNamesTheOtherWorkTreeABranchIsCheckedOutIn(t *testing.T) {
+	_, clone := pushedClone(t)
+	side := filepath.Join(t.TempDir(), "side")
+	runSteps(t, clone, [][]string{{"-C", clone, "worktree", "add", "-b", "side", side}})
+
+	branches, err := Repository{Dir: clone}.Branches(context.Background())
+
+	want := []Branch{
+		{Name: "main", Current: true, Tracking: Tracking{Upstream: "origin/main"}},
+		{Name: "side", OtherWorkTree: filepath.ToSlash(side)},
+	}
+	if err != nil || !reflect.DeepEqual(branches, want) {
+		t.Fatalf("got %+v, %v, want %+v", branches, err, want)
+	}
+}
+
 func TestDeleteBranchDeletesABranchWithChangesTheDefaultBranchLacks(t *testing.T) {
 	clone := cloneWithFeatureBranch(t)
 

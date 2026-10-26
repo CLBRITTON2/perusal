@@ -10,6 +10,7 @@ import (
 	tea "charm.land/bubbletea/v2"
 
 	"github.com/CLBRITTON2/perusal/internal/focus"
+	"github.com/CLBRITTON2/perusal/internal/gitrepo"
 	"github.com/CLBRITTON2/perusal/internal/ui"
 )
 
@@ -64,6 +65,8 @@ func follow(rules focus.Rules) error {
 	}
 	model, err := startingModel(func(ctx context.Context) (focus.Found, error) {
 		return focus.FindRepositories(ctx, rules)
+	}, func(ctx context.Context, dir string) (gitrepo.Repository, error) {
+		return focus.OpenWorkTree(ctx, rules, dir)
 	}, statePath)
 	if err != nil {
 		return err

@@ -14,6 +14,7 @@ var (
 	ErrNotWorkTree        = errors.New("no .git between the path and the owner directory")
 	ErrGitDirUnprotected  = errors.New("the .git directory is not write-denied to the agent account")
 	ErrWorkTreeMismatch   = errors.New("git resolved a different work tree than the one checked")
+	ErrNotLinkedWorkTree  = errors.New("the .git file does not name this work tree's folder in a repository's worktrees")
 )
 
 // Repositories are in focus file order, each once. Refusals hold an error for each path that failed a check.
@@ -40,6 +41,8 @@ func (r FoundRefusal) Summary() string {
 		return "not write-denied to the agent"
 	case errors.Is(r.Err, ErrWorkTreeMismatch):
 		return "git opens a different work tree"
+	case errors.Is(r.Err, ErrNotLinkedWorkTree):
+		return ".git file names no work tree of it"
 	case errors.Is(r.Err, fs.ErrPermission):
 		return "access denied"
 	}

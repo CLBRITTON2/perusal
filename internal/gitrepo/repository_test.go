@@ -846,3 +846,21 @@ func assertFeaturePushedAndMainKept(t *testing.T, remote string, clone string, m
 			"HEAD %s", pushErr, revParse(t, remote, "main"), feature, featureErr, main, revParse(t, clone, "HEAD"))
 	}
 }
+
+func TestGitDirKeepsGitOffARewrittenDotGitFile(t *testing.T) {
+	_, clone := pushedClone(t)
+	side := filepath.Join(t.TempDir(), "side")
+	runSteps(t, clone, [][]string{{"worktree", "add", "-b", "side", side}})
+	writeFile(t, filepath.Join(side, ".git"), "gitdir: "+filepath.Join(t.TempDir(), "elsewhere")+"\n")
+
+	repository, err := Open(context.Background(),
+		Repository{Dir: side, GitDir: filepath.Join(clone, ".git", "worktrees", "side")})
+	if err != nil {
+		t.Fatal(err)
+	}
+	status, err := repository.Status(context.Background())
+
+	if err != nil || status.Branch != "side" {
+		t.Fatalf("got branch %q, %v, want side", status.Branch, err)
+	}
+}

@@ -51,12 +51,14 @@ func saveViewState(path string, viewState ui.ViewState) error {
 	return nil
 }
 
-func startingModel(findRepositories ui.RepositoryFinder, statePath string) (ui.Model, error) {
+func startingModel(findRepositories ui.RepositoryFinder, openRepository ui.RepositoryOpener, statePath string) (
+	ui.Model, error,
+) {
 	viewState, err := loadViewState(statePath)
 	if err != nil {
 		return ui.Model{}, err
 	}
-	return ui.New(findRepositories).WithViewState(viewState), nil
+	return ui.New(findRepositories, openRepository).WithViewState(viewState), nil
 }
 
 func runKeepingViewState(program *tea.Program, statePath string) error {

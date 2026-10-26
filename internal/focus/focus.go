@@ -19,7 +19,8 @@ import (
 	"github.com/CLBRITTON2/perusal/internal/gitrepo"
 )
 
-const maximumFocusFileBytes = 4096
+// For the focus file and the files that name a linked work tree's git directory.
+const maximumPointerFileBytes = 4096
 
 type Rules struct {
 	Config
@@ -112,7 +113,7 @@ func resolveResult(ctx context.Context, rules Rules) Result {
 
 // resolve fails only when the focus file is unreadable or none of its paths passes the checks.
 func resolve(ctx context.Context, rules Rules) (Focus, error) {
-	content, err := readFocusFile(rules.FocusFile)
+	content, err := readAtMost(rules.FocusFile, maximumPointerFileBytes, ErrMalformedFocusFile)
 	if err != nil {
 		return Focus{}, err
 	}
@@ -181,6 +182,12 @@ func FindRepositories(ctx context.Context, rules Rules) (Found, error) {
 	return found, nil
 }
 
+// OpenWorkTree opens dir, a work tree git listed, after the checks a focused one gets. dir may be outside the owner
+// directory, since git read it from a .git that passed them.
+func OpenWorkTree(ctx context.Context, rules Rules, dir string) (gitrepo.Repository, error) {
+	return openWorkTree(ctx, rules.AgentSID, filepath.FromSlash(dir))
+}
+
 // listErr is the error WalkDir hit listing dir.
 func openIfWorkTree(ctx context.Context, agentSID *windows.SID, dir string, listErr error) (
 	gitrepo.Repository, bool, error,
@@ -209,10 +216,11 @@ func nameBelow(ownerDir string, path string) (string, error) {
 
 // The owner's git runs the config and hooks of a .git, so one the agent could write is refused.
 func openWorkTree(ctx context.Context, agentSID *windows.SID, workTree string) (gitrepo.Repository, error) {
-	if err := verifyGitDir(filepath.Join(workTree, ".git"), agentSID); err != nil {
+	gitDir, err := checkedGitDir(agentSID, workTree)
+	if err != nil {
 		return gitrepo.Repository{}, err
 	}
-	repository, err := gitrepo.Open(ctx, workTree)
+	repository, err := gitrepo.Open(ctx, gitrepo.Repository{Dir: workTree, GitDir: gitDir})
 	if err != nil {
 		return gitrepo.Repository{}, err
 	}
@@ -225,6 +233,65 @@ func openWorkTree(ctx context.Context, agentSID *windows.SID, workTree string) (
 		return gitrepo.Repository{}, fmt.Errorf("%w: git opened %s as %s", ErrWorkTreeMismatch, workTree, repository.Dir)
 	}
 	return repository, nil
+}
+
+// checkedGitDir returns the git directory to pin, empty for a .git directory, which git finds itself.
+func checkedGitDir(agentSID *windows.SID, workTree string) (string, error) {
+	dotGit := filepath.Join(workTree, ".git")
+	info, err := os.Lstat(dotGit)
+	if err != nil {
+		return "", fmt.Errorf("inspect %s: %w", dotGit, err)
+	}
+	if info.Mode().IsRegular() {
+		return linkedAdminDir(agentSID, workTree)
+	}
+	return "", verifyGitDir(dotGit, agentSID)
+}
+
+// A linked work tree's .git file names its admin folder <repository .git>/worktrees/<id>. The agent can rewrite that
+// file, so the folder must sit in a checked .git and name this work tree back in its own gitdir file.
+func linkedAdminDir(agentSID *windows.SID, workTree string) (string, error) {
+	dotGit := filepath.Join(workTree, ".git")
+	content, err := readAtMost(dotGit, maximumPointerFileBytes, ErrNotLinkedWorkTree)
+	if err != nil {
+		return "", err
+	}
+	named, found := strings.CutPrefix(strings.TrimRight(content, "\r\n"), "gitdir: ")
+	if !found {
+		return "", fmt.Errorf("%w: %s holds %q, want gitdir: <path>", ErrNotLinkedWorkTree, dotGit, content)
+	}
+	adminDir, err := finalPath(absoluteFrom(workTree, named))
+	if err != nil {
+		return "", err
+	}
+	worktrees := filepath.Dir(adminDir)
+	if !strings.EqualFold(filepath.Base(worktrees), "worktrees") {
+		return "", fmt.Errorf("%w: %s names %s, which is not in a worktrees folder", ErrNotLinkedWorkTree, dotGit, adminDir)
+	}
+	if err := verifyGitDir(filepath.Dir(worktrees), agentSID); err != nil {
+		return "", err
+	}
+	backPointer, err := readAtMost(filepath.Join(adminDir, "gitdir"), maximumPointerFileBytes, ErrNotLinkedWorkTree)
+	if err != nil {
+		return "", err
+	}
+	namedBack := filepath.Dir(absoluteFrom(adminDir, strings.TrimRight(backPointer, "\r\n")))
+	same, err := isSameDirectory(namedBack, workTree)
+	if err != nil {
+		return "", err
+	}
+	if !same {
+		return "", fmt.Errorf("%w: %s names %s, which belongs to %s", ErrNotLinkedWorkTree, dotGit, adminDir, namedBack)
+	}
+	return adminDir, nil
+}
+
+// git writes relative paths in worktree files when worktree.useRelativePaths is set.
+func absoluteFrom(base string, path string) string {
+	if filepath.IsAbs(path) {
+		return filepath.Clean(path)
+	}
+	return filepath.Join(base, path)
 }
 
 // isSameDirectory compares file identity, since git reports a path through a junction by its target.
@@ -245,18 +312,19 @@ func isSamePath(first string, second string) bool {
 	return strings.EqualFold(filepath.Clean(first), filepath.Clean(second))
 }
 
-func readFocusFile(focusFile string) (string, error) {
-	file, err := openSharingDelete(focusFile)
+// readAtMost wraps tooLarge when path holds over maximumBytes.
+func readAtMost(path string, maximumBytes int, tooLarge error) (string, error) {
+	file, err := openSharingDelete(path)
 	if err != nil {
-		return "", fmt.Errorf("open focus file %s: %w", focusFile, err)
+		return "", fmt.Errorf("open %s: %w", path, err)
 	}
 	defer file.Close()
-	content, err := io.ReadAll(io.LimitReader(file, maximumFocusFileBytes+1))
+	content, err := io.ReadAll(io.LimitReader(file, int64(maximumBytes)+1))
 	if err != nil {
-		return "", fmt.Errorf("read focus file %s: %w", focusFile, err)
+		return "", fmt.Errorf("read %s: %w", path, err)
 	}
-	if len(content) > maximumFocusFileBytes {
-		return "", fmt.Errorf("%w: focus file %s is over %d bytes", ErrMalformedFocusFile, focusFile, maximumFocusFileBytes)
+	if len(content) > maximumBytes {
+		return "", fmt.Errorf("%w: %s is over %d bytes", tooLarge, path, maximumBytes)
 	}
 	return string(content), nil
 }

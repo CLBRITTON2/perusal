@@ -294,7 +294,7 @@ func (m Model) withOverviewLoaded(msg overviewMsg) Model {
 		return cmp.Compare(m.focusRank(a), m.focusRank(b))
 	})
 	loadedOverview := selectableList[overviewRow]{loaded: true, rows: rows, selected: 0, offset: 0}
-	m.overview = loadedOverview.withSelected(slices.IndexFunc(rows, isRowOf(m.repository)))
+	m.overview = loadedOverview.withSelected(slices.IndexFunc(rows, isRowAt(m.repository.Dir)))
 	m = m.withListScrolled()
 	if len(msg.failures) == 0 {
 		return m
@@ -302,10 +302,10 @@ func (m Model) withOverviewLoaded(msg overviewMsg) Model {
 	return m.withFooterError("skipped " + strings.Join(msg.failures, ", "))
 }
 
-func isRowOf(repository gitrepo.Repository) func(overviewRow) bool {
+func isRowAt(dir string) func(overviewRow) bool {
 	return func(row overviewRow) bool {
 		foundRow, isRepository := row.(repositoryRow)
-		return isRepository && foundRow.Repository == repository
+		return isRepository && foundRow.Repository.Dir == dir
 	}
 }
 
@@ -418,7 +418,7 @@ func (m Model) pushRepositoryRow(row repositoryRow) (tea.Model, tea.Cmd) {
 }
 
 func (m Model) reloadOverviewRow(dir string) tea.Cmd {
-	index := slices.IndexFunc(m.overview.rows, isRowOf(gitrepo.Repository{Dir: dir}))
+	index := slices.IndexFunc(m.overview.rows, isRowAt(dir))
 	if m.mode != modeOverview || index < 0 {
 		return nil
 	}
@@ -463,7 +463,7 @@ func (m Model) withOverviewFetchedAll(msg fetchedAllMsg) (tea.Model, tea.Cmd) {
 
 func (m Model) withOverviewRow(row repositoryRow) Model {
 	rows := slices.Clone(m.overview.rows)
-	index := slices.IndexFunc(rows, isRowOf(row.Repository))
+	index := slices.IndexFunc(rows, isRowAt(row.Repository.Dir))
 	if index >= 0 {
 		rows[index] = row
 	}
@@ -556,7 +556,7 @@ func (m Model) renderFocusMark(row overviewRow) string {
 func (r repositoryRow) cells() []string {
 	return []string{
 		repositoryStyle.Render(folderGlyph + " " + sanitizeText(r.RelativePath)),
-		branchStyle.Render(branchGlyph + " " + headName(r.status)),
+		branchStyle.Render(branchGlyph + " " + headName(r.status.Branch)),
 		renderChangedCount(len(r.status.Files)),
 		renderUnpushed(r),
 		renderBehindDefault(r),

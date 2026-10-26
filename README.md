@@ -46,6 +46,7 @@ perusal -repo <dir>  # review the repository <dir> is in
 | `A` | log | amend the selected commit with the staged changes |
 | `r` | log | reword the selected commit's message in the commit popup |
 | `b` | anywhere | list the local branches, `enter` switches to one, `D` deletes one after a confirm |
+| `w` | anywhere | list the repository's work trees, `enter` reviews one |
 | `o` | anywhere | in follow mode, open the overview of every repository under `ownerDir` |
 | `f` `F` | overview | fetch the selected repository or every one, dropping the remote branches that were deleted |
 | `p` | overview | fast-forward the selected repository to its upstream, or a finished branch to the default one |
@@ -59,6 +60,9 @@ In the commit popup, `tab` switches between summary and description, `enter` com
 commits from either field, and `esc` cancels. The changes pane shows how many lines the staged changes add and
 remove. The mouse works too: click a row to select it, click the folded pane to open it, right-click a commit to
 amend it. The wheel moves the selection over a list and scrolls the diff anywhere else.
+
+The top line names the repository and its branch, then counts its local branches and work trees. In a linked work
+tree, made by `git worktree add`, it also names the repository's main one, as in `work tree of repo`.
 
 On quit, perusal saves which list was showing and the `d`, `f` and `u` toggles to `perusal\state.json` in the user
 config directory (`%APPDATA%` on Windows), and the next launch opens the same way.
@@ -78,8 +82,14 @@ instead. It pushes with `--force-with-lease --force-if-includes`, so git refuses
 fetch.
 
 The branch list marks a branch merged when merging it into `origin`'s default branch would change nothing, which
-counts a squash merge. `D` deletes any branch but the current and the default one, and its confirm warns when the
-branch is not merged. `enter` refuses to switch while the work tree has uncommitted changes.
+counts a squash merge. That check sees only commits, so the current branch is not marked while the work tree has
+uncommitted changes, and a branch checked out in another work tree shows that work tree's name instead. `D` deletes
+any branch but the default one and those checked out in a work tree, and its confirm warns when the branch is not
+merged. `enter` refuses to switch while the work tree has uncommitted changes, and on a branch checked out in another
+work tree it reviews that work tree instead.
+
+The work tree list shows each work tree's folder, its branch and its uncommitted file count, and marks the one under
+review with `*`. In follow mode, one that fails a check below is listed muted, and `enter` on it shows why.
 
 ## Follow mode (Windows)
 
@@ -124,6 +134,12 @@ that can write `.git` could plant one and have git run it as you. So perusal che
 refuses the repository if the agent account owns any of it, if any of it is a link or junction, or if any of it
 grants write access ahead of a deny of `(OI)(CI)(WD,AD,WEA,WA,DE,DC)` for that account. For the same reason the agent
 account must not be able to write your `%APPDATA%`, where the config lives.
+
+A linked work tree, made by `git worktree add`, has a `.git` file instead, which the agent can rewrite. perusal opens
+it only when that file names a folder in the `worktrees` of a `.git` that passes the checks above, and that folder
+names the work tree back. git then runs with that folder pinned, so a later rewrite of the file changes nothing. The
+overview lists a work tree beside its repository, such as `repo-side` next to `repo`, but not one nested inside it,
+such as one under `repo\.claude\worktrees`. The focus file still opens that one.
 
 From an elevated prompt, for each repository under `ownerDir`, take ownership if the agent cloned it, add the deny,
 then reset everything inside `.git` to the inherited ACL, which drops any grant made directly on it:

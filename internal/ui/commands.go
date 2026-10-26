@@ -40,6 +40,8 @@ type statusMsg struct {
 	dir              string
 	status           gitrepo.Status
 	stagedLineCounts diff.LineCounts
+	branchCount      int
+	workTrees        []gitrepo.WorkTree
 }
 
 type diffMsg struct {
@@ -106,7 +108,16 @@ func (r repositoryRequest) loadStatus() tea.Msg {
 	if err != nil {
 		return gitFailureMsg{err: err}
 	}
-	return statusMsg{dir: r.repository.Dir, status: status, stagedLineCounts: stagedLineCounts}
+	branches, err := r.repository.Branches(context.Background())
+	if err != nil {
+		return gitFailureMsg{err: err}
+	}
+	workTrees, err := r.repository.WorkTrees(context.Background())
+	if err != nil {
+		return gitFailureMsg{err: err}
+	}
+	return statusMsg{dir: r.repository.Dir, status: status, stagedLineCounts: stagedLineCounts,
+		branchCount: len(branches), workTrees: workTrees}
 }
 
 func (r repositoryRequest) stageAll() tea.Msg {

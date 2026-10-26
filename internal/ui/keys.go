@@ -41,6 +41,8 @@ var (
 	deleteBranchKey   = key.NewBinding(key.WithKeys("D"), key.WithHelp("D", "delete"))
 	confirmDeleteKey  = key.NewBinding(key.WithKeys("enter"), key.WithHelp("enter", "delete"))
 	closeBranchesKey  = key.NewBinding(key.WithKeys("esc", "b"), key.WithHelp("esc", "close"))
+	workTreesKey      = key.NewBinding(key.WithKeys("w"), key.WithHelp("w", "work trees"))
+	closeWorkTreesKey = key.NewBinding(key.WithKeys("esc", "w"), key.WithHelp("esc", "close"))
 	quitKey           = key.NewBinding(key.WithKeys("q"), key.WithHelp("q", "quit"))
 	forceQuitKey      = key.NewBinding(key.WithKeys("ctrl+c"))
 	nextFieldKey      = key.NewBinding(key.WithKeys("tab", "shift+tab"), key.WithHelp("tab", "next field"))
@@ -60,15 +62,16 @@ var (
 	changesKeys = []key.Binding{downKey, stageKey, stageAllKey, discardKey}
 	logKeys     = []key.Binding{downKey, expandKey, searchKey, amendKey, rewordKey}
 	diffKeys    = []key.Binding{scrollDownKey, nextChangeKey, fullscreenKey, wholeFileKey, unifiedKey}
-	reviewKeys  = []key.Binding{commitKey, pushKey, switchViewKey, branchesKey, overviewKey, quitKey}
+	reviewKeys  = []key.Binding{commitKey, pushKey, switchViewKey, branchesKey, workTreesKey, overviewKey, quitKey}
 	// Not every key fits one line, so the footer leaves the rest to the key list.
-	reviewHelp   = []key.Binding{commitKey, pushKey, switchViewKey, keyListKey, quitKey}
-	changesHelp  = slices.Concat(changesKeys, reviewHelp)
-	logHelp      = slices.Concat(logKeys, reviewHelp)
-	overviewHelp = []key.Binding{downKey, openRepositoryKey, fetchKey, pullKey, pushKey, closeOverviewKey, quitKey}
-	branchesHelp = []key.Binding{downKey, switchBranchKey, deleteBranchKey, closeBranchesKey, quitKey}
-	searchHelp   = []key.Binding{keepSearchKey, clearSearchKey}
-	commitHelp   = []key.Binding{nextFieldKey, submitKey, cancelKey}
-	rewordHelp   = []key.Binding{nextFieldKey, submitRewordKey, cancelKey}
-	keyListHelp  = []key.Binding{closeKeyListKey}
+	reviewHelp    = []key.Binding{commitKey, pushKey, switchViewKey, keyListKey, quitKey}
+	changesHelp   = slices.Concat(changesKeys, reviewHelp)
+	logHelp       = slices.Concat(logKeys, reviewHelp)
+	overviewHelp  = []key.Binding{downKey, openRepositoryKey, fetchKey, pullKey, pushKey, closeOverviewKey, quitKey}
+	branchesHelp  = []key.Binding{downKey, switchBranchKey, deleteBranchKey, closeBranchesKey, quitKey}
+	workTreesHelp = []key.Binding{downKey, openRepositoryKey, closeWorkTreesKey, quitKey}
+	searchHelp    = []key.Binding{keepSearchKey, clearSearchKey}
+	commitHelp    = []key.Binding{nextFieldKey, submitKey, cancelKey}
+	rewordHelp    = []key.Binding{nextFieldKey, submitRewordKey, cancelKey}
+	keyListHelp   = []key.Binding{closeKeyListKey}
 )

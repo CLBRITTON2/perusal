@@ -2,6 +2,7 @@ package ui
 
 import (
 	"maps"
+	"path"
 	"path/filepath"
 	"slices"
 	"strconv"
@@ -52,6 +53,7 @@ const (
 	modeSearching
 	modeOverview
 	modeBranches
+	modeWorkTrees
 )
 
 type popupKind int
@@ -125,14 +127,16 @@ type commitDiff struct {
 type Model struct {
 	display
 	findRepositories RepositoryFinder
+	openRepository   RepositoryOpener
 	mode             screenMode
 	popup            popupState
 	footer           footer
 
 	overview selectableList[overviewRow]
 	// syncing maps the Dir of each repository an overview pull or fetch is running in to what its row shows.
-	syncing  map[string]string
-	branches branchList
+	syncing      map[string]string
+	branches     branchList
+	workTreeList selectableList[workTreeRow]
 
 	repository gitrepo.Repository
 	// focused lists the repositories the focus named.
@@ -141,6 +145,8 @@ type Model struct {
 
 	status           gitrepo.Status
 	stagedLineCounts diff.LineCounts
+	branchCount      int
+	workTrees        []gitrepo.WorkTree
 	selectedChange   int
 	changesOffset    int
 	diffPath         string
@@ -167,7 +173,7 @@ type Model struct {
 	editingDescription bool
 }
 
-func New(findRepositories RepositoryFinder) Model {
+func New(findRepositories RepositoryFinder, openRepository RepositoryOpener) Model {
 	summaryInput := textinput.New()
 	summaryInput.Placeholder = "Summary (required)"
 	summaryInput.Prompt = ""
@@ -188,11 +194,14 @@ func New(findRepositories RepositoryFinder) Model {
 	helpView.Styles.FullSeparator = helpSepStyle
 	return Model{
 		findRepositories:   findRepositories,
+		openRepository:     openRepository,
 		overview:           selectableList[overviewRow]{rows: []overviewRow{}},
 		syncing:            map[string]string{},
 		branches:           branchList{selectableList: selectableList[branchRow]{rows: []branchRow{}}},
+		workTreeList:       selectableList[workTreeRow]{rows: []workTreeRow{}},
 		focused:            []gitrepo.Repository{},
 		status:             gitrepo.Status{Files: []gitrepo.FileStatus{}},
+		workTrees:          []gitrepo.WorkTree{},
 		commits:            []gitrepo.Commit{},
 		graph:              []graphRow{},
 		logLimit:           logPageSize,
@@ -262,6 +271,8 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, nil
 		}
 		m.stagedLineCounts = msg.stagedLineCounts
+		m.branchCount = msg.branchCount
+		m.workTrees = msg.workTrees
 		return m.withStatus(msg.status)
 	case diffMsg:
 		if msg.dir != m.repository.Dir || msg.path != m.selectedPath() || msg.contextLines != m.contextLines() {
@@ -325,6 +336,20 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		m = m.withModeClosed(modeBranches).withFooterNotice("switched to " + msg.branch)
 		return m, m.reloadStatus()
+	case workTreesMsg:
+		if msg.dir != m.repository.Dir || m.mode != modeWorkTrees {
+			return m, nil
+		}
+		selected := max(slices.IndexFunc(msg.rows, m.isUnderReview), 0)
+		m.workTreeList = selectableList[workTreeRow]{loaded: true, rows: msg.rows, selected: selected, offset: 0}
+		return m.withListScrolled(), nil
+	case workTreesFailureMsg:
+		if msg.dir == m.repository.Dir {
+			m = m.withModeClosed(modeWorkTrees)
+		}
+		return m.withFooterError(msg.err.Error()), nil
+	case workTreeOpenedMsg:
+		return m.withFocusedRepository(msg.repository)
 	case syncedMsg:
 		return m.withOverviewSynced(msg)
 	case fetchedAllMsg:
@@ -364,6 +389,8 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m.updateOverview(msg)
 		case m.mode == modeBranches:
 			return m.updateBranches(msg)
+		case m.mode == modeWorkTrees:
+			return m.updateWorkTrees(msg)
 		case m.mode == modeSearching:
 			return m.updateSearch(msg)
 		}
@@ -509,6 +536,8 @@ func (m Model) updateBrowsing(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		return m.openRewordPopup()
 	case key.Matches(msg, branchesKey):
 		return m.openBranches()
+	case key.Matches(msg, workTreesKey):
+		return m.openWorkTrees()
 	case key.Matches(msg, overviewKey):
 		return m.openOverview()
 	}
@@ -528,7 +557,7 @@ func (m Model) switchView() (tea.Model, tea.Cmd) {
 }
 
 func (m Model) withRepository(repository gitrepo.Repository, rejection string) Model {
-	next := New(m.findRepositories)
+	next := New(m.findRepositories, m.openRepository)
 	next.display = m.display
 	next.mode = modeAfterSwitch(m.mode)
 	next.overview = m.overview
@@ -697,8 +726,8 @@ func (m Model) openPushPopup(repository gitrepo.Repository, status gitrepo.Statu
 	case !status.IsPublished():
 		return m.withConfirmation(repository.Dir, confirmation{
 			lines: []string{
-				titleStyle.Render("publish " + headName(status) + " to origin"),
-				textStyle.Render("origin/" + headName(status) + " becomes its upstream"),
+				titleStyle.Render("publish " + headName(status.Branch) + " to origin"),
+				textStyle.Render("origin/" + headName(status.Branch) + " becomes its upstream"),
 			},
 			confirmKey:  confirmPushKey,
 			run:         publishRequest{repository: repository, branch: status.Branch}.publish,
@@ -709,7 +738,7 @@ func (m Model) openPushPopup(repository gitrepo.Repository, status gitrepo.Statu
 	case status.Behind == 0:
 		return m.withConfirmation(repository.Dir, confirmation{
 			lines: []string{
-				titleStyle.Render("push " + headName(status) + " to " + upstream),
+				titleStyle.Render("push " + headName(status.Branch) + " to " + upstream),
 				textStyle.Render(pluralize(status.Ahead, "commit")),
 			},
 			confirmKey:  confirmPushKey,
@@ -719,7 +748,7 @@ func (m Model) openPushPopup(repository gitrepo.Repository, status gitrepo.Statu
 	}
 	return m.withConfirmation(repository.Dir, confirmation{
 		lines: []string{
-			titleStyle.Render("force push " + headName(status) + " to " + upstream),
+			titleStyle.Render("force push " + headName(status.Branch) + " to " + upstream),
 			textStyle.Render("replaces " + pluralize(status.Behind, "commit") + " on " + upstream + " with " +
 				pluralize(status.Ahead, "commit")),
 		},
@@ -1133,6 +1162,7 @@ func (m Model) withListScrolled() Model {
 	m.changesOffset = scrolledOffset(m.changesOffset, m.selectedChange, m.listInnerHeight())
 	m.overview = m.overview.scrolled(m.overviewTableInnerHeight())
 	m.branches.selectableList = m.branches.scrolled(m.paneInnerHeight())
+	m.workTreeList = m.workTreeList.scrolled(m.paneInnerHeight())
 	return m
 }
 
@@ -1239,7 +1269,10 @@ func (m Model) renderColumns() string {
 	case m.mode == modeOverview:
 		return m.renderOverview()
 	case m.mode == modeBranches:
-		return renderListPane("branches", m.branches.selectableList, m.branches.cells, "no branches yet", m.width-2,
+		return renderListPane("branches", m.branches.selectableList, m.branchCells, "no branches yet", m.width-2,
+			m.paneInnerHeight())
+	case m.mode == modeWorkTrees:
+		return renderListPane("work trees", m.workTreeList, m.workTreeCells, "no work trees", m.width-2,
 			m.paneInnerHeight())
 	case m.fullscreenDiff:
 		return m.renderDiffPane()
@@ -1247,11 +1280,11 @@ func (m Model) renderColumns() string {
 	return lipgloss.JoinHorizontal(lipgloss.Top, m.renderLists(), m.renderDiffPane())
 }
 
-func headName(status gitrepo.Status) string {
-	if status.Branch == "" {
+func headName(branch string) string {
+	if branch == "" {
 		return "detached HEAD"
 	}
-	return sanitizeText(status.Branch)
+	return sanitizeText(branch)
 }
 
 func (m Model) renderHeader() string {
@@ -1262,8 +1295,22 @@ func (m Model) renderHeader() string {
 		return fitToWidth(" "+mutedStyle.Render("waiting for a repository"), m.width)
 	}
 	left := " " + repositoryStyle.Render(folderGlyph+" "+sanitizeText(filepath.Base(m.repository.Dir))) +
-		"  " + branchStyle.Render(branchGlyph+" "+headName(m.status)) + " " + renderAheadBehind(m.status.Tracking)
+		"  " + branchStyle.Render(branchGlyph+" "+headName(m.status.Branch)) + " " + renderAheadBehind(m.status.Tracking) +
+		"  " + mutedStyle.Render(m.repositoryShape())
 	return fitToWidth(left, m.width)
+}
+
+// Empty until the first status arrives with the work tree list.
+func (m Model) repositoryShape() string {
+	if len(m.workTrees) == 0 {
+		return ""
+	}
+	parts := []string{pluralize(m.branchCount, "branch"), pluralize(len(m.workTrees), "work tree")}
+	mainWorkTree := m.workTrees[0].Path
+	if mainWorkTree != m.repository.Dir {
+		parts = append(parts, "work tree of "+sanitizeText(path.Base(mainWorkTree)))
+	}
+	return strings.Join(parts, " · ")
 }
 
 func renderAheadBehind(tracking gitrepo.Tracking) string {
@@ -1483,6 +1530,8 @@ func (m Model) renderFooter() string {
 		return m.renderHelpLine(overviewHelp)
 	case m.mode == modeBranches:
 		return m.renderHelpLine(branchesHelp)
+	case m.mode == modeWorkTrees:
+		return m.renderHelpLine(workTreesHelp)
 	case m.mode == modeSearching && m.searchError != "":
 		return fitToWidth(" "+m.searchInput.View()+"  "+errorStyle.Render(m.searchError), m.width)
 	case m.mode == modeSearching:
@@ -1505,8 +1554,8 @@ func (m Model) overlayPopup(screen string, popup string) string {
 }
 
 func (m Model) renderCommitPopup() string {
-	return m.renderPopup(append([]string{titleStyle.Render("commit to " + headName(m.status))}, m.messageFields()...),
-		"committing...", commitHelp)
+	title := titleStyle.Render("commit to " + headName(m.status.Branch))
+	return m.renderPopup(append([]string{title}, m.messageFields()...), "committing...", commitHelp)
 }
 
 func (m Model) renderRewordPopup() string {
@@ -1556,6 +1605,9 @@ func (m Model) renderPopup(lines []string, runningText string, bindings []key.Bi
 func pluralize(count int, noun string) string {
 	if count == 1 {
 		return "1 " + noun
+	}
+	if strings.HasSuffix(noun, "ch") {
+		return strconv.Itoa(count) + " " + noun + "es"
 	}
 	return strconv.Itoa(count) + " " + noun + "s"
 }

@@ -7,15 +7,17 @@ import (
 	"strings"
 )
 
+// OtherWorkTree is the slash separated path of another work tree that has the branch checked out, empty when none.
 type Branch struct {
-	Name    string
-	Current bool
+	Name          string
+	Current       bool
+	OtherWorkTree string
 	Tracking
 }
 
 func (r Repository) Branches(ctx context.Context) ([]Branch, error) {
-	format := strings.Join([]string{"%(HEAD)", "%(refname:lstrip=2)", "%(upstream:short)", "%(upstream:track,nobracket)"},
-		refFieldSeparator)
+	format := strings.Join([]string{"%(HEAD)", "%(refname:lstrip=2)", "%(upstream:short)", "%(upstream:track,nobracket)",
+		"%(worktreepath)"}, refFieldSeparator)
 	output, err := r.git(ctx, "for-each-ref", "--format="+format, "refs/heads")
 	if err != nil {
 		return nil, err
@@ -27,10 +29,14 @@ func parseBranches(output []byte) ([]Branch, error) {
 	branches := []Branch{}
 	for line := range strings.Lines(string(output)) {
 		fields := strings.Split(strings.TrimSuffix(line, "\n"), fieldSeparator)
-		if len(fields) != 4 {
-			return nil, fmt.Errorf("parse git for-each-ref line %q: want 4 fields, got %d", line, len(fields))
+		if len(fields) != 5 {
+			return nil, fmt.Errorf("parse git for-each-ref line %q: want 5 fields, got %d", line, len(fields))
 		}
 		branch := Branch{Name: fields[1], Current: fields[0] == "*", Tracking: Tracking{Upstream: fields[2]}}
+		// %(worktreepath) also names the current work tree for the current branch.
+		if !branch.Current {
+			branch.OtherWorkTree = fields[4]
+		}
 		withTrack, err := branchWithTrack(branch, fields[3])
 		if err != nil {
 			return nil, fmt.Errorf("parse git for-each-ref line %q: %w", line, err)

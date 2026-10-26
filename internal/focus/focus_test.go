@@ -181,11 +181,120 @@ func TestFindRepositoriesRefusesAnUnprotectedOneAndSkipsANestedOne(t *testing.T)
 	}
 }
 
+func TestFindRepositoriesListsALinkedWorkTree(t *testing.T) {
+	devDir := t.TempDir()
+	repository, _ := repositoryWithWorkTree(t, devDir)
+	denyGuests(t, filepath.Join(repository, ".git"), deniedWriteMask)
+
+	got, err := FindRepositories(context.Background(), guestRules(t, devDir, ""))
+
+	if err != nil || len(got.Repositories) != 2 || got.Repositories[1].RelativePath != "repo-side" ||
+		len(got.Refusals) != 0 {
+		t.Fatalf("got %v, %v, want repo and repo-side", got, err)
+	}
+}
+
+func TestLinkedWorkTree(t *testing.T) {
+	t.Run("opensThroughItsCheckedRepository", opensThroughItsCheckedRepository)
+	t.Run("isRefusedWhenItsRepositoryIsUnprotected", isRefusedWhenItsRepositoryIsUnprotected)
+	t.Run("isRefusedWhenItsGitFileNamesAnotherWorkTree", isRefusedWhenItsGitFileNamesAnotherWorkTree)
+	t.Run("opensThroughAJunctionAsItsRealPath", opensThroughAJunctionAsItsRealPath)
+}
+
+func opensThroughItsCheckedRepository(t *testing.T) {
+	devDir := t.TempDir()
+	repository, side := repositoryWithWorkTree(t, devDir)
+	denyGuests(t, filepath.Join(repository, ".git"), deniedWriteMask)
+
+	got, err := resolve(context.Background(), guestRules(t, devDir, focusFileHolding(t, agentDevDir+`\repo-side\cmd`)))
+
+	if err != nil || len(got.Repositories) != 1 {
+		t.Fatalf("got %v, %v, want one repository", got, err)
+	}
+	same, err := isSameDirectory(got.Repositories[0].Dir, side)
+	if err != nil || !same {
+		t.Fatalf("got %q, %v, want %q", got.Repositories[0].Dir, err, side)
+	}
+	status, err := got.Repositories[0].Status(context.Background())
+	if err != nil || status.Branch != "side" {
+		t.Fatalf("got branch %q, %v, want side", status.Branch, err)
+	}
+}
+
+func isRefusedWhenItsRepositoryIsUnprotected(t *testing.T) {
+	devDir := t.TempDir()
+	repositoryWithWorkTree(t, devDir)
+
+	_, err := resolve(context.Background(), guestRules(t, devDir, focusFileHolding(t, agentDevDir+`\repo-side`)))
+
+	if !errors.Is(err, ErrGitDirUnprotected) {
+		t.Fatalf("got %v, want %v", err, ErrGitDirUnprotected)
+	}
+}
+
+func isRefusedWhenItsGitFileNamesAnotherWorkTree(t *testing.T) {
+	devDir := t.TempDir()
+	repository, side := repositoryWithWorkTree(t, devDir)
+	mustGit(t, "-C", repository, "worktree", "add", "-b", "other", filepath.Join(devDir, "repo-other"))
+	denyGuests(t, filepath.Join(repository, ".git"), deniedWriteMask)
+	writeGitFile(t, side, filepath.Join(repository, ".git", "worktrees", "repo-other"))
+
+	_, err := resolve(context.Background(), guestRules(t, devDir, focusFileHolding(t, agentDevDir+`\repo-side`)))
+
+	if !errors.Is(err, ErrNotLinkedWorkTree) {
+		t.Fatalf("got %v, want %v", err, ErrNotLinkedWorkTree)
+	}
+}
+
+func opensThroughAJunctionAsItsRealPath(t *testing.T) {
+	devDir := t.TempDir()
+	repository, side := repositoryWithWorkTree(t, devDir)
+	denyGuests(t, filepath.Join(repository, ".git"), deniedWriteMask)
+	junction := filepath.Join(t.TempDir(), "link")
+	if output, err := exec.Command("cmd", "/c", "mklink", "/J", junction, filepath.Join(repository, ".git")).
+		CombinedOutput(); err != nil {
+		t.Fatalf("mklink: %v: %s", err, output)
+	}
+	writeGitFile(t, side, filepath.Join(junction, "worktrees", "repo-side"))
+
+	got, err := resolve(context.Background(), guestRules(t, devDir, focusFileHolding(t, agentDevDir+`\repo-side`)))
+
+	want := filepath.Join(repository, ".git", "worktrees", "repo-side")
+	if err != nil || len(got.Repositories) != 1 || !strings.EqualFold(got.Repositories[0].GitDir, want) {
+		t.Fatalf("got %v, %v, want git directory %s", got, err, want)
+	}
+}
+
+// repositoryWithWorkTree makes devDir/repo with one commit and its linked work tree devDir/repo-side on branch side.
+func repositoryWithWorkTree(t *testing.T, devDir string) (string, string) {
+	t.Helper()
+	repository := filepath.Join(devDir, "repo")
+	gitInit(t, repository)
+	mustGit(t, "-C", repository, "-c", "user.name=perusal", "-c", "user.email=perusal@example.com",
+		"-c", "commit.gpgSign=false", "commit", "--allow-empty", "--message", "first")
+	side := filepath.Join(devDir, "repo-side")
+	mustGit(t, "-C", repository, "worktree", "add", "-b", "side", side)
+	mustMkdir(t, filepath.Join(side, "cmd"))
+	return repository, side
+}
+
+func writeGitFile(t *testing.T, workTree string, adminDir string) {
+	t.Helper()
+	if err := os.WriteFile(filepath.Join(workTree, ".git"), []byte("gitdir: "+adminDir+"\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+}
+
 func gitInit(t *testing.T, dir string) {
 	t.Helper()
-	output, err := exec.Command("git", "init", dir).CombinedOutput()
+	mustGit(t, "init", dir)
+}
+
+func mustGit(t *testing.T, args ...string) {
+	t.Helper()
+	output, err := exec.Command("git", args...).CombinedOutput()
 	if err != nil {
-		t.Fatalf("git init %s: %v\n%s", dir, err, output)
+		t.Fatalf("git %s: %v\n%s", strings.Join(args, " "), err, output)
 	}
 }
 
