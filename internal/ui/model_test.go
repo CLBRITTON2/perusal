@@ -516,17 +516,18 @@ func findNothing(context.Context) (focus.Found, error) {
 func TestHeaderCountsBranchesAndWorkTrees(t *testing.T) {
 	workTrees := []gitrepo.WorkTree{{Path: "C:/dev/repo"}, {Path: "C:/dev/repo-side"}}
 	for name, test := range map[string]struct {
-		dir  string
-		want string
+		dir               string
+		remoteBranchCount int
+		want              string
 	}{
-		"inTheMainWorkTree": {dir: "C:/dev/repo", want: "3 branches · 2 work trees"},
+		"inTheMainWorkTree": {dir: "C:/dev/repo", remoteBranchCount: 37, want: "3 branches (37 remote) · 2 work trees"},
 		"inALinkedWorkTree": {dir: "C:/dev/repo-side", want: "3 branches · 2 work trees · work tree of repo"},
 	} {
 		t.Run(name, func(t *testing.T) {
 			m := update(t, New(findNothing, openAnything), tea.WindowSizeMsg{Width: 120, Height: 30})
 			m = update(t, m, focusOnOne(test.dir))
 			m = update(t, m, statusMsg{dir: test.dir, status: gitrepo.Status{Branch: "main"}, branchCount: 3,
-				workTrees: workTrees})
+				remoteBranchCount: test.remoteBranchCount, workTrees: workTrees})
 
 			header := ansi.Strip(m.renderHeader())
 

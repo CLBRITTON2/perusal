@@ -143,14 +143,15 @@ type Model struct {
 	focused   []gitrepo.Repository
 	rejection string
 
-	status           gitrepo.Status
-	stagedLineCounts diff.LineCounts
-	branchCount      int
-	workTrees        []gitrepo.WorkTree
-	selectedChange   int
-	changesOffset    int
-	diffPath         string
-	fileDiff         diff.FileDiff
+	status            gitrepo.Status
+	stagedLineCounts  diff.LineCounts
+	branchCount       int
+	remoteBranchCount int
+	workTrees         []gitrepo.WorkTree
+	selectedChange    int
+	changesOffset     int
+	diffPath          string
+	fileDiff          diff.FileDiff
 
 	commits            []gitrepo.Commit
 	graph              []graphRow
@@ -272,6 +273,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		m.stagedLineCounts = msg.stagedLineCounts
 		m.branchCount = msg.branchCount
+		m.remoteBranchCount = msg.remoteBranchCount
 		m.workTrees = msg.workTrees
 		return m.withStatus(msg.status)
 	case diffMsg:
@@ -336,6 +338,11 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		m = m.withModeClosed(modeBranches).withFooterNotice("switched to " + msg.branch)
 		return m, m.reloadStatus()
+	case branchesFetchedMsg:
+		if msg.dir != m.repository.Dir {
+			return m.withFooterNotice("fetched " + msg.dir), nil
+		}
+		return m.withFooterNotice("fetched"), tea.Batch(m.reloadStatus(), m.reloadBranches())
 	case workTreesMsg:
 		if msg.dir != m.repository.Dir || m.mode != modeWorkTrees {
 			return m, nil
@@ -1305,7 +1312,13 @@ func (m Model) repositoryShape() string {
 	if len(m.workTrees) == 0 {
 		return ""
 	}
-	parts := []string{pluralize(m.branchCount, "branch"), pluralize(len(m.workTrees), "work tree")}
+	var branches string
+	if m.remoteBranchCount > 0 {
+		branches = pluralize(m.branchCount, "branch") + " (" + strconv.Itoa(m.remoteBranchCount) + " remote)"
+	} else {
+		branches = pluralize(m.branchCount, "branch")
+	}
+	parts := []string{branches, pluralize(len(m.workTrees), "work tree")}
 	mainWorkTree := m.workTrees[0].Path
 	if mainWorkTree != m.repository.Dir {
 		parts = append(parts, "work tree of "+sanitizeText(path.Base(mainWorkTree)))

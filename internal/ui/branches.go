@@ -13,10 +13,12 @@ import (
 	"github.com/CLBRITTON2/perusal/internal/gitrepo"
 )
 
+// A row holds either a local branch or, with branch left empty, a remoteBranch no local branch shares a name with.
 // mergedIntoDefault stays false for the default branch itself and for a branch checked out in another work tree, whose
 // uncommitted changes the check cannot see.
 type branchRow struct {
 	branch            gitrepo.Branch
+	remoteBranch      gitrepo.RemoteBranch
 	mergedIntoDefault bool
 }
 
@@ -42,10 +44,18 @@ type branchSwitchMsg struct {
 	branch string
 }
 
+type branchesFetchedMsg struct {
+	dir string
+}
+
 func (r repositoryRequest) loadBranches() tea.Msg {
 	ctx := context.Background()
 	dir := r.repository.Dir
 	branches, err := r.repository.Branches(ctx)
+	if err != nil {
+		return branchesFailureMsg{dir: dir, err: err}
+	}
+	remoteBranches, err := r.repository.RemoteBranches(ctx)
 	if err != nil {
 		return branchesFailureMsg{dir: dir, err: err}
 	}
@@ -69,7 +79,19 @@ func (r repositoryRequest) loadBranches() tea.Msg {
 	if err := errors.Join(errs...); err != nil {
 		return branchesFailureMsg{dir: dir, err: err}
 	}
+	for _, remoteBranch := range remoteBranches {
+		if !slices.ContainsFunc(branches, func(branch gitrepo.Branch) bool { return branch.Name == remoteBranch.Name }) {
+			rows = append(rows, branchRow{remoteBranch: remoteBranch})
+		}
+	}
 	return branchesMsg{dir: dir, rows: rows, defaultBranch: defaultBranch}
+}
+
+func (r repositoryRequest) fetchBranches() tea.Msg {
+	if err := r.repository.Fetch(context.Background()); err != nil {
+		return gitFailureMsg{err: err}
+	}
+	return branchesFetchedMsg{dir: r.repository.Dir}
 }
 
 type branchRequest struct {
@@ -82,6 +104,18 @@ func (r branchRequest) switchTo() tea.Msg {
 		return gitFailureMsg{err: err}
 	}
 	return branchSwitchMsg{dir: r.repository.Dir, branch: r.branch}
+}
+
+type remoteBranchRequest struct {
+	repository   gitrepo.Repository
+	remoteBranch gitrepo.RemoteBranch
+}
+
+func (r remoteBranchRequest) switchTo() tea.Msg {
+	if err := r.repository.SwitchTracking(context.Background(), r.remoteBranch.Ref); err != nil {
+		return gitFailureMsg{err: err}
+	}
+	return branchSwitchMsg{dir: r.repository.Dir, branch: r.remoteBranch.Name}
 }
 
 func (r branchRequest) delete() tea.Msg {
@@ -135,6 +169,8 @@ func (m Model) updateBranches(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		return m.switchToSelectedBranch()
 	case key.Matches(msg, deleteBranchKey):
 		return m.openDeleteBranchPopup(), nil
+	case key.Matches(msg, fetchBranchesKey):
+		return m.withFooterNotice("fetching..."), repositoryRequest{repository: m.repository}.fetchBranches
 	}
 	return m, nil
 }
@@ -161,6 +197,8 @@ func (m Model) switchToSelectedBranch() (tea.Model, tea.Cmd) {
 		}
 	case len(m.status.Files) > 0:
 		return m.withFooterError("the work tree has uncommitted changes, so perusal does not switch branches"), nil
+	case row.remoteBranch.Ref != "":
+		return m, remoteBranchRequest{repository: m.repository, remoteBranch: row.remoteBranch}.switchTo
 	}
 	return m, branchRequest{repository: m.repository, branch: branch.Name}.switchTo
 }
@@ -172,6 +210,8 @@ func (m Model) openDeleteBranchPopup() Model {
 	}
 	name := row.branch.Name
 	switch {
+	case row.remoteBranch.Ref != "":
+		return m.withFooterError(row.remoteBranch.Ref + " is a remote branch, which perusal never deletes")
 	case row.branch.Current:
 		return m.withFooterError(name + " is checked out, so it cannot be deleted")
 	case row.branch.OtherWorkTree != "":
@@ -201,6 +241,9 @@ func renderMergedDeleteTarget(row branchRow, defaultBranch string) string {
 }
 
 func (m Model) branchCells(row branchRow) []string {
+	if row.remoteBranch.Ref != "" {
+		return []string{"", mutedStyle.Render(branchGlyph + " " + sanitizeText(row.remoteBranch.Ref)), "", "", ""}
+	}
 	return []string{
 		renderCurrentMark(row.branch.Current),
 		branchStyle.Render(branchGlyph + " " + sanitizeText(row.branch.Name)),

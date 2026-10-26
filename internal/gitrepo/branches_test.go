@@ -47,6 +47,47 @@ func TestBranchesNamesTheOtherWorkTreeABranchIsCheckedOutIn(t *testing.T) {
 	}
 }
 
+func TestRemoteBranchesListsEachRemoteBranchButNotARemoteHEAD(t *testing.T) {
+	clone := cloneWithTwoRemotes(t)
+
+	branches, err := Repository{Dir: clone}.RemoteBranches(context.Background())
+
+	want := []RemoteBranch{
+		{Ref: "fork/fix/x", Name: "fix/x"},
+		{Ref: "fork/main", Name: "main"},
+		{Ref: "origin/fix/x", Name: "fix/x"},
+		{Ref: "origin/main", Name: "main"},
+	}
+	if err != nil || !reflect.DeepEqual(branches, want) {
+		t.Fatalf("got %+v, %v, want %+v", branches, err, want)
+	}
+}
+
+func TestSwitchTrackingCreatesTheBranchFromTheNamedRemoteBranch(t *testing.T) {
+	clone := cloneWithTwoRemotes(t)
+	repository := Repository{Dir: clone}
+
+	err := repository.SwitchTracking(context.Background(), "fork/fix/x")
+
+	branches, branchesErr := repository.Branches(context.Background())
+	want := Branch{Name: "fix/x", Current: true, Tracking: Tracking{Upstream: "fork/fix/x"}}
+	if err != nil || branchesErr != nil || !slices.Contains(branches, want) {
+		t.Fatalf("got %v, %+v (%v), want %+v", err, branches, branchesErr, want)
+	}
+}
+
+func cloneWithTwoRemotes(t *testing.T) string {
+	t.Helper()
+	remote, clone := pushedClone(t)
+	runSteps(t, clone, [][]string{
+		{"-C", clone, "push", "origin", "main:fix/x"},
+		{"-C", clone, "remote", "add", "fork", remote},
+		{"-C", clone, "fetch", "fork"},
+		{"-C", clone, "remote", "set-head", "fork", "main"},
+	})
+	return clone
+}
+
 func TestDeleteBranchDeletesABranchWithChangesTheDefaultBranchLacks(t *testing.T) {
 	clone := cloneWithFeatureBranch(t)
 

@@ -30,6 +30,9 @@ func TestDeleteBranch(t *testing.T) {
 			moves: 4, defaultBranch: "origin/main",
 			want: "side is checked out in C:/dev/repo/.claude/worktrees/side, so it cannot be deleted",
 		},
+		"refusesARemoteBranch": {
+			moves: 5, defaultBranch: "origin/main", want: "origin/fix-x is a remote branch, which perusal never deletes",
+		},
 	} {
 		t.Run(name, func(t *testing.T) {
 			m := selectRow(t, branchesOf(t, gitrepo.Status{}, test.defaultBranch), test.moves)
@@ -52,7 +55,7 @@ func aMergedBranchIsDeletedAfterAConfirmAndTheListReloadsInPlace(t *testing.T) {
 	m = asModel(t, next)
 	next, reloading := m.Update(popupSuccessMsg{dir: "C:/dev/repo", notice: "deleted done"})
 	m = asModel(t, next)
-	rows := fiveBranches()
+	rows := sixBranches()
 	m = update(t, m, branchesMsg{
 		dir: "C:/dev/repo", rows: []branchRow{rows[0], rows[1], rows[3]}, defaultBranch: "origin/main"})
 
@@ -112,16 +115,48 @@ func TestTheCurrentBranchShowsMergedOnlyWithNoUncommittedChanges(t *testing.T) {
 func TestSwitchBranch(t *testing.T) {
 	t.Run("isRefusedWithUncommittedChanges", isRefusedWithUncommittedChanges)
 	t.Run("closesTheListAndReloadsTheStatus", closesTheListAndReloadsTheStatus)
+	t.Run("toARemoteBranchCreatesItsLocalBranch", toARemoteBranchCreatesItsLocalBranch)
 }
 
 func isRefusedWithUncommittedChanges(t *testing.T) {
-	m := selectRow(t, branchesOf(t, gitrepo.Status{Branch: "fix", Files: twoFiles()}, "origin/main"), 3)
+	for name, moves := range map[string]int{"local": 3, "remote": 5} {
+		t.Run(name, func(t *testing.T) {
+			m := selectRow(t, branchesOf(t, gitrepo.Status{Branch: "fix", Files: twoFiles()}, "origin/main"), moves)
 
-	next, cmd := m.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
+			next, cmd := m.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
+			m = asModel(t, next)
+
+			if cmd != nil || !m.footer.isError || m.mode != modeBranches {
+				t.Fatalf("got command %v, footer %q, want a refusal with the list still open", cmd, m.footer.text)
+			}
+		})
+	}
+}
+
+func toARemoteBranchCreatesItsLocalBranch(t *testing.T) {
+	m := selectRow(t, branchesOf(t, gitrepo.Status{Branch: "fix"}, "origin/main"), 5)
+	screen := ansi.Strip(m.renderScreen())
+
+	_, switching := m.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
+
+	if !strings.Contains(screen, "origin/fix-x") || switching == nil {
+		t.Fatalf("got screen:\n%s\nswitch %v, want origin/fix-x listed and switched to", screen, switching)
+	}
+}
+
+func TestFetchInTheBranchListReloadsIt(t *testing.T) {
+	m := branchesOf(t, gitrepo.Status{Branch: "fix"}, "origin/main")
+
+	next, fetching := m.Update(tea.KeyPressMsg{Code: 'f', Text: "f"})
+	m = asModel(t, next)
+	fetchingText := m.footer.text
+	next, reloading := m.Update(branchesFetchedMsg{dir: "C:/dev/repo"})
 	m = asModel(t, next)
 
-	if cmd != nil || !m.footer.isError || m.mode != modeBranches {
-		t.Fatalf("got command %v, footer %q, want a refusal with the list still open", cmd, m.footer.text)
+	if fetching == nil || fetchingText != "fetching..." || reloading == nil || m.mode != modeBranches ||
+		m.footer.text != "fetched" {
+		t.Fatalf("got fetch %v (%q), reload %v, mode %d, footer %q, want a fetch then a reload of the open list",
+			fetching, fetchingText, reloading, m.mode, m.footer.text)
 	}
 }
 
@@ -143,7 +178,7 @@ func branchesOf(t *testing.T, status gitrepo.Status, defaultBranch string) Model
 	t.Helper()
 	m := reviewingRepository(t, status)
 	m = update(t, m, tea.KeyPressMsg{Code: 'b', Text: "b"})
-	return update(t, m, branchesMsg{dir: "C:/dev/repo", rows: fiveBranches(), defaultBranch: defaultBranch})
+	return update(t, m, branchesMsg{dir: "C:/dev/repo", rows: sixBranches(), defaultBranch: defaultBranch})
 }
 
 func selectRow(t *testing.T, m Model, moves int) Model {
@@ -154,7 +189,7 @@ func selectRow(t *testing.T, m Model, moves int) Model {
 	return m
 }
 
-func fiveBranches() []branchRow {
+func sixBranches() []branchRow {
 	return []branchRow{
 		{branch: gitrepo.Branch{Name: "fix", Current: true}},
 		{branch: gitrepo.Branch{Name: "main", Tracking: gitrepo.Tracking{Upstream: "origin/main"}}},
@@ -166,5 +201,6 @@ func fiveBranches() []branchRow {
 		},
 		{branch: gitrepo.Branch{Name: "wip"}},
 		{branch: gitrepo.Branch{Name: "side", OtherWorkTree: "C:/dev/repo/.claude/worktrees/side"}},
+		{remoteBranch: gitrepo.RemoteBranch{Ref: "origin/fix-x", Name: "fix-x"}},
 	}
 }

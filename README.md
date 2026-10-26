@@ -45,7 +45,7 @@ perusal -repo <dir>  # review the repository <dir> is in
 | `P` | anywhere | push the branch to its own name on `origin`, or publish it there when it tracks anything else |
 | `A` | log | amend the selected commit with the staged changes |
 | `r` | log | reword the selected commit's message in the commit popup |
-| `b` | anywhere | list the local branches, `enter` switches to one, `D` deletes one after a confirm |
+| `b` | anywhere | list the branches, `enter` switches to one, `D` deletes one after a confirm, `f` fetches |
 | `w` | anywhere | list the repository's work trees, `enter` reviews one |
 | `o` | anywhere | in follow mode, open the overview of every repository under `ownerDir` |
 | `f` `F` | overview | fetch the selected repository or every one, dropping the remote branches that were deleted |
@@ -61,8 +61,9 @@ commits from either field, and `esc` cancels. The changes pane shows how many li
 remove. The mouse works too: click a row to select it, click the folded pane to open it, right-click a commit to
 amend it. The wheel moves the selection over a list and scrolls the diff anywhere else.
 
-The top line names the repository and its branch, then counts its local branches and work trees. In a linked work
-tree, made by `git worktree add`, it also names the repository's main one, as in `work tree of repo`.
+The top line names the repository and its branch, then counts its local branches, its remote branches and its work
+trees, as in `4 branches (37 remote) · 2 work trees`. In a linked work tree, made by `git worktree add`, it also names
+the repository's main one, as in `work tree of repo`.
 
 On quit, perusal saves which list was showing and the `d`, `f` and `u` toggles to `perusal\state.json` in the user
 config directory (`%APPDATA%` on Windows), and the next launch opens the same way.
@@ -87,6 +88,10 @@ uncommitted changes, and a branch checked out in another work tree shows that wo
 any branch but the default one and those checked out in a work tree, and its confirm warns when the branch is not
 merged. `enter` refuses to switch while the work tree has uncommitted changes, and on a branch checked out in another
 work tree it reviews that work tree instead.
+
+Below the local branches, the list shows muted each remote branch that has no local branch of the same name, such as
+`origin/fix-x`. `enter` on one creates the local branch tracking it with `git switch --track`, and `D` refuses it. The
+list is only as fresh as the last fetch, so `f` fetches with `--prune` and reloads it.
 
 The work tree list shows each work tree's folder, its branch and its uncommitted file count, and marks the one under
 review with `*`. In follow mode, one that fails a check below is listed muted, and `enter` on it shows why.

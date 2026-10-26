@@ -46,6 +46,40 @@ func parseBranches(output []byte) ([]Branch, error) {
 	return branches, nil
 }
 
+// Ref is the short name, such as origin/fix/x, and Name the part after the remote, such as fix/x.
+type RemoteBranch struct {
+	Ref  string
+	Name string
+}
+
+// RemoteBranches skips each remote's HEAD. Name drops only the first path segment, so a remote named with a slash
+// gets a wrong Name.
+func (r Repository) RemoteBranches(ctx context.Context) ([]RemoteBranch, error) {
+	format := strings.Join([]string{"%(symref)", "%(refname:lstrip=2)", "%(refname:lstrip=3)"}, refFieldSeparator)
+	output, err := r.git(ctx, "for-each-ref", "--format="+format, "refs/remotes")
+	if err != nil {
+		return nil, err
+	}
+	branches := []RemoteBranch{}
+	for line := range strings.Lines(string(output)) {
+		fields := strings.Split(strings.TrimSuffix(line, "\n"), fieldSeparator)
+		if len(fields) != 3 {
+			return nil, fmt.Errorf("parse git for-each-ref line %q: want 3 fields, got %d", line, len(fields))
+		}
+		if fields[0] != "" {
+			continue
+		}
+		branches = append(branches, RemoteBranch{Ref: fields[1], Name: fields[2]})
+	}
+	return branches, nil
+}
+
+// SwitchTracking creates the local branch for ref and switches to it, where a plain switch is ambiguous when two
+// remotes have a branch of that name.
+func (r Repository) SwitchTracking(ctx context.Context, ref string) error {
+	return r.run(ctx, "switch", "--track", ref)
+}
+
 // track is %(upstream:track,nobracket): empty, "gone", or "ahead N", "behind N" or both joined by ", ".
 func branchWithTrack(branch Branch, track string) (Branch, error) {
 	if track == "gone" {
