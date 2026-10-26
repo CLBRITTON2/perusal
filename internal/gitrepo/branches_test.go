@@ -89,17 +89,6 @@ func cloneWithTwoRemotes(t *testing.T) string {
 }
 
 func TestDeleteBranchDeletesABranchWithChangesTheDefaultBranchLacks(t *testing.T) {
-	clone := cloneWithFeatureBranch(t)
-
-	err := Repository{Dir: clone}.DeleteBranch(context.Background(), "feature")
-
-	if err != nil || slices.Contains(branchNames(t, clone), "feature") {
-		t.Fatalf("got %v, want feature deleted", err)
-	}
-}
-
-func cloneWithFeatureBranch(t *testing.T) string {
-	t.Helper()
 	_, clone := pushedClone(t)
 	runSteps(t, clone, [][]string{{"-C", clone, "switch", "--create", "feature"}})
 	writeFile(t, filepath.Join(clone, "feature.txt"), "feature\n")
@@ -108,18 +97,13 @@ func cloneWithFeatureBranch(t *testing.T) string {
 		{"-C", clone, "commit", "--message", "Feature"},
 		{"-C", clone, "switch", "main"},
 	})
-	return clone
-}
+	repository := Repository{Dir: clone}
 
-func branchNames(t *testing.T, dir string) []string {
-	t.Helper()
-	branches, err := Repository{Dir: dir}.Branches(context.Background())
-	if err != nil {
-		t.Fatal(err)
+	err := repository.DeleteBranch(context.Background(), "feature")
+
+	branches, branchesErr := repository.Branches(context.Background())
+	isFeature := func(branch Branch) bool { return branch.Name == "feature" }
+	if err != nil || branchesErr != nil || slices.ContainsFunc(branches, isFeature) {
+		t.Fatalf("got %v, %+v (%v), want feature deleted", err, branches, branchesErr)
 	}
-	names := []string{}
-	for _, branch := range branches {
-		names = append(names, branch.Name)
-	}
-	return names
 }

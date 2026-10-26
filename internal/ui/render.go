@@ -5,7 +5,6 @@ import (
 	"slices"
 	"strconv"
 	"strings"
-	"time"
 	"unicode"
 	"unicode/utf8"
 
@@ -37,10 +36,6 @@ type sourceLine struct {
 	newNumber int
 }
 
-func (line renderedLine) hasNumber() bool {
-	return line.source.oldNumber > 0 || line.source.newNumber > 0
-}
-
 // reaches reports whether the line is the anchor or comes after it, comparing new line numbers when the anchor has one.
 func (line renderedLine) reaches(anchor sourceLine) bool {
 	switch {
@@ -56,7 +51,9 @@ func (line renderedLine) reaches(anchor sourceLine) bool {
 // keptOffset returns the offset into next that shows the first numbered line at or below offset in previous on the
 // same screen row, or the first line after it when next leaves it out.
 func keptOffset(previous []renderedLine, next []renderedLine, offset int) int {
-	anchorIndex := slices.IndexFunc(previous[min(offset, len(previous)):], renderedLine.hasNumber)
+	anchorIndex := slices.IndexFunc(previous[min(offset, len(previous)):], func(line renderedLine) bool {
+		return line.source.oldNumber > 0 || line.source.newNumber > 0
+	})
 	if anchorIndex < 0 {
 		return offset
 	}
@@ -141,7 +138,13 @@ func renderFileDiff(fileDiff diff.FileDiff, layout diffLayout, width int) []rend
 	} else {
 		hunkLayout = layout
 	}
-	numberWidth := lineNumberWidth(fileDiff)
+	highestNumber := 0
+	for _, hunk := range fileDiff.Hunks {
+		for _, row := range hunk.Rows {
+			highestNumber = max(highestNumber, row.Old.Number, row.New.Number)
+		}
+	}
+	numberWidth := len(strconv.Itoa(highestNumber))
 	lines := []renderedLine{}
 	for _, hunk := range fileDiff.Hunks {
 		header := renderedLine{text: hunkHeaderStyle.Render(fitToWidth(sanitizeText(hunk.Header), width))}
@@ -282,7 +285,7 @@ func wrapRow(text string, start int, width int) (diff.Span, int) {
 		if usedWidth+clusterWidth > width {
 			switch {
 			case breakAt > start:
-				return diff.Span{Start: start, End: breakAt}, skipSpaces(text, breakAt)
+				return diff.Span{Start: start, End: breakAt}, len(text) - len(strings.TrimLeft(text[breakAt:], " "))
 			case position == start:
 				return diff.Span{Start: start, End: position + len(cluster)}, position + len(cluster)
 			default:
@@ -294,10 +297,6 @@ func wrapRow(text string, start int, width int) (diff.Span, int) {
 		position += len(cluster)
 	}
 	return diff.Span{Start: start, End: len(text)}, len(text)
-}
-
-func skipSpaces(text string, position int) int {
-	return len(text) - len(strings.TrimLeft(text[position:], " "))
 }
 
 type styledRun struct {
@@ -318,22 +317,20 @@ func lineRuns(line diff.Line) []styledRun {
 	runs := []styledRun{}
 	for index := 1; index < len(runBounds); index++ {
 		start := runBounds[index-1]
+		token := slices.IndexFunc(line.Tokens, func(token diff.Token) bool {
+			return start >= token.Span.Start && start < token.Span.End
+		})
+		var color string
+		if token >= 0 {
+			color = line.Tokens[token].Color
+		}
 		runs = append(runs, styledRun{
 			text:       sanitizeText(line.Text[start:runBounds[index]]),
-			color:      tokenColor(line.Tokens, start),
+			color:      color,
 			emphasized: start >= line.Changed.Start && start < line.Changed.End,
 		})
 	}
 	return runs
-}
-
-func tokenColor(tokens []diff.Token, position int) string {
-	for _, token := range tokens {
-		if position >= token.Span.Start && position < token.Span.End {
-			return token.Color
-		}
-	}
-	return ""
 }
 
 // segment indexes the runs joined, not the line's Text.
@@ -344,25 +341,24 @@ func renderSegment(runs []styledRun, segment diff.Span, plain lipgloss.Style, em
 		from := max(segment.Start-position, 0)
 		to := min(segment.End-position, len(run.text))
 		if from < to {
-			rendered.WriteString(runStyle(run, plain, emphasized).Render(run.text[from:to]))
+			var base lipgloss.Style
+			if run.emphasized {
+				base = emphasized
+			} else {
+				base = plain
+			}
+			var style lipgloss.Style
+			if run.color == "" {
+				style = base
+			} else {
+				style = base.Foreground(lipgloss.Color(run.color))
+			}
+			rendered.WriteString(style.Render(run.text[from:to]))
 		}
 		position += len(run.text)
 	}
 	padding := strings.Repeat(" ", max(width-ansi.StringWidth(rendered.String()), 0))
 	return rendered.String() + plain.Render(padding)
-}
-
-func runStyle(run styledRun, plain lipgloss.Style, emphasized lipgloss.Style) lipgloss.Style {
-	var base lipgloss.Style
-	if run.emphasized {
-		base = emphasized
-	} else {
-		base = plain
-	}
-	if run.color == "" {
-		return base
-	}
-	return base.Foreground(lipgloss.Color(run.color))
 }
 
 func segmentOrFiller(segments []string, index int, kind diff.LineKind, width int) string {
@@ -389,16 +385,6 @@ func styleOf(kind diff.LineKind) lineStyle {
 	default:
 		return lineStyle{}
 	}
-}
-
-func lineNumberWidth(fileDiff diff.FileDiff) int {
-	highest := 0
-	for _, hunk := range fileDiff.Hunks {
-		for _, row := range hunk.Rows {
-			highest = max(highest, row.Old.Number, row.New.Number)
-		}
-	}
-	return len(strconv.Itoa(highest))
 }
 
 func renderCommit(commit gitrepo.Commit, sections []diff.FileSection, layout diffLayout, width int) []renderedLine {
@@ -436,49 +422,19 @@ func renderTreeFileRow(section diff.FileSection, last bool, width int) string {
 	} else {
 		treeGlyph = "├ "
 	}
-	return fitToWidth(mutedStyle.Render(treeGlyph)+changeMark(section.FileDiff.Change)+" "+
-		textStyle.Render(sanitizeText(section.Path)), width)
-}
-
-// Letters match git log --name-status.
-func changeMark(change diff.FileChange) string {
-	switch change {
+	var changeMark string
+	// Letters match git log --name-status.
+	switch section.FileDiff.Change {
 	case diff.FileAdded:
-		return addedMarkStyle.Render("A")
+		changeMark = addedMarkStyle.Render("A")
 	case diff.FileDeleted:
-		return deletedMarkStyle.Render("D")
+		changeMark = deletedMarkStyle.Render("D")
 	case diff.FileRenamed:
-		return renamedMarkStyle.Render("R")
+		changeMark = renamedMarkStyle.Render("R")
 	default:
-		return modifiedMarkStyle.Render("M")
+		changeMark = modifiedMarkStyle.Render("M")
 	}
-}
-
-func expandMarker(expanded bool) string {
-	if expanded {
-		return mutedStyle.Render("▾ ")
-	}
-	return mutedStyle.Render("▸ ")
-}
-
-func compactAge(age time.Duration) string {
-	const day = 24 * time.Hour
-	switch {
-	case age < time.Minute:
-		return "now"
-	case age < time.Hour:
-		return strconv.Itoa(int(age/time.Minute)) + "m"
-	case age < day:
-		return strconv.Itoa(int(age/time.Hour)) + "h"
-	case age < 14*day:
-		return strconv.Itoa(int(age/day)) + "d"
-	case age < 60*day:
-		return strconv.Itoa(int(age/(7*day))) + "w"
-	case age < 365*day:
-		return strconv.Itoa(int(age/(30*day))) + "mo"
-	default:
-		return strconv.Itoa(int(age/(365*day))) + "y"
-	}
+	return fitToWidth(mutedStyle.Render(treeGlyph)+changeMark+" "+textStyle.Render(sanitizeText(section.Path)), width)
 }
 
 func fitToWidth(text string, width int) string {

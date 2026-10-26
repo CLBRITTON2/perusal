@@ -174,11 +174,8 @@ func sectionPath(lines []string) (string, error) {
 	if oldPath != "" {
 		return oldPath, nil
 	}
-	return headerNames(strings.TrimPrefix(lines[0], fileHeaderPrefix))
-}
-
-// Both names are quoted alike unless the file was renamed, and a rename has its own rename to line.
-func headerNames(paths string) (string, error) {
+	// Both names are quoted alike unless the file was renamed, and a rename has its own rename to line.
+	paths := strings.TrimPrefix(lines[0], fileHeaderPrefix)
 	if strings.HasPrefix(paths, `"`) {
 		quoted, err := strconv.QuotedPrefix(paths)
 		if err != nil {
@@ -322,53 +319,41 @@ func (b changeBlock) pairRows() []Row {
 		removed := lineOrBlank(b.removed, i)
 		added := lineOrBlank(b.added, i)
 		if len(b.removed) == len(b.added) {
-			rows = append(rows, markedRow(removed, added))
-		} else {
-			rows = append(rows, Row{Old: removed, New: added})
+			prefix := 0
+			for prefix < len(removed.Text) && prefix < len(added.Text) && removed.Text[prefix] == added.Text[prefix] {
+				prefix++
+			}
+			// Backs off to a rune start, so a span never splits a character.
+			for prefix > 0 && (splitsRune(removed.Text, prefix) || splitsRune(added.Text, prefix)) {
+				prefix--
+			}
+			oldRest := removed.Text[prefix:]
+			newRest := added.Text[prefix:]
+			suffix := 0
+			for suffix < len(oldRest) && suffix < len(newRest) &&
+				oldRest[len(oldRest)-1-suffix] == newRest[len(newRest)-1-suffix] {
+				suffix++
+			}
+			for suffix > 0 && splitsRune(oldRest, len(oldRest)-suffix) {
+				suffix--
+			}
+			if prefix+suffix > 0 {
+				rows = append(rows, Row{
+					Old: lineWithChanged(removed, Span{Start: prefix, End: len(removed.Text) - suffix}),
+					New: lineWithChanged(added, Span{Start: prefix, End: len(added.Text) - suffix}),
+				})
+				continue
+			}
 		}
+		rows = append(rows, Row{Old: removed, New: added})
 	}
 	return rows
-}
-
-func markedRow(removed Line, added Line) Row {
-	prefix := commonPrefixLength(removed.Text, added.Text)
-	suffix := commonSuffixLength(removed.Text[prefix:], added.Text[prefix:])
-	if prefix+suffix == 0 {
-		return Row{Old: removed, New: added}
-	}
-	return Row{
-		Old: lineWithChanged(removed, Span{Start: prefix, End: len(removed.Text) - suffix}),
-		New: lineWithChanged(added, Span{Start: prefix, End: len(added.Text) - suffix}),
-	}
 }
 
 func lineWithChanged(line Line, changed Span) Line {
 	marked := line
 	marked.Changed = changed
 	return marked
-}
-
-// Backs off to a rune start, so a span never splits a character.
-func commonPrefixLength(first string, second string) int {
-	length := 0
-	for length < len(first) && length < len(second) && first[length] == second[length] {
-		length++
-	}
-	for length > 0 && (splitsRune(first, length) || splitsRune(second, length)) {
-		length--
-	}
-	return length
-}
-
-func commonSuffixLength(first string, second string) int {
-	length := 0
-	for length < len(first) && length < len(second) && first[len(first)-1-length] == second[len(second)-1-length] {
-		length++
-	}
-	for length > 0 && splitsRune(first, len(first)-length) {
-		length--
-	}
-	return length
 }
 
 func splitsRune(text string, index int) bool {

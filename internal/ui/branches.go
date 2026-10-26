@@ -222,43 +222,45 @@ func (m Model) openDeleteBranchPopup() Model {
 	case row.branch.Name == localBranch(m.branches.defaultBranch):
 		return m.withFooterError(name + " is the default branch, which perusal never deletes")
 	}
+	var mergedLine string
+	if row.mergedIntoDefault {
+		mergedLine = textStyle.Render(sanitizeText(m.branches.defaultBranch) + " has all its changes")
+	} else {
+		mergedLine = warningStyle.Render(sanitizeText(m.branches.defaultBranch) + " lacks some of its changes")
+	}
 	return m.withConfirmation(m.repository.Dir, confirmation{
-		lines: []string{
-			titleStyle.Render("delete " + sanitizeText(row.branch.Name)),
-			renderMergedDeleteTarget(row, m.branches.defaultBranch),
-		},
+		lines:       []string{titleStyle.Render("delete " + sanitizeText(row.branch.Name)), mergedLine},
 		confirmKey:  confirmDeleteKey,
 		run:         branchRequest{repository: m.repository, branch: row.branch.Name}.delete,
 		runningText: "deleting...",
 	})
 }
 
-func renderMergedDeleteTarget(row branchRow, defaultBranch string) string {
-	if row.mergedIntoDefault {
-		return textStyle.Render(sanitizeText(defaultBranch) + " has all its changes")
-	}
-	return warningStyle.Render(sanitizeText(defaultBranch) + " lacks some of its changes")
-}
-
 func (m Model) branchCells(row branchRow) []string {
 	if row.remoteBranch.Ref != "" {
 		return []string{"", mutedStyle.Render(branchGlyph + " " + sanitizeText(row.remoteBranch.Ref)), "", "", ""}
 	}
+	var upstream string
+	if row.branch.UpstreamGone {
+		upstream = warningStyle.Render(sanitizeText(row.branch.Upstream) + " deleted")
+	} else {
+		upstream = mutedStyle.Render(sanitizeText(row.branch.Upstream))
+	}
+	var state string
+	switch {
+	case row.branch.OtherWorkTree != "":
+		state = mutedStyle.Render("in work tree " + sanitizeText(path.Base(row.branch.OtherWorkTree)))
+	// MergedInto sees only commits, so the current branch with uncommitted work is never shown merged.
+	case row.mergedIntoDefault && (!row.branch.Current || len(m.status.Files) == 0):
+		state = successStyle.Render("merged") + mutedStyle.Render(" into "+sanitizeText(m.branches.defaultBranch))
+	}
 	return []string{
 		renderCurrentMark(row.branch.Current),
 		branchStyle.Render(branchGlyph + " " + sanitizeText(row.branch.Name)),
-		renderUpstream(row.branch),
+		upstream,
 		renderAheadBehind(row.branch.Tracking),
-		renderBranchState(m.shownBranchRow(row), m.branches.defaultBranch),
+		state,
 	}
-}
-
-// MergedInto sees only commits, so the current branch with uncommitted work is never shown merged.
-func (m Model) shownBranchRow(row branchRow) branchRow {
-	if !row.branch.Current || len(m.status.Files) == 0 {
-		return row
-	}
-	return branchRow{branch: row.branch, mergedIntoDefault: false}
 }
 
 func renderCurrentMark(current bool) string {
@@ -266,21 +268,4 @@ func renderCurrentMark(current bool) string {
 		return ""
 	}
 	return markStyle.Render("*")
-}
-
-func renderUpstream(branch gitrepo.Branch) string {
-	if branch.UpstreamGone {
-		return warningStyle.Render(sanitizeText(branch.Upstream) + " deleted")
-	}
-	return mutedStyle.Render(sanitizeText(branch.Upstream))
-}
-
-func renderBranchState(row branchRow, defaultBranch string) string {
-	switch {
-	case row.branch.OtherWorkTree != "":
-		return mutedStyle.Render("in work tree " + sanitizeText(path.Base(row.branch.OtherWorkTree)))
-	case row.mergedIntoDefault:
-		return successStyle.Render("merged") + mutedStyle.Render(" into "+sanitizeText(defaultBranch))
-	}
-	return ""
 }

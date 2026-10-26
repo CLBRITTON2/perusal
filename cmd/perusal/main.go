@@ -13,8 +13,6 @@ import (
 	"github.com/CLBRITTON2/perusal/internal/gitrepo"
 )
 
-var errOverviewNeedsFollow = errors.New("the overview lists the repositories under the config's ownerDir, so it needs perusal follow")
-
 func main() {
 	err := run(os.Args[1:])
 	switch {
@@ -30,10 +28,6 @@ func run(args []string) error {
 	if len(args) > 0 && args[0] == "follow" {
 		return runFollow(args[1:])
 	}
-	return runReview(args)
-}
-
-func runReview(args []string) error {
 	flags := flag.NewFlagSet("perusal", flag.ContinueOnError)
 	flags.Usage = func() {
 		fmt.Fprint(flags.Output(), "usage:\n"+
@@ -67,7 +61,10 @@ func review(repositoryPath string) error {
 	if err != nil {
 		return err
 	}
-	model, err := startingModel(listWithoutFollow, func(ctx context.Context, dir string) (gitrepo.Repository, error) {
+	model, err := startingModel(func(context.Context) (focus.Found, error) {
+		return focus.Found{}, errors.New("the overview lists the repositories under the config's ownerDir, " +
+			"so it needs perusal follow")
+	}, func(ctx context.Context, dir string) (gitrepo.Repository, error) {
 		return gitrepo.Open(ctx, gitrepo.Repository{Dir: dir})
 	}, statePath)
 	if err != nil {
@@ -79,8 +76,4 @@ func review(repositoryPath string) error {
 		return fmt.Errorf("run perusal on %s: %w", repository.Dir, err)
 	}
 	return nil
-}
-
-func listWithoutFollow(context.Context) (focus.Found, error) {
-	return focus.Found{}, errOverviewNeedsFollow
 }

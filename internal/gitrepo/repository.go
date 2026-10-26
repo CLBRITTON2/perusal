@@ -39,7 +39,6 @@ type Commit struct {
 // git log spells fieldSeparator %x1f and for-each-ref spells it %1f.
 const (
 	fieldSeparator    = "\x1f"
-	logFieldSeparator = "%x1f"
 	refFieldSeparator = "%1f"
 )
 
@@ -88,7 +87,7 @@ func (r Repository) LogOnNoRemote(ctx context.Context, limit int) ([]Commit, err
 }
 
 func (r Repository) logRevisions(ctx context.Context, limit int, revisions []string) ([]Commit, error) {
-	format := strings.Join([]string{"%H", "%h", "%P", "%D", "%an", "%at", "%B"}, logFieldSeparator)
+	format := strings.Join([]string{"%H", "%h", "%P", "%D", "%an", "%at", "%B"}, "%x1f")
 	output, err := r.git(ctx, slices.Concat([]string{"log", "-z", "--topo-order", "--max-count=" + strconv.Itoa(limit),
 		"--format=" + format}, revisions, []string{"--"})...)
 	if err != nil {
@@ -154,7 +153,13 @@ func (r Repository) CommitDiff(ctx context.Context, hash string, contextLines in
 // An untracked file's diff always shows the whole file.
 func (r Repository) FileDiff(ctx context.Context, file FileStatus, contextLines int) (string, error) {
 	if file.IsUntracked() {
-		return r.untrackedFileDiff(ctx, file.Path)
+		args := slices.Concat([]string{"diff", "--no-index"}, diffFlags, []string{"--", "/dev/null", file.Path})
+		output, err := r.git(ctx, args...)
+		// Exit code 1 means the files differ, the normal result for an untracked file.
+		if err != nil && !isExitCodeOne(err) {
+			return "", err
+		}
+		return string(output), nil
 	}
 	args := slices.Concat([]string{"diff", "HEAD"}, diffFlags, []string{"--find-renames",
 		"--unified=" + strconv.Itoa(contextLines), "--"}, file.pathspec())
@@ -171,17 +176,13 @@ func (r Repository) StagedLineCounts(ctx context.Context) (diff.LineCounts, erro
 	if err != nil {
 		return diff.LineCounts{}, err
 	}
-	return parseNumstat(output)
-}
-
-// A binary file's counts are "-", which adds nothing.
-func parseNumstat(output []byte) (diff.LineCounts, error) {
 	counts := diff.LineCounts{}
 	for line := range strings.Lines(string(output)) {
 		fields := strings.SplitN(strings.TrimSuffix(line, "\n"), "\t", 3)
 		if len(fields) != 3 {
 			return diff.LineCounts{}, fmt.Errorf("parse git diff --numstat line %q: want added, removed and a path", line)
 		}
+		// A binary file's counts are "-", which adds nothing.
 		if fields[0] == "-" && fields[1] == "-" {
 			continue
 		}
@@ -249,16 +250,6 @@ func (r Repository) MergedInto(ctx context.Context, revision string, ref string)
 		return false, err
 	}
 	return strings.TrimSpace(string(mergedTree)) == strings.TrimSpace(string(refTree)), nil
-}
-
-// git diff --no-index exits 1 when the files differ, the normal result for an untracked file.
-func (r Repository) untrackedFileDiff(ctx context.Context, path string) (string, error) {
-	args := slices.Concat([]string{"diff", "--no-index"}, diffFlags, []string{"--", "/dev/null", path})
-	output, err := r.git(ctx, args...)
-	if err != nil && !isExitCodeOne(err) {
-		return "", err
-	}
-	return string(output), nil
 }
 
 func (r Repository) Stage(ctx context.Context, file FileStatus) error {
@@ -360,9 +351,16 @@ func (r Repository) Reword(ctx context.Context, hash string, message string) err
 	if err != nil {
 		return err
 	}
-	signFlags, err := r.signFlags(ctx)
+	gpgSign, err := r.git(ctx, "config", "--type=bool", "--default=false", "--get", "commit.gpgsign")
 	if err != nil {
 		return err
+	}
+	// commit-tree ignores commit.gpgSign, so it is passed on as -S.
+	var signFlags []string
+	if strings.TrimSpace(string(gpgSign)) == "true" {
+		signFlags = []string{"-S"}
+	} else {
+		signFlags = []string{}
 	}
 	aboveOutput, err := r.git(ctx, "rev-list", "--reverse", hash+"..HEAD")
 	if err != nil {
@@ -390,18 +388,6 @@ func (r Repository) Reword(ctx context.Context, hash string, message string) err
 	return r.run(ctx, "update-ref", "-m", "perusal: reword "+hash, "HEAD", rewritten, head)
 }
 
-// commit-tree ignores commit.gpgSign, so it is passed on as -S.
-func (r Repository) signFlags(ctx context.Context) ([]string, error) {
-	output, err := r.git(ctx, "config", "--type=bool", "--default=false", "--get", "commit.gpgsign")
-	if err != nil {
-		return nil, err
-	}
-	if strings.TrimSpace(string(output)) == "true" {
-		return []string{"-S"}, nil
-	}
-	return []string{}, nil
-}
-
 type commitObject struct {
 	tree string
 	// author is the author header's value: name <email> unix-time zone.
@@ -414,28 +400,26 @@ func (r Repository) readCommit(ctx context.Context, hash string) (commitObject, 
 	if err != nil {
 		return commitObject{}, err
 	}
-	return parseCommitObject(string(output))
-}
-
-func parseCommitObject(raw string) (commitObject, error) {
+	raw := string(output)
 	headers, message, found := strings.Cut(raw, "\n\n")
 	if !found {
 		return commitObject{}, fmt.Errorf("parse commit object %q: no blank line ends the headers", raw)
 	}
-	object := commitObject{tree: "", author: "", message: message}
+	var tree string
+	var author string
 	for line := range strings.SplitSeq(headers, "\n") {
 		name, value, _ := strings.Cut(line, " ")
 		switch name {
 		case "tree":
-			object.tree = value
+			tree = value
 		case "author":
-			object.author = value
+			author = value
 		}
 	}
-	if object.tree == "" || object.author == "" {
+	if tree == "" || author == "" {
 		return commitObject{}, fmt.Errorf("parse commit object %q: want a tree and an author header", raw)
 	}
-	return object, nil
+	return commitObject{tree: tree, author: author, message: message}, nil
 }
 
 func (r Repository) commitTree(ctx context.Context, object commitObject, parent string, signFlags []string) (
@@ -489,10 +473,22 @@ func (r Repository) Amend(ctx context.Context, hash string) error {
 	// ":" is the editor git skips, so the todo list runs as autosquash wrote it.
 	rebaseErr := r.run(ctx, "-c", "sequence.editor=:", "rebase", "--interactive", "--autosquash",
 		"--autostash", hash+"^")
-	if rebaseErr != nil {
-		return r.undoFixup(ctx, fixup, rebaseErr)
+	if rebaseErr == nil {
+		return nil
 	}
-	return nil
+	abortErr := r.run(ctx, "rebase", "--abort")
+	afterAbort, err := r.revParse(ctx, "HEAD")
+	if err != nil {
+		return errors.Join(rebaseErr, abortErr, err)
+	}
+	if afterAbort != fixup {
+		return errors.Join(rebaseErr, abortErr, fmt.Errorf("HEAD in %s is %s after the rebase stopped, not the fixup "+
+			"commit %s, so the fixup was left in place", r.Dir, afterAbort, fixup))
+	}
+	if err := r.run(ctx, "reset", "--soft", fixup+"^"); err != nil {
+		return errors.Join(rebaseErr, abortErr, err)
+	}
+	return fmt.Errorf("undid the fixup commit, so the changes are staged again: %w", errors.Join(rebaseErr, abortErr))
 }
 
 // A rebase would drop a merge above hash and has no parent to start from below a root.
@@ -519,22 +515,6 @@ func (r Repository) checkRewritable(ctx context.Context, hash string) error {
 		return fmt.Errorf("%w %s in %s: a merge sits between it and HEAD", ErrCannotRewrite, hash, r.Dir)
 	}
 	return nil
-}
-
-func (r Repository) undoFixup(ctx context.Context, fixup string, rebaseErr error) error {
-	abortErr := r.run(ctx, "rebase", "--abort")
-	head, err := r.revParse(ctx, "HEAD")
-	if err != nil {
-		return errors.Join(rebaseErr, abortErr, err)
-	}
-	if head != fixup {
-		return errors.Join(rebaseErr, abortErr, fmt.Errorf("HEAD in %s is %s after the rebase stopped, not the fixup "+
-			"commit %s, so the fixup was left in place", r.Dir, head, fixup))
-	}
-	if err := r.run(ctx, "reset", "--soft", fixup+"^"); err != nil {
-		return errors.Join(rebaseErr, abortErr, err)
-	}
-	return fmt.Errorf("undid the fixup commit, so the changes are staged again: %w", errors.Join(rebaseErr, abortErr))
 }
 
 func (r Repository) revParse(ctx context.Context, revision string) (string, error) {
@@ -577,8 +557,14 @@ func runGit(ctx context.Context, r Repository, args []string, input string, envi
 	command.Dir = r.Dir
 	// A credential prompt would fight the TUI for the terminal, so git fails instead of asking.
 	// Optional locks off: polling git status would otherwise take index.lock and fail the owner's own git add.
+	var pinnedGitDir []string
+	if r.GitDir == "" {
+		pinnedGitDir = []string{}
+	} else {
+		pinnedGitDir = []string{"GIT_DIR=" + r.GitDir, "GIT_WORK_TREE=" + r.Dir}
+	}
 	command.Env = slices.Concat(os.Environ(), []string{"GIT_TERMINAL_PROMPT=0", "GIT_OPTIONAL_LOCKS=0"},
-		pinnedGitDir(r), environment)
+		pinnedGitDir, environment)
 	command.Stdin = strings.NewReader(input)
 	var stderr bytes.Buffer
 	command.Stderr = &stderr
@@ -589,11 +575,4 @@ func runGit(ctx context.Context, r Repository, args []string, input string, envi
 			strings.TrimSpace(stderr.String()+"\n"+string(output)))
 	}
 	return output, nil
-}
-
-func pinnedGitDir(r Repository) []string {
-	if r.GitDir == "" {
-		return []string{}
-	}
-	return []string{"GIT_DIR=" + r.GitDir, "GIT_WORK_TREE=" + r.Dir}
 }

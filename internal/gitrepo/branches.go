@@ -22,10 +22,6 @@ func (r Repository) Branches(ctx context.Context) ([]Branch, error) {
 	if err != nil {
 		return nil, err
 	}
-	return parseBranches(output)
-}
-
-func parseBranches(output []byte) ([]Branch, error) {
 	branches := []Branch{}
 	for line := range strings.Lines(string(output)) {
 		fields := strings.Split(strings.TrimSuffix(line, "\n"), fieldSeparator)
@@ -37,11 +33,31 @@ func parseBranches(output []byte) ([]Branch, error) {
 		if !branch.Current {
 			branch.OtherWorkTree = fields[4]
 		}
-		withTrack, err := branchWithTrack(branch, fields[3])
-		if err != nil {
-			return nil, fmt.Errorf("parse git for-each-ref line %q: %w", line, err)
+		// %(upstream:track,nobracket) is empty, "gone", or "ahead N", "behind N" or both joined by ", ".
+		track := fields[3]
+		switch track {
+		case "":
+		case "gone":
+			branch.UpstreamGone = true
+		default:
+			for part := range strings.SplitSeq(track, ", ") {
+				direction, countText, _ := strings.Cut(part, " ")
+				count, err := strconv.Atoi(countText)
+				if err != nil {
+					return nil, fmt.Errorf("parse git for-each-ref line %q: parse upstream track %q: %w", line, track, err)
+				}
+				switch direction {
+				case "ahead":
+					branch.Ahead = count
+				case "behind":
+					branch.Behind = count
+				default:
+					return nil, fmt.Errorf("parse git for-each-ref line %q: parse upstream track %q: unknown direction %q",
+						line, track, direction)
+				}
+			}
 		}
-		branches = append(branches, withTrack)
+		branches = append(branches, branch)
 	}
 	return branches, nil
 }
@@ -78,33 +94,6 @@ func (r Repository) RemoteBranches(ctx context.Context) ([]RemoteBranch, error) 
 // remotes have a branch of that name.
 func (r Repository) SwitchTracking(ctx context.Context, ref string) error {
 	return r.run(ctx, "switch", "--track", ref)
-}
-
-// track is %(upstream:track,nobracket): empty, "gone", or "ahead N", "behind N" or both joined by ", ".
-func branchWithTrack(branch Branch, track string) (Branch, error) {
-	if track == "gone" {
-		branch.UpstreamGone = true
-		return branch, nil
-	}
-	if track == "" {
-		return branch, nil
-	}
-	for part := range strings.SplitSeq(track, ", ") {
-		direction, countText, _ := strings.Cut(part, " ")
-		count, err := strconv.Atoi(countText)
-		if err != nil {
-			return Branch{}, fmt.Errorf("parse upstream track %q: %w", track, err)
-		}
-		switch direction {
-		case "ahead":
-			branch.Ahead = count
-		case "behind":
-			branch.Behind = count
-		default:
-			return Branch{}, fmt.Errorf("parse upstream track %q: unknown direction %q", track, direction)
-		}
-	}
-	return branch, nil
 }
 
 // DeleteBranch deletes branch whether or not it is merged, since plain --delete refuses a squash merged branch.

@@ -3,6 +3,7 @@ package highlight
 import (
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 
@@ -57,17 +58,10 @@ func theRepositorysOwnFilesLexWithoutDrift(t *testing.T) {
 
 		highlighted, err := FileDiff(filepath.Base(path), fileDiff)
 
-		if err != nil || !hasTokens(highlighted) {
+		if err != nil || !slices.ContainsFunc(highlighted.Hunks[0].Rows, func(row diff.Row) bool {
+			return len(row.New.Tokens) > 0
+		}) {
 			t.Fatalf("%s: got error %v, want every line lexed and some of them colored", path, err)
 		}
 	}
-}
-
-func hasTokens(fileDiff diff.FileDiff) bool {
-	for _, row := range fileDiff.Hunks[0].Rows {
-		if len(row.New.Tokens) > 0 {
-			return true
-		}
-	}
-	return false
 }

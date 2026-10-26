@@ -72,16 +72,45 @@ func parseStatus(output []byte) (Status, error) {
 		kind, rest, _ := strings.Cut(entry, " ")
 		switch kind {
 		case "#":
-			hasAheadBehind = hasAheadBehind || strings.HasPrefix(rest, "branch.ab ")
-			withHeader, err := statusWithHeader(status, rest)
-			if err != nil {
-				return Status{}, fmt.Errorf("parse git status entry %q: %w", entry, err)
+			name, value, _ := strings.Cut(rest, " ")
+			switch name {
+			case "branch.oid":
+				status.HasCommits = value != "(initial)"
+			case "branch.head":
+				if value != "(detached)" {
+					status.Branch = value
+				}
+			case "branch.upstream":
+				status.Upstream = value
+			case "branch.ab":
+				hasAheadBehind = true
+				aheadText, behindText, found := strings.Cut(value, " ")
+				if !found || !strings.HasPrefix(aheadText, "+") || !strings.HasPrefix(behindText, "-") {
+					return Status{}, fmt.Errorf("parse git status entry %q: malformed ahead and behind counts %q", entry,
+						value)
+				}
+				ahead, err := strconv.Atoi(aheadText[1:])
+				if err != nil {
+					return Status{}, fmt.Errorf("parse git status entry %q: parse ahead count %q: %w", entry, value, err)
+				}
+				behind, err := strconv.Atoi(behindText[1:])
+				if err != nil {
+					return Status{}, fmt.Errorf("parse git status entry %q: parse behind count %q: %w", entry, value, err)
+				}
+				status.Ahead = ahead
+				status.Behind = behind
 			}
-			status = withHeader
 		case "1", "2", "u":
-			file, err := parseChangedEntry(kind, rest)
-			if err != nil {
-				return Status{}, fmt.Errorf("parse git status entry %q: %w", entry, err)
+			// Counts XY and every field before the path, which is the rest of the entry, so it can hold spaces.
+			pathIndex := map[string]int{"1": 7, "2": 8, "u": 9}[kind]
+			parts := strings.SplitN(rest, " ", pathIndex+1)
+			if len(parts) != pathIndex+1 || len(parts[0]) != 2 || parts[pathIndex] == "" {
+				return Status{}, fmt.Errorf("parse git status entry %q: want %d fields and a path", entry, pathIndex)
+			}
+			file := FileStatus{
+				Path:           parts[pathIndex],
+				IndexStatus:    shortStatusCode(parts[0][0]),
+				WorktreeStatus: shortStatusCode(parts[0][1]),
 			}
 			if kind == "2" {
 				i++
@@ -103,61 +132,6 @@ func parseStatus(output []byte) (Status, error) {
 	// git omits the branch.ab header when the upstream ref is missing.
 	status.UpstreamGone = status.Upstream != "" && !hasAheadBehind
 	return status, nil
-}
-
-func statusWithHeader(status Status, header string) (Status, error) {
-	name, value, _ := strings.Cut(header, " ")
-	switch name {
-	case "branch.oid":
-		status.HasCommits = value != "(initial)"
-	case "branch.head":
-		if value != "(detached)" {
-			status.Branch = value
-		}
-	case "branch.upstream":
-		status.Upstream = value
-	case "branch.ab":
-		ahead, behind, err := parseAheadBehind(value)
-		if err != nil {
-			return Status{}, err
-		}
-		status.Ahead = ahead
-		status.Behind = behind
-	}
-	return status, nil
-}
-
-func parseAheadBehind(value string) (int, int, error) {
-	aheadText, behindText, found := strings.Cut(value, " ")
-	if !found || !strings.HasPrefix(aheadText, "+") || !strings.HasPrefix(behindText, "-") {
-		return 0, 0, fmt.Errorf("malformed ahead and behind counts %q", value)
-	}
-	ahead, err := strconv.Atoi(aheadText[1:])
-	if err != nil {
-		return 0, 0, fmt.Errorf("parse ahead count %q: %w", value, err)
-	}
-	behind, err := strconv.Atoi(behindText[1:])
-	if err != nil {
-		return 0, 0, fmt.Errorf("parse behind count %q: %w", value, err)
-	}
-	return ahead, behind, nil
-}
-
-// Counts XY and every field before the path, per porcelain v2 entry kind.
-var fieldsBeforePath = map[string]int{"1": 7, "2": 8, "u": 9}
-
-// The path is the rest of the entry, so it can hold spaces.
-func parseChangedEntry(kind string, rest string) (FileStatus, error) {
-	pathIndex := fieldsBeforePath[kind]
-	parts := strings.SplitN(rest, " ", pathIndex+1)
-	if len(parts) != pathIndex+1 || len(parts[0]) != 2 || parts[pathIndex] == "" {
-		return FileStatus{}, fmt.Errorf("want %d fields and a path", pathIndex)
-	}
-	return FileStatus{
-		Path:           parts[pathIndex],
-		IndexStatus:    shortStatusCode(parts[0][0]),
-		WorktreeStatus: shortStatusCode(parts[0][1]),
-	}, nil
 }
 
 func shortStatusCode(code byte) byte {

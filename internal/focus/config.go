@@ -21,11 +21,6 @@ type Config struct {
 	OwnerDir     string `json:"ownerDir"`
 }
 
-type configPath struct {
-	key   string
-	value string
-}
-
 func LoadConfig(path string) (Config, error) {
 	content, err := os.ReadFile(path)
 	if err != nil {
@@ -40,7 +35,10 @@ func LoadConfig(path string) (Config, error) {
 	if config.AgentAccount == "" {
 		return Config{}, fmt.Errorf("%w: %s sets no agentAccount", ErrInvalidConfig, path)
 	}
-	paths := []configPath{
+	paths := []struct {
+		key   string
+		value string
+	}{
 		{key: "focusFile", value: config.FocusFile},
 		{key: "agentDir", value: config.AgentDir},
 		{key: "ownerDir", value: config.OwnerDir},

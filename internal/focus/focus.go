@@ -76,7 +76,7 @@ func watchFocusFile(ctx context.Context, watcher *fsnotify.Watcher, rules Rules,
 			if !open {
 				return
 			}
-			if !isFocusFileUpdate(event, rules.FocusFile) {
+			if event.Op&(fsnotify.Create|fsnotify.Write) == 0 || !isSamePath(event.Name, rules.FocusFile) {
 				continue
 			}
 			if !sendResult(ctx, results, resolveResult(ctx, rules)) {
@@ -91,10 +91,6 @@ func watchFocusFile(ctx context.Context, watcher *fsnotify.Watcher, rules Rules,
 			}
 		}
 	}
-}
-
-func isFocusFileUpdate(event fsnotify.Event, focusFile string) bool {
-	return event.Op&(fsnotify.Create|fsnotify.Write) != 0 && isSamePath(event.Name, focusFile)
 }
 
 func sendResult(ctx context.Context, results chan<- Result, result Result) bool {
@@ -161,10 +157,11 @@ func FindRepositories(ctx context.Context, rules Rules) (Found, error) {
 		case listErr == nil && !entry.IsDir():
 			return nil
 		}
-		name, err := nameBelow(rules.OwnerDir, path)
+		relativePath, err := filepath.Rel(rules.OwnerDir, path)
 		if err != nil {
-			return err
+			return fmt.Errorf("name %s below %s: %w", path, rules.OwnerDir, err)
 		}
+		name := filepath.ToSlash(relativePath)
 		repository, isWorkTree, err := openIfWorkTree(ctx, rules.AgentSID, path, listErr)
 		switch {
 		case err != nil:
@@ -206,14 +203,6 @@ func openIfWorkTree(ctx context.Context, agentSID *windows.SID, dir string, list
 	return repository, true, nil
 }
 
-func nameBelow(ownerDir string, path string) (string, error) {
-	name, err := filepath.Rel(ownerDir, path)
-	if err != nil {
-		return "", fmt.Errorf("name %s below %s: %w", path, ownerDir, err)
-	}
-	return filepath.ToSlash(name), nil
-}
-
 // The owner's git runs the config and hooks of a .git, so one the agent could write is refused.
 func openWorkTree(ctx context.Context, agentSID *windows.SID, workTree string) (gitrepo.Repository, error) {
 	gitDir, err := checkedGitDir(agentSID, workTree)
@@ -242,16 +231,11 @@ func checkedGitDir(agentSID *windows.SID, workTree string) (string, error) {
 	if err != nil {
 		return "", fmt.Errorf("inspect %s: %w", dotGit, err)
 	}
-	if info.Mode().IsRegular() {
-		return linkedAdminDir(agentSID, workTree)
+	if !info.Mode().IsRegular() {
+		return "", verifyGitDir(dotGit, agentSID)
 	}
-	return "", verifyGitDir(dotGit, agentSID)
-}
-
-// A linked work tree's .git file names its admin folder <repository .git>/worktrees/<id>. The agent can rewrite that
-// file, so the folder must sit in a checked .git and name this work tree back in its own gitdir file.
-func linkedAdminDir(agentSID *windows.SID, workTree string) (string, error) {
-	dotGit := filepath.Join(workTree, ".git")
+	// A linked work tree's .git file names its admin folder <repository .git>/worktrees/<id>. The agent can rewrite
+	// that file, so the folder must sit in a checked .git and name this work tree back in its own gitdir file.
 	content, err := readAtMost(dotGit, maximumPointerFileBytes, ErrNotLinkedWorkTree)
 	if err != nil {
 		return "", err

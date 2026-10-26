@@ -2,6 +2,9 @@ package ui
 
 import (
 	"strconv"
+	"strings"
+
+	"github.com/charmbracelet/x/ansi"
 )
 
 type selectableList[T any] struct {
@@ -54,10 +57,25 @@ func listLines[T any](list selectableList[T], cellsOf func(T) []string, emptyTex
 		return []string{mutedStyle.Render(emptyText)}
 	}
 	cells := [][]string{}
+	widths := []int{}
 	for _, row := range list.rows {
-		cells = append(cells, cellsOf(row))
+		rowCells := cellsOf(row)
+		for column, cell := range rowCells {
+			if column == len(widths) {
+				widths = append(widths, 0)
+			}
+			widths[column] = max(widths[column], ansi.StringWidth(cell))
+		}
+		cells = append(cells, rowCells)
 	}
-	aligned := alignColumns(cells)
+	aligned := []string{}
+	for _, row := range cells {
+		padded := []string{}
+		for column, cell := range row {
+			padded = append(padded, cell+strings.Repeat(" ", widths[column]-ansi.StringWidth(cell)))
+		}
+		aligned = append(aligned, strings.Join(padded, "  "))
+	}
 	window := listWindow{offset: list.offset, selected: list.selected, height: height}
 	return window.render(len(aligned), innerWidth, func(index int) string { return aligned[index] })
 }
@@ -71,7 +89,13 @@ type listWindow struct {
 func (w listWindow) render(count int, width int, row func(index int) string) []string {
 	lines := []string{}
 	for index := w.offset; index < min(w.offset+w.height, count); index++ {
-		lines = append(lines, listRow(row(index), index == w.selected, width))
+		// The selected row drops its own colors, since each styled part would end the row's background early.
+		if index == w.selected {
+			lines = append(lines, selectionBarStyle.Render("▌")+selectedRowStyle.Render(fitToWidth(ansi.Strip(row(index)),
+				width-1)))
+		} else {
+			lines = append(lines, " "+fitToWidth(row(index), width-1))
+		}
 	}
 	return lines
 }

@@ -21,20 +21,19 @@ func compileSearch(pattern string) (searchTerms, error) {
 	}
 	terms := searchTerms{}
 	for _, word := range words {
-		term, err := compileWord(word)
+		var expression string
+		if strings.ToLower(word) == word {
+			expression = "(?i)" + word
+		} else {
+			expression = word
+		}
+		term, err := regexp.Compile(expression)
 		if err != nil {
 			return nil, err
 		}
 		terms = append(terms, term)
 	}
 	return terms, nil
-}
-
-func compileWord(word string) (*regexp.Regexp, error) {
-	if strings.ToLower(word) == word {
-		return regexp.Compile("(?i)" + word)
-	}
-	return regexp.Compile(word)
 }
 
 func (s searchTerms) matches(commit gitrepo.Commit) bool {

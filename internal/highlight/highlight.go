@@ -35,11 +35,11 @@ func FileDiff(path string, fileDiff diff.FileDiff) (diff.FileDiff, error) {
 }
 
 func hunkTokens(lexer chroma.Lexer, hunk diff.Hunk) (diff.Hunk, error) {
-	oldTokens, err := sideTokens(lexer, sideTexts(hunk.Rows, oldLine))
+	oldTokens, err := sideTokens(lexer, sideTexts(hunk.Rows, func(row diff.Row) diff.Line { return row.Old }))
 	if err != nil {
 		return diff.Hunk{}, fmt.Errorf("old side of %s: %w", hunk.Header, err)
 	}
-	newTokens, err := sideTokens(lexer, sideTexts(hunk.Rows, newLine))
+	newTokens, err := sideTokens(lexer, sideTexts(hunk.Rows, func(row diff.Row) diff.Line { return row.New }))
 	if err != nil {
 		return diff.Hunk{}, fmt.Errorf("new side of %s: %w", hunk.Header, err)
 	}
@@ -55,14 +55,6 @@ func hunkTokens(lexer chroma.Lexer, hunk diff.Hunk) (diff.Hunk, error) {
 	colored := hunk
 	colored.Rows = rows
 	return colored, nil
-}
-
-func oldLine(row diff.Row) diff.Line {
-	return row.Old
-}
-
-func newLine(row diff.Row) diff.Line {
-	return row.New
 }
 
 func sideTexts(rows []diff.Row, side func(diff.Row) diff.Line) []string {

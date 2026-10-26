@@ -13,7 +13,6 @@ import (
 	"charm.land/bubbles/v2/key"
 	tea "charm.land/bubbletea/v2"
 	"charm.land/lipgloss/v2"
-	"github.com/charmbracelet/x/ansi"
 
 	"github.com/CLBRITTON2/perusal/internal/focus"
 	"github.com/CLBRITTON2/perusal/internal/gitrepo"
@@ -217,16 +216,26 @@ func loadOverviewRow(found focus.FoundRepository) (repositoryRow, error) {
 	if !status.HasCommits {
 		return row, nil
 	}
-	outgoing, err := loadOutgoing(ctx, found.Repository, status)
+	// The commits P sends: those past the upstream, or for an unpublished branch those no remote holds.
+	switch {
+	case status.Branch == "":
+		row.outgoing = []gitrepo.Commit{}
+	case status.IsPublished():
+		row.outgoing, err = found.Repository.LogAhead(ctx, status.Upstream, overviewCommitLimit)
+	default:
+		row.outgoing, err = found.Repository.LogOnNoRemote(ctx, overviewCommitLimit)
+	}
 	if err != nil {
 		return repositoryRow{}, err
 	}
-	row.outgoing = outgoing
-	incoming, err := loadIncoming(ctx, found.Repository, status)
+	if status.Upstream == "" || status.UpstreamGone {
+		row.incoming = []gitrepo.Commit{}
+	} else {
+		row.incoming, err = found.Repository.LogBehind(ctx, status.Upstream, overviewCommitLimit)
+	}
 	if err != nil {
 		return repositoryRow{}, err
 	}
-	row.incoming = incoming
 	if status.Branch != "" && !status.IsPublished() {
 		onNoRemote, err := found.Repository.CommitsOnNoRemote(ctx)
 		if err != nil {
@@ -253,24 +262,6 @@ func loadOverviewRow(found focus.FoundRepository) (repositoryRow, error) {
 	}
 	row.commitsBehindDefault = behind
 	return row, nil
-}
-
-// The commits P sends: those past the upstream, or for an unpublished branch those no remote holds.
-func loadOutgoing(ctx context.Context, repository gitrepo.Repository, status gitrepo.Status) ([]gitrepo.Commit, error) {
-	switch {
-	case status.Branch == "":
-		return []gitrepo.Commit{}, nil
-	case status.IsPublished():
-		return repository.LogAhead(ctx, status.Upstream, overviewCommitLimit)
-	}
-	return repository.LogOnNoRemote(ctx, overviewCommitLimit)
-}
-
-func loadIncoming(ctx context.Context, repository gitrepo.Repository, status gitrepo.Status) ([]gitrepo.Commit, error) {
-	if status.Upstream == "" || status.UpstreamGone {
-		return []gitrepo.Commit{}, nil
-	}
-	return repository.LogBehind(ctx, status.Upstream, overviewCommitLimit)
 }
 
 func (r repositoryRow) relativePath() string {
@@ -505,25 +496,23 @@ func (m Model) renderOverviewDetails() string {
 	if !isRepository {
 		return renderPane("", "", "", []string{}, m.width-2, height)
 	}
+	var changeRows []string
+	if len(row.status.Files) == 0 {
+		changeRows = []string{mutedStyle.Render("clean")}
+	} else {
+		changeRows = []string{}
+		for _, file := range row.status.Files {
+			changeRows = append(changeRows, renderFileRow(file))
+		}
+	}
 	width := m.width / 3
 	lastWidth := m.width - 2*width
 	return lipgloss.JoinHorizontal(lipgloss.Top,
-		renderPane("changes", "", "", renderChangeRows(row.status.Files), width-2, height),
+		renderPane("changes", "", "", changeRows, width-2, height),
 		renderPane("outgoing", "", "", renderCommitRows(row.outgoing, row.loadedAt, "nothing to push", width-2),
 			width-2, height),
 		renderPane("incoming", "", "", renderCommitRows(row.incoming, row.loadedAt, "nothing to pull", lastWidth-2),
 			lastWidth-2, height))
-}
-
-func renderChangeRows(files []gitrepo.FileStatus) []string {
-	if len(files) == 0 {
-		return []string{mutedStyle.Render("clean")}
-	}
-	lines := []string{}
-	for _, file := range files {
-		lines = append(lines, renderFileRow(file))
-	}
-	return lines
 }
 
 func renderCommitRows(commits []gitrepo.Commit, loadedAt time.Time, emptyText string, width int) []string {
@@ -538,7 +527,11 @@ func renderCommitRows(commits []gitrepo.Commit, loadedAt time.Time, emptyText st
 }
 
 func (m Model) overviewCells(row overviewRow) []string {
-	cells := append([]string{m.renderFocusMark(row)}, row.cells()...)
+	var focusMark string
+	if m.isFocused(row) {
+		focusMark = markStyle.Render("●")
+	}
+	cells := append([]string{focusMark}, row.cells()...)
 	foundRow, isRepository := row.(repositoryRow)
 	if isRepository && m.syncing[foundRow.Repository.Dir] != "" {
 		cells = append(cells, mutedStyle.Render(m.syncing[foundRow.Repository.Dir]))
@@ -546,28 +539,25 @@ func (m Model) overviewCells(row overviewRow) []string {
 	return cells
 }
 
-func (m Model) renderFocusMark(row overviewRow) string {
-	if !m.isFocused(row) {
-		return ""
-	}
-	return markStyle.Render("●")
-}
-
 func (r repositoryRow) cells() []string {
+	var unpushed string
+	if r.commitsOnNoRemote == 0 {
+		unpushed = renderAheadBehind(r.status.Tracking)
+	} else {
+		unpushed = aheadStyle.Render("↑"+strconv.Itoa(r.commitsOnNoRemote)) + mutedStyle.Render(" unpublished")
+	}
+	var behindDefault string
+	if r.commitsBehindDefault > 0 {
+		behindDefault = behindStyle.Render("↓"+strconv.Itoa(r.commitsBehindDefault)) +
+			mutedStyle.Render(" "+sanitizeText(r.defaultBranch))
+	}
 	return []string{
 		repositoryStyle.Render(folderGlyph + " " + sanitizeText(r.RelativePath)),
 		branchStyle.Render(branchGlyph + " " + headName(r.status.Branch)),
 		renderChangedCount(len(r.status.Files)),
-		renderUnpushed(r),
-		renderBehindDefault(r),
+		unpushed,
+		behindDefault,
 	}
-}
-
-func renderUnpushed(row repositoryRow) string {
-	if row.commitsOnNoRemote == 0 {
-		return renderAheadBehind(row.status.Tracking)
-	}
-	return aheadStyle.Render("↑"+strconv.Itoa(row.commitsOnNoRemote)) + mutedStyle.Render(" unpublished")
 }
 
 func (r refusedRow) cells() []string {
@@ -582,33 +572,4 @@ func renderChangedCount(count int) string {
 		return mutedStyle.Render("clean")
 	}
 	return warningStyle.Render(strconv.Itoa(count) + " changed")
-}
-
-func renderBehindDefault(row repositoryRow) string {
-	if row.commitsBehindDefault == 0 {
-		return ""
-	}
-	return behindStyle.Render("↓"+strconv.Itoa(row.commitsBehindDefault)) +
-		mutedStyle.Render(" "+sanitizeText(row.defaultBranch))
-}
-
-func alignColumns(rows [][]string) []string {
-	widths := []int{}
-	for _, row := range rows {
-		for column, cell := range row {
-			if column == len(widths) {
-				widths = append(widths, 0)
-			}
-			widths[column] = max(widths[column], ansi.StringWidth(cell))
-		}
-	}
-	lines := []string{}
-	for _, row := range rows {
-		padded := []string{}
-		for column, cell := range row {
-			padded = append(padded, cell+strings.Repeat(" ", widths[column]-ansi.StringWidth(cell)))
-		}
-		lines = append(lines, strings.Join(padded, "  "))
-	}
-	return lines
 }

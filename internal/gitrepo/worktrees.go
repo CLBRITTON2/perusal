@@ -18,12 +18,8 @@ func (r Repository) WorkTrees(ctx context.Context) ([]WorkTree, error) {
 	if err != nil {
 		return nil, err
 	}
-	return parseWorkTrees(output), nil
-}
-
-// Each work tree is a run of NUL terminated attributes, starting with "worktree <path>" and ended by an empty one.
-func parseWorkTrees(output []byte) []WorkTree {
 	workTrees := []WorkTree{}
+	// Each work tree is a run of NUL terminated attributes, starting with "worktree <path>" and ended by an empty one.
 	for entry := range strings.SplitSeq(strings.TrimSuffix(string(output), "\x00\x00"), "\x00\x00") {
 		attributes := strings.Split(entry, "\x00")
 		path, isWorkTree := strings.CutPrefix(attributes[0], "worktree ")
@@ -45,5 +41,5 @@ func parseWorkTrees(output []byte) []WorkTree {
 		}
 		workTrees = append(workTrees, WorkTree{Path: path, Branch: branch})
 	}
-	return workTrees
+	return workTrees, nil
 }

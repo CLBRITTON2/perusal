@@ -17,10 +17,12 @@ import (
 const followUsage = "  perusal follow                  review the repositories the agent's focus file names\n"
 
 func runFollow(args []string) error {
-	configPath, err := followConfigPath()
+	configDir, err := os.UserConfigDir()
 	if err != nil {
-		return err
+		return fmt.Errorf("find the config directory: %w", err)
 	}
+	// The config names the account whose .git access is checked, so it must sit where the agent cannot write.
+	configPath := filepath.Join(configDir, "perusal", "config.json")
 	flags := flag.NewFlagSet("perusal follow", flag.ContinueOnError)
 	flags.Usage = func() {
 		fmt.Fprint(flags.Output(), "usage: perusal follow\n\n"+
@@ -41,15 +43,6 @@ func runFollow(args []string) error {
 		return err
 	}
 	return follow(rules)
-}
-
-// The config names the account whose .git access is checked, so it must sit where the agent cannot write.
-func followConfigPath() (string, error) {
-	configDir, err := os.UserConfigDir()
-	if err != nil {
-		return "", fmt.Errorf("find the config directory: %w", err)
-	}
-	return filepath.Join(configDir, "perusal", "config.json"), nil
 }
 
 func follow(rules focus.Rules) error {

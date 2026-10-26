@@ -43,122 +43,135 @@ func commitGraph(commits []gitrepo.Commit) []graphRow {
 		rowByHash[commit.Hash] = int32(index)
 	}
 	rows := []graphRow{}
-	lanes := []graphEdge{}
+	// Each lane holds the edge it leads down along.
+	above := []graphEdge{}
 	for _, commit := range commits {
-		row, next := graphStep(lanes, commit, rowByHash)
-		rows = append(rows, row)
-		lanes = next
+		existingLane := slices.IndexFunc(above, func(edge graphEdge) bool { return edge.parent == commit.Hash })
+		var commitLane int
+		if existingLane >= 0 {
+			commitLane = existingLane
+		} else {
+			commitLane = freeLane(above, above)
+		}
+		below := growTo(slices.Clone(above), commitLane)
+		// Each connector is a lane joined to the commit by a horizontal line, which draws that lane's edge.
+		connectors := map[int]graphEdge{}
+		endingLanes := map[int]bool{}
+		for lane, edge := range above {
+			if lane != commitLane && edge.parent == commit.Hash {
+				endingLanes[lane] = true
+				connectors[lane] = edge
+				below[lane] = graphEdge{}
+			}
+		}
+		var pathChild int32
+		if commitLane < len(above) && above[commitLane].parent == commit.Hash && above[commitLane].firstParent {
+			pathChild = rowByHash[above[commitLane].child]
+		} else {
+			pathChild = noRow
+		}
+		var pathParent int32
+		if len(commit.Parents) == 0 {
+			below[commitLane] = graphEdge{}
+			pathParent = noRow
+		} else {
+			below[commitLane] = graphEdge{child: commit.Hash, parent: commit.Parents[0], firstParent: true}
+			if row, loaded := rowByHash[commit.Parents[0]]; loaded {
+				pathParent = row
+			} else {
+				pathParent = noRow
+			}
+		}
+		openingLanes := map[int]bool{}
+		joiningLanes := map[int]bool{}
+		for _, parent := range commit.Parents[min(1, len(commit.Parents)):] {
+			edge := graphEdge{child: commit.Hash, parent: parent, firstParent: false}
+			existing := slices.IndexFunc(below, func(lane graphEdge) bool { return lane.parent == parent })
+			if existing >= 0 {
+				joiningLanes[existing] = true
+				connectors[existing] = edge
+				continue
+			}
+			lane := freeLane(below, above)
+			below = growTo(below, lane)
+			below[lane] = edge
+			openingLanes[lane] = true
+			connectors[lane] = edge
+		}
+
+		leftmost := commitLane
+		rightmost := commitLane
+		for lane := range connectors {
+			leftmost = min(leftmost, lane)
+			rightmost = max(rightmost, lane)
+		}
+		var commitGlyph rune
+		if len(commit.Parents) > 1 {
+			commitGlyph = '○'
+		} else {
+			commitGlyph = '●'
+		}
+		width := max(len(above), len(below))
+		commitCells := []graphCell{}
+		belowCells := []graphCell{}
+		for lane := range width {
+			passing := occupied(above, lane) && occupied(below, lane)
+			crossed := leftmost < lane && lane < rightmost
+			var symbol graphCell
+			switch {
+			case lane == commitLane:
+				row := rowByHash[commit.Hash]
+				symbol = graphCell{glyph: commitGlyph, lane: int32(lane), childRow: row, parentRow: row}
+			case endingLanes[lane] && lane > commitLane:
+				symbol = edgeCell('╯', lane, connectors[lane], rowByHash)
+			case endingLanes[lane]:
+				symbol = edgeCell('╰', lane, connectors[lane], rowByHash)
+			case openingLanes[lane] && lane > commitLane:
+				symbol = edgeCell('╮', lane, connectors[lane], rowByHash)
+			case openingLanes[lane]:
+				symbol = edgeCell('╭', lane, connectors[lane], rowByHash)
+			case joiningLanes[lane] && lane > commitLane:
+				symbol = edgeCell('┤', lane, connectors[lane], rowByHash)
+			case joiningLanes[lane]:
+				symbol = edgeCell('├', lane, connectors[lane], rowByHash)
+			case passing && crossed:
+				symbol = edgeCell('┼', lane, above[lane], rowByHash)
+			case passing:
+				symbol = edgeCell('│', lane, above[lane], rowByHash)
+			case crossed:
+				connector := nearestConnector(connectors, commitLane, lane)
+				symbol = edgeCell('─', connector, connectors[connector], rowByHash)
+			default:
+				symbol = blankCell(lane)
+			}
+			var filler graphCell
+			if leftmost <= lane && lane < rightmost {
+				// The gap right of lane belongs to the side of the commit it lies on: lane+1 right of it, lane left of it.
+				var gap int
+				if lane >= commitLane {
+					gap = lane + 1
+				} else {
+					gap = lane
+				}
+				connector := nearestConnector(connectors, commitLane, gap)
+				filler = edgeCell('─', connector, connectors[connector], rowByHash)
+			} else {
+				filler = blankCell(lane)
+			}
+			commitCells = append(commitCells, symbol, filler)
+			if occupied(below, lane) {
+				belowCells = append(belowCells, edgeCell('│', lane, below[lane], rowByHash), blankCell(lane))
+			} else {
+				belowCells = append(belowCells, blankCell(lane), blankCell(lane))
+			}
+		}
+		for len(below) > 0 && !occupied(below, len(below)-1) {
+			below = below[:len(below)-1]
+		}
+		rows = append(rows, graphRow{commit: commitCells, below: belowCells, pathChild: pathChild, pathParent: pathParent})
+		above = below
 	}
 	return rows
-}
-
-// Each lane holds the edge it leads down along.
-func graphStep(above []graphEdge, commit gitrepo.Commit, rowByHash map[string]int32) (graphRow, []graphEdge) {
-	commitLane := laneOf(above, commit.Hash)
-	below := growTo(slices.Clone(above), commitLane)
-	// Each connector is a lane joined to the commit by a horizontal line, which draws that lane's edge.
-	connectors := map[int]graphEdge{}
-	endingLanes := map[int]bool{}
-	for lane, edge := range above {
-		if lane != commitLane && edge.parent == commit.Hash {
-			endingLanes[lane] = true
-			connectors[lane] = edge
-			below[lane] = graphEdge{}
-		}
-	}
-	var pathChild int32 = noRow
-	if commitLane < len(above) && above[commitLane].parent == commit.Hash && above[commitLane].firstParent {
-		pathChild = rowByHash[above[commitLane].child]
-	}
-	var pathParent int32 = noRow
-	if len(commit.Parents) == 0 {
-		below[commitLane] = graphEdge{}
-	} else {
-		below[commitLane] = graphEdge{child: commit.Hash, parent: commit.Parents[0], firstParent: true}
-		if row, loaded := rowByHash[commit.Parents[0]]; loaded {
-			pathParent = row
-		}
-	}
-	openingLanes := map[int]bool{}
-	joiningLanes := map[int]bool{}
-	for _, parent := range commit.Parents[min(1, len(commit.Parents)):] {
-		edge := graphEdge{child: commit.Hash, parent: parent, firstParent: false}
-		existing := slices.IndexFunc(below, func(lane graphEdge) bool { return lane.parent == parent })
-		if existing >= 0 {
-			joiningLanes[existing] = true
-			connectors[existing] = edge
-			continue
-		}
-		lane := freeLane(below, above)
-		below = growTo(below, lane)
-		below[lane] = edge
-		openingLanes[lane] = true
-		connectors[lane] = edge
-	}
-
-	leftmost := commitLane
-	rightmost := commitLane
-	for lane := range connectors {
-		leftmost = min(leftmost, lane)
-		rightmost = max(rightmost, lane)
-	}
-	var commitGlyph rune
-	if len(commit.Parents) > 1 {
-		commitGlyph = '○'
-	} else {
-		commitGlyph = '●'
-	}
-	width := max(len(above), len(below))
-	commitCells := []graphCell{}
-	belowCells := []graphCell{}
-	for lane := range width {
-		passing := occupied(above, lane) && occupied(below, lane)
-		crossed := leftmost < lane && lane < rightmost
-		var symbol graphCell
-		switch {
-		case lane == commitLane:
-			row := rowByHash[commit.Hash]
-			symbol = graphCell{glyph: commitGlyph, lane: int32(lane), childRow: row, parentRow: row}
-		case endingLanes[lane] && lane > commitLane:
-			symbol = edgeCell('╯', lane, connectors[lane], rowByHash)
-		case endingLanes[lane]:
-			symbol = edgeCell('╰', lane, connectors[lane], rowByHash)
-		case openingLanes[lane] && lane > commitLane:
-			symbol = edgeCell('╮', lane, connectors[lane], rowByHash)
-		case openingLanes[lane]:
-			symbol = edgeCell('╭', lane, connectors[lane], rowByHash)
-		case joiningLanes[lane] && lane > commitLane:
-			symbol = edgeCell('┤', lane, connectors[lane], rowByHash)
-		case joiningLanes[lane]:
-			symbol = edgeCell('├', lane, connectors[lane], rowByHash)
-		case passing && crossed:
-			symbol = edgeCell('┼', lane, above[lane], rowByHash)
-		case passing:
-			symbol = edgeCell('│', lane, above[lane], rowByHash)
-		case crossed:
-			connector := nearestConnector(connectors, commitLane, lane)
-			symbol = edgeCell('─', connector, connectors[connector], rowByHash)
-		default:
-			symbol = blankCell(lane)
-		}
-		var filler graphCell
-		if leftmost <= lane && lane < rightmost {
-			connector := nearestConnector(connectors, commitLane, gapSide(lane, commitLane))
-			filler = edgeCell('─', connector, connectors[connector], rowByHash)
-		} else {
-			filler = blankCell(lane)
-		}
-		commitCells = append(commitCells, symbol, filler)
-		if occupied(below, lane) {
-			belowCells = append(belowCells, edgeCell('│', lane, below[lane], rowByHash), blankCell(lane))
-		} else {
-			belowCells = append(belowCells, blankCell(lane), blankCell(lane))
-		}
-	}
-	for len(below) > 0 && !occupied(below, len(below)-1) {
-		below = below[:len(below)-1]
-	}
-	return graphRow{commit: commitCells, below: belowCells, pathChild: pathChild, pathParent: pathParent}, below
 }
 
 func growTo(lanes []graphEdge, lane int) []graphEdge {
@@ -184,14 +197,6 @@ func edgeCell(glyph rune, lane int, edge graphEdge, rowByHash map[string]int32) 
 
 func blankCell(lane int) graphCell {
 	return graphCell{glyph: ' ', lane: int32(lane), childRow: noRow, parentRow: noRow}
-}
-
-// The gap right of lane belongs to the side of the commit it lies on: lane+1 right of it, lane left of it.
-func gapSide(lane int, commitLane int) int {
-	if lane >= commitLane {
-		return lane + 1
-	}
-	return lane
 }
 
 // A horizontal cell takes the color of the first connector at or beyond it, going outward from the commit.
@@ -224,14 +229,6 @@ func freeLane(lanes []graphEdge, above []graphEdge) int {
 		}
 	}
 	return len(lanes)
-}
-
-func laneOf(above []graphEdge, hash string) int {
-	lane := slices.IndexFunc(above, func(edge graphEdge) bool { return edge.parent == hash })
-	if lane >= 0 {
-		return lane
-	}
-	return freeLane(above, above)
 }
 
 // pathThrough marks the rows on the selected commit's first-parent path: its ancestors down to the oldest loaded
