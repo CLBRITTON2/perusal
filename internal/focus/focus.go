@@ -210,22 +210,10 @@ func openWorkTree(ctx context.Context, rules Rules, workTree string) (gitrepo.Re
 	if err != nil {
 		return gitrepo.Repository{}, err
 	}
-	repository, err := gitrepo.Open(ctx, gitrepo.Repository{Dir: workTree, GitDir: gitDir})
-	if err != nil {
-		return gitrepo.Repository{}, err
-	}
-	// git skips a .git it cannot use and keeps looking further up, past the directory that was checked.
-	same, err := isSameDirectory(repository.Dir, workTree)
-	if err != nil {
-		return gitrepo.Repository{}, err
-	}
-	if !same {
-		return gitrepo.Repository{}, fmt.Errorf("%w: git opened %s as %s", ErrWorkTreeMismatch, workTree, repository.Dir)
-	}
-	return repository, nil
+	return gitrepo.Open(ctx, gitrepo.Repository{Dir: workTree, GitDir: gitDir})
 }
 
-// checkedGitDir returns the git directory to pin, empty for a .git directory, which git finds itself.
+// checkedGitDir returns the git directory to pin, so git never searches for one past the directory that was checked.
 func checkedGitDir(rules Rules, workTree string) (string, error) {
 	dotGit := filepath.Join(workTree, ".git")
 	info, err := os.Lstat(dotGit)
@@ -233,8 +221,7 @@ func checkedGitDir(rules Rules, workTree string) (string, error) {
 		return "", fmt.Errorf("inspect %s: %w", dotGit, err)
 	}
 	if !info.Mode().IsRegular() {
-		_, err := rules.held.hold(dotGit, func(string) error { return verifyGitDir(dotGit, rules.AgentSID) })
-		return "", err
+		return rules.held.hold(dotGit, func(string) error { return verifyGitDir(dotGit, rules.AgentSID) })
 	}
 	// A linked work tree's .git file names its admin folder <repository .git>/worktrees/<id>. The agent can rewrite
 	// that file, so the folder must sit in a checked .git and name this work tree back in its own gitdir file.

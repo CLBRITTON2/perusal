@@ -22,8 +22,8 @@ const (
 	grantedWriteMask = deniedWriteMask | windows.GENERIC_WRITE | windows.GENERIC_ALL
 )
 
-// verifyGitDir checks every entry, since one the agent owns, or that grants writes ahead of the inherited deny, is
-// writable through it.
+// verifyGitDir checks every entry, since one the agent owns, that grants writes ahead of the inherited deny, or that
+// lets the agent or a group other than SYSTEM and Administrators rewrite its ACL or owner, is writable through it.
 func verifyGitDir(gitDir string, agent *windows.SID) error {
 	info, err := os.Lstat(gitDir)
 	if err != nil {
@@ -32,6 +32,15 @@ func verifyGitDir(gitDir string, agent *windows.SID) error {
 	if !info.IsDir() {
 		return fmt.Errorf("%w: %s is not a plain directory (mode %s)", ErrGitDirUnprotected, gitDir, info.Mode())
 	}
+	system, err := windows.CreateWellKnownSid(windows.WinLocalSystemSid)
+	if err != nil {
+		return fmt.Errorf("build the SYSTEM SID: %w", err)
+	}
+	administrators, err := windows.CreateWellKnownSid(windows.WinBuiltinAdministratorsSid)
+	if err != nil {
+		return fmt.Errorf("build the Administrators SID: %w", err)
+	}
+	sidTypes := map[string]uint32{}
 	return filepath.WalkDir(gitDir, func(path string, entry fs.DirEntry, listErr error) error {
 		if listErr != nil {
 			return fmt.Errorf("list %s: %w", path, listErr)
@@ -60,26 +69,44 @@ func verifyGitDir(gitDir string, agent *windows.SID) error {
 		if dacl == nil {
 			return fmt.Errorf("%w: %s has a null DACL, which grants everyone full access", ErrGitDirUnprotected, path)
 		}
+		denied := false
 		// Windows applies the first ACE that matches each bit, so a grant ahead of the deny wins.
 		for index := uint16(0); index < dacl.AceCount; index++ {
 			var ace *windows.ACCESS_ALLOWED_ACE
 			if err := windows.GetAce(dacl, uint32(index), &ace); err != nil {
 				return fmt.Errorf("read ACE %d of %s: %w", index, path, err)
 			}
+			// The SID starts at SidStart and runs past the end of the Go struct, as in the Win32 ACCESS_DENIED_ACE.
+			sid := (*windows.SID)(unsafe.Pointer(&ace.SidStart))
 			switch {
 			case ace.Header.AceFlags&windows.INHERIT_ONLY_ACE != 0: // applies to children only, not to path
-			// The SID starts at SidStart and runs past the end of the Go struct, as in the Win32 ACCESS_DENIED_ACE.
-			case ace.Header.AceType == windows.ACCESS_DENIED_ACE_TYPE &&
-				uint32(ace.Mask)&deniedWriteMask == deniedWriteMask &&
-				(*windows.SID)(unsafe.Pointer(&ace.SidStart)).Equals(agent):
-				return nil
-			case ace.Header.AceType != windows.ACCESS_DENIED_ACE_TYPE && uint32(ace.Mask)&grantedWriteMask != 0:
+			case ace.Header.AceType == windows.ACCESS_DENIED_ACE_TYPE:
+				denied = denied || uint32(ace.Mask)&deniedWriteMask == deniedWriteMask && sid.Equals(agent)
+			case !denied && uint32(ace.Mask)&grantedWriteMask != 0:
 				return fmt.Errorf("%w: ACE %d of %s grants writes ahead of the deny for %s, "+
 					"icacls %s /reset /T restores the inherited ACL", ErrGitDirUnprotected, index, path, agent, path)
+			// The deny does not cover rewriting the ACL or the owner, and a group the agent is in could hold either.
+			case uint32(ace.Mask)&(windows.WRITE_DAC|windows.WRITE_OWNER|windows.GENERIC_ALL) != 0 &&
+				!sid.Equals(system) && !sid.Equals(administrators):
+				key := sid.String()
+				if _, cached := sidTypes[key]; !cached {
+					_, _, sidType, err := sid.LookupAccount("")
+					if err != nil {
+						return fmt.Errorf("look up %s, which ACE %d of %s lets rewrite its ACL: %w", key, index, path, err)
+					}
+					sidTypes[key] = sidType
+				}
+				if sid.Equals(agent) || sidTypes[key] != windows.SidTypeUser {
+					return fmt.Errorf("%w: ACE %d of %s lets %s rewrite its ACL or owner, which only SYSTEM, "+
+						"Administrators and user accounts other than %s may", ErrGitDirUnprotected, index, path, key, agent)
+				}
 			}
 		}
-		return fmt.Errorf("%w: %s has no (WD,AD,WEA,WA,DE,DC) deny for %s, "+
-			"add it as the README's Follow mode section shows", ErrGitDirUnprotected, path, agent)
+		if !denied {
+			return fmt.Errorf("%w: %s has no (WD,AD,WEA,WA,DE,DC) deny for %s, "+
+				"add it as the README's Follow mode section shows", ErrGitDirUnprotected, path, agent)
+		}
+		return nil
 	})
 }
 

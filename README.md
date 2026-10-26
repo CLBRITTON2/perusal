@@ -136,9 +136,11 @@ longer names it.
 perusal runs git as you in a repository the agent chose, and git runs whatever that repository's `.git` tells it to:
 hooks, and config such as `core.fsmonitor`, `core.hooksPath` or `core.sshCommand` that names a program. An agent
 that can write `.git` could plant one and have git run it as you. So perusal checks `.git` and everything in it, and
-refuses the repository if the agent account owns any of it, if any of it is a link or junction, or if any of it
-grants write access ahead of a deny of `(OI)(CI)(WD,AD,WEA,WA,DE,DC)` for that account. For the same reason the agent
-account must not be able to write your `%APPDATA%`, where the config lives.
+refuses the repository if the agent account owns any of it, if any of it is a link or junction, if any of it grants
+write access ahead of a deny of `(OI)(CI)(WD,AD,WEA,WA,DE,DC)` for that account, or if any of it lets that account or
+a group other than SYSTEM and Administrators change its permissions or owner. git then runs with that `.git` pinned,
+so it never searches for another one. For the same reason the agent account must not be able to write your
+`%APPDATA%`, where the config lives.
 
 A linked work tree, made by `git worktree add`, has a `.git` file instead, which the agent can rewrite. perusal opens
 it only when that file names a folder in the `worktrees` of a `.git` that passes the checks above, and that folder

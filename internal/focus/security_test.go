@@ -23,6 +23,20 @@ func TestVerifyGitDir(t *testing.T) {
 	t.Run("refusesAGitFile", refusesAGitFile)
 	t.Run("refusesAnEntryThatGrantsWritesAheadOfTheDeny", refusesAnEntryThatGrantsWritesAheadOfTheDeny)
 	t.Run("refusesAJunctionInside", refusesAJunctionInside)
+	t.Run("refusesAGrantThatCanLiftTheDeny", refusesAGrantThatCanLiftTheDeny)
+}
+
+func refusesAGrantThatCanLiftTheDeny(t *testing.T) {
+	for _, mask := range []uint32{windows.WRITE_DAC, windows.WRITE_OWNER} {
+		gitDir := deniedGitDir(t, deniedWriteMask)
+		addGuestsACE(t, gitDir, mask, windows.GRANT_ACCESS)
+
+		err := verifyGitDir(gitDir, parsedGuestsSID(t))
+
+		if !errors.Is(err, ErrGitDirUnprotected) {
+			t.Fatalf("mask %#x: got %v, want %v", mask, err, ErrGitDirUnprotected)
+		}
+	}
 }
 
 func acceptsTheSetupDeny(t *testing.T) {

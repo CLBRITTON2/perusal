@@ -18,8 +18,8 @@ import (
 
 type Repository struct {
 	Dir string // the working tree's top level
-	// GitDir, when set, is the git directory git uses instead of the one it would find from Dir, so a linked work
-	// tree's .git file cannot redirect it. Empty lets git find it.
+	// GitDir, when set, is the git directory git uses instead of the one it would find from Dir, so neither a linked
+	// work tree's .git file nor git's upward search can redirect it. Empty lets git find it.
 	GitDir string
 }
 

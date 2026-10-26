@@ -99,7 +99,7 @@ func stopsAtTheOwnerDirectory(t *testing.T) {
 
 func TestResolve(t *testing.T) {
 	t.Run("opensTheCheckedWorkTree", opensTheCheckedWorkTree)
-	t.Run("refusesAWorkTreeGitSkipsPast", refusesAWorkTreeGitSkipsPast)
+	t.Run("doesNotOpenTheRepositoryAboveAnUnusableGitDir", doesNotOpenTheRepositoryAboveAnUnusableGitDir)
 	t.Run("keepsEachRepositoryOnceAndReportsTheRefusedPaths", keepsEachRepositoryOnceAndReportsTheRefusedPaths)
 }
 
@@ -120,6 +120,9 @@ func opensTheCheckedWorkTree(t *testing.T) {
 	same, err := isSameDirectory(got.Repositories[0].Dir, repository)
 	if err != nil || !same {
 		t.Fatalf("got %q, %v, want %q", got.Repositories[0].Dir, err, repository)
+	}
+	if want := filepath.Join(repository, ".git"); !strings.EqualFold(got.Repositories[0].GitDir, want) {
+		t.Fatalf("got git directory %q, want %q", got.Repositories[0].GitDir, want)
 	}
 }
 
@@ -147,7 +150,7 @@ func keepsEachRepositoryOnceAndReportsTheRefusedPaths(t *testing.T) {
 	}
 }
 
-func refusesAWorkTreeGitSkipsPast(t *testing.T) {
+func doesNotOpenTheRepositoryAboveAnUnusableGitDir(t *testing.T) {
 	outer := t.TempDir()
 	gitInit(t, outer)
 	devDir := filepath.Join(outer, "dev")
@@ -156,10 +159,10 @@ func refusesAWorkTreeGitSkipsPast(t *testing.T) {
 	denyGuests(t, emptyGitDir, deniedWriteMask)
 	rules := guestRules(t, devDir, focusFileHolding(t, agentDevDir+`\repo`))
 
-	_, err := resolve(context.Background(), rules)
+	got, err := resolve(context.Background(), rules)
 
-	if !errors.Is(err, ErrWorkTreeMismatch) {
-		t.Fatalf("got %v, want %v", err, ErrWorkTreeMismatch)
+	if err == nil {
+		t.Fatalf("got %v, want an error", got)
 	}
 }
 
