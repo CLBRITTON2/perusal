@@ -17,22 +17,24 @@ func TestDeleteBranch(t *testing.T) {
 	t.Run("anUnmergedBranchIsDeletedAfterAWarning", anUnmergedBranchIsDeletedAfterAWarning)
 	for name, test := range map[string]struct {
 		moves         int
-		defaultBranch string
+		defaultBranch gitrepo.RemoteBranch
 		want          string
 	}{
-		"refusesTheCurrentBranch": {moves: 0, defaultBranch: "origin/main", want: "fix is checked out, so it cannot be deleted"},
+		"refusesTheCurrentBranch": {
+			moves: 0, defaultBranch: originMain(), want: "fix is checked out, so it cannot be deleted",
+		},
 		"refusesTheDefaultBranch": {
-			moves: 1, defaultBranch: "origin/main", want: "main is the default branch, which perusal never deletes",
+			moves: 1, defaultBranch: originMain(), want: "main is the default branch, which perusal never deletes",
 		},
 		"refusesABranchWhenTheDefaultBranchIsUnknown": {
 			moves: 2, want: "origin's default branch is unknown, so perusal cannot rule out that done is it",
 		},
 		"refusesABranchCheckedOutInAnotherWorkTree": {
-			moves: 4, defaultBranch: "origin/main",
+			moves: 4, defaultBranch: originMain(),
 			want: "side is checked out in C:/dev/repo/.claude/worktrees/side, so it cannot be deleted",
 		},
 		"refusesARemoteBranch": {
-			moves: 5, defaultBranch: "origin/main", want: "origin/fix-x is a remote branch, which perusal never deletes",
+			moves: 5, defaultBranch: originMain(), want: "origin/fix-x is a remote branch, which perusal never deletes",
 		},
 	} {
 		t.Run(name, func(t *testing.T) {
@@ -48,7 +50,7 @@ func TestDeleteBranch(t *testing.T) {
 }
 
 func aMergedBranchIsDeletedAfterAConfirmAndTheListReloadsInPlace(t *testing.T) {
-	m := selectRow(t, branchesOf(t, gitrepo.Status{}, "origin/main"), 2)
+	m := selectRow(t, branchesOf(t, gitrepo.Status{}, originMain()), 2)
 	screen := ansi.Strip(m.renderScreen())
 	m = update(t, m, tea.KeyPressMsg{Code: 'D', Text: "D"})
 	popup := ansi.Strip(m.renderConfirmPopup())
@@ -58,7 +60,7 @@ func aMergedBranchIsDeletedAfterAConfirmAndTheListReloadsInPlace(t *testing.T) {
 	m = asModel(t, next)
 	rows := sixBranches()
 	m = update(t, m, branchesMsg{
-		dir: "C:/dev/repo", rows: []branchRow{rows[0], rows[1], rows[3]}, defaultBranch: "origin/main"})
+		dir: "C:/dev/repo", rows: []branchRow{rows[0], rows[1], rows[3]}, defaultBranch: originMain()})
 
 	if !strings.Contains(screen, "origin/done deleted") || !strings.Contains(screen, "merged into origin/main") ||
 		!strings.Contains(screen, "in work tree side") {
@@ -75,7 +77,7 @@ func aMergedBranchIsDeletedAfterAConfirmAndTheListReloadsInPlace(t *testing.T) {
 }
 
 func anUnmergedBranchIsDeletedAfterAWarning(t *testing.T) {
-	m := selectRow(t, branchesOf(t, gitrepo.Status{}, "origin/main"), 3)
+	m := selectRow(t, branchesOf(t, gitrepo.Status{}, originMain()), 3)
 	m = update(t, m, tea.KeyPressMsg{Code: 'D', Text: "D"})
 	popup := ansi.Strip(m.renderConfirmPopup())
 
@@ -101,7 +103,7 @@ func TestTheCurrentBranchShowsMergedOnlyWithNoUncommittedChanges(t *testing.T) {
 			m = update(t, m, branchesMsg{
 				dir:           "C:/dev/repo",
 				rows:          []branchRow{{branch: gitrepo.Branch{Name: "fix", Current: true}, mergedIntoDefault: true}},
-				defaultBranch: "origin/main",
+				defaultBranch: originMain(),
 			})
 
 			screen := ansi.Strip(m.renderScreen())
@@ -122,7 +124,7 @@ func TestSwitchBranch(t *testing.T) {
 func isRefusedWithUncommittedChanges(t *testing.T) {
 	for name, moves := range map[string]int{"local": 3, "remote": 5} {
 		t.Run(name, func(t *testing.T) {
-			m := selectRow(t, branchesOf(t, gitrepo.Status{Branch: "fix", Files: twoFiles()}, "origin/main"), moves)
+			m := selectRow(t, branchesOf(t, gitrepo.Status{Branch: "fix", Files: twoFiles()}, originMain()), moves)
 
 			next, cmd := m.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
 			m = asModel(t, next)
@@ -135,7 +137,7 @@ func isRefusedWithUncommittedChanges(t *testing.T) {
 }
 
 func toARemoteBranchCreatesItsLocalBranch(t *testing.T) {
-	m := selectRow(t, branchesOf(t, gitrepo.Status{Branch: "fix"}, "origin/main"), 5)
+	m := selectRow(t, branchesOf(t, gitrepo.Status{Branch: "fix"}, originMain()), 5)
 	screen := ansi.Strip(m.renderScreen())
 
 	_, switching := m.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
@@ -146,7 +148,7 @@ func toARemoteBranchCreatesItsLocalBranch(t *testing.T) {
 }
 
 func TestFetchInTheBranchListReloadsIt(t *testing.T) {
-	m := branchesOf(t, gitrepo.Status{Branch: "fix"}, "origin/main")
+	m := branchesOf(t, gitrepo.Status{Branch: "fix"}, originMain())
 
 	next, fetching := m.Update(tea.KeyPressMsg{Code: 'f', Text: "f"})
 	m = asModel(t, next)
@@ -162,7 +164,7 @@ func TestFetchInTheBranchListReloadsIt(t *testing.T) {
 }
 
 func closesTheListAndReloadsTheStatus(t *testing.T) {
-	m := selectRow(t, branchesOf(t, gitrepo.Status{Branch: "fix"}, "origin/main"), 3)
+	m := selectRow(t, branchesOf(t, gitrepo.Status{Branch: "fix"}, originMain()), 3)
 
 	next, switching := m.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
 	m = asModel(t, next)
@@ -192,7 +194,11 @@ func TestRemoteOnlyBranchesDropsEachOneALocalBranchShadows(t *testing.T) {
 	}
 }
 
-func branchesOf(t *testing.T, status gitrepo.Status, defaultBranch string) Model {
+func originMain() gitrepo.RemoteBranch {
+	return gitrepo.RemoteBranch{Ref: "origin/main", Name: "main"}
+}
+
+func branchesOf(t *testing.T, status gitrepo.Status, defaultBranch gitrepo.RemoteBranch) Model {
 	t.Helper()
 	m := reviewingRepository(t, status)
 	m = update(t, m, tea.KeyPressMsg{Code: 'b', Text: "b"})

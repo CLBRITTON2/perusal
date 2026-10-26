@@ -1,6 +1,6 @@
 .DEFAULT_GOAL := install
 
-.PHONY: install fmt test vet-linux vet-darwin
+.PHONY: install fmt test
 
 install:
 	go install ./cmd/perusal
@@ -13,10 +13,6 @@ test: vet-linux vet-darwin
 	go vet ./...
 	go test ./... -count=1
 
-vet-linux: export GOOS := linux
-vet-linux:
-	go vet ./...
-
-vet-darwin: export GOOS := darwin
-vet-darwin:
+vet-%: export GOOS = $*
+vet-%:
 	go vet ./...

@@ -22,16 +22,16 @@ type branchRow struct {
 	mergedIntoDefault bool
 }
 
-// defaultBranch is origin's, as DefaultBranch names it, and empty when origin/HEAD is unset.
+// defaultBranch is origin's, as DefaultBranch names it, and zero when origin/HEAD is unset.
 type branchList struct {
 	selectableList[branchRow]
-	defaultBranch string
+	defaultBranch gitrepo.RemoteBranch
 }
 
 type branchesMsg struct {
 	dir           string
 	rows          []branchRow
-	defaultBranch string
+	defaultBranch gitrepo.RemoteBranch
 }
 
 type branchesFailureMsg struct {
@@ -68,11 +68,12 @@ func (r repositoryRequest) loadBranches() tea.Msg {
 	var group sync.WaitGroup
 	for index, branch := range branches {
 		rows[index] = branchRow{branch: branch}
-		if defaultBranch == "" || branch.Name == localBranch(defaultBranch) || branch.OtherWorkTree != "" {
+		if defaultBranch.Ref == "" || branch.Name == defaultBranch.Name || branch.OtherWorkTree != "" {
 			continue
 		}
 		group.Go(func() {
-			rows[index].mergedIntoDefault, errs[index] = r.repository.MergedInto(ctx, "refs/heads/"+branch.Name, defaultBranch)
+			rows[index].mergedIntoDefault, errs[index] = r.repository.MergedInto(ctx, "refs/heads/"+branch.Name,
+				defaultBranch.Ref)
 		})
 	}
 	group.Wait()
@@ -221,17 +222,17 @@ func (m Model) openDeleteBranchPopup() Model {
 		return m.withFooterError(name + " is checked out, so it cannot be deleted")
 	case row.branch.OtherWorkTree != "":
 		return m.withFooterError(name + " is checked out in " + row.branch.OtherWorkTree + ", so it cannot be deleted")
-	case m.branches.defaultBranch == "":
+	case m.branches.defaultBranch.Ref == "":
 		return m.withFooterError("origin's default branch is unknown, so perusal cannot rule out that " + name +
 			" is it")
-	case row.branch.Name == localBranch(m.branches.defaultBranch):
+	case row.branch.Name == m.branches.defaultBranch.Name:
 		return m.withFooterError(name + " is the default branch, which perusal never deletes")
 	}
 	var mergedLine string
 	if row.mergedIntoDefault {
-		mergedLine = textStyle.Render(sanitizeText(m.branches.defaultBranch) + " has all its changes")
+		mergedLine = textStyle.Render(sanitizeText(m.branches.defaultBranch.Ref) + " has all its changes")
 	} else {
-		mergedLine = warningStyle.Render(sanitizeText(m.branches.defaultBranch) + " lacks some of its changes")
+		mergedLine = warningStyle.Render(sanitizeText(m.branches.defaultBranch.Ref) + " lacks some of its changes")
 	}
 	return m.withConfirmation(m.repository.Dir, confirmation{
 		lines:       []string{titleStyle.Render("delete " + sanitizeText(row.branch.Name)), mergedLine},
@@ -257,7 +258,7 @@ func (m Model) branchCells(row branchRow) []string {
 		state = mutedStyle.Render("in work tree " + sanitizeText(path.Base(row.branch.OtherWorkTree)))
 	// MergedInto sees only commits, so the current branch with uncommitted work is never shown merged.
 	case row.mergedIntoDefault && (!row.branch.Current || len(m.status.Files) == 0):
-		state = successStyle.Render("merged") + mutedStyle.Render(" into "+sanitizeText(m.branches.defaultBranch))
+		state = successStyle.Render("merged") + mutedStyle.Render(" into "+sanitizeText(m.branches.defaultBranch.Ref))
 	}
 	return []string{
 		renderCurrentMark(row.branch.Current),

@@ -204,17 +204,23 @@ func (r Repository) StagedLineCounts(ctx context.Context) (diff.LineCounts, erro
 	return counts, nil
 }
 
-// DefaultBranch is origin's default branch as of the last fetch, such as origin/main. It is empty when origin/HEAD is
-// unset, as in a repository that was pushed to origin instead of cloned from it.
-func (r Repository) DefaultBranch(ctx context.Context) (string, error) {
+// DefaultBranch is origin's default branch as of the last fetch, such as origin/main. It is the zero RemoteBranch when
+// origin/HEAD is unset, as in a repository that was pushed to origin instead of cloned from it.
+func (r Repository) DefaultBranch(ctx context.Context) (RemoteBranch, error) {
 	output, err := r.git(ctx, "symbolic-ref", "--quiet", "--short", "refs/remotes/origin/HEAD")
 	switch {
-	case err == nil:
-		return strings.TrimSpace(string(output)), nil
 	case isExitCodeOne(err):
-		return "", nil
+		return RemoteBranch{}, nil
+	case err != nil:
+		return RemoteBranch{}, err
 	}
-	return "", err
+	ref := strings.TrimSpace(string(output))
+	name, isOrigins := strings.CutPrefix(ref, "origin/")
+	if !isOrigins {
+		return RemoteBranch{}, fmt.Errorf("read origin's default branch in %s: refs/remotes/origin/HEAD points to %s, "+
+			"outside origin, git remote set-head origin --auto resets it", r.Dir, ref)
+	}
+	return RemoteBranch{Ref: ref, Name: name}, nil
 }
 
 func (r Repository) CommitsBehind(ctx context.Context, ref string) (int, error) {

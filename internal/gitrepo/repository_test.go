@@ -184,6 +184,18 @@ func hunkHeaders(text string) string {
 func TestDefaultBranch(t *testing.T) {
 	t.Run("countsTheCommitsHeadLacksFromOriginsDefaultBranch", countsTheCommitsHeadLacksFromOriginsDefaultBranch)
 	t.Run("isEmptyWithoutOriginHead", isEmptyWithoutOriginHead)
+	t.Run("failsWhenOriginHeadPointsOutsideOrigin", failsWhenOriginHeadPointsOutsideOrigin)
+}
+
+func failsWhenOriginHeadPointsOutsideOrigin(t *testing.T) {
+	_, clone := pushedClone(t)
+	runSteps(t, clone, [][]string{{"symbolic-ref", "refs/remotes/origin/HEAD", "refs/heads/main"}})
+
+	branch, err := Repository{Dir: clone}.DefaultBranch(context.Background())
+
+	if err == nil || !strings.Contains(err.Error(), "points to main, outside origin") {
+		t.Fatalf("got %+v, %v, want an error naming main", branch, err)
+	}
 }
 
 func countsTheCommitsHeadLacksFromOriginsDefaultBranch(t *testing.T) {
@@ -203,10 +215,10 @@ func countsTheCommitsHeadLacksFromOriginsDefaultBranch(t *testing.T) {
 	repository := Repository{Dir: clone}
 
 	branch, branchErr := repository.DefaultBranch(context.Background())
-	behind, behindErr := repository.CommitsBehind(context.Background(), branch)
+	behind, behindErr := repository.CommitsBehind(context.Background(), branch.Ref)
 
-	if branchErr != nil || behindErr != nil || branch != "origin/main" || behind != 2 {
-		t.Fatalf("got %q (%v), %d behind (%v), want origin/main, 2 behind", branch, branchErr, behind, behindErr)
+	if branchErr != nil || behindErr != nil || branch != (RemoteBranch{Ref: "origin/main", Name: "main"}) || behind != 2 {
+		t.Fatalf("got %+v (%v), %d behind (%v), want origin/main, 2 behind", branch, branchErr, behind, behindErr)
 	}
 }
 
@@ -215,8 +227,8 @@ func isEmptyWithoutOriginHead(t *testing.T) {
 
 	branch, err := Repository{Dir: clone}.DefaultBranch(context.Background())
 
-	if err != nil || branch != "" {
-		t.Fatalf("got %q, %v, want no default branch for a clone of an empty repository", branch, err)
+	if err != nil || branch != (RemoteBranch{}) {
+		t.Fatalf("got %+v, %v, want no default branch for a clone of an empty repository", branch, err)
 	}
 }
 

@@ -80,7 +80,7 @@ func enterOnTheWorkTreeUnderReviewClosesTheList(t *testing.T) {
 }
 
 func TestEnterOnABranchInAnotherWorkTreeReviewsThatWorkTree(t *testing.T) {
-	m := selectRow(t, branchesOf(t, gitrepo.Status{Branch: "fix", Files: twoFiles()}, "origin/main"), 4)
+	m := selectRow(t, branchesOf(t, gitrepo.Status{Branch: "fix", Files: twoFiles()}, originMain()), 4)
 
 	_, opening := m.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
 	next, reloading := m.Update(opening())

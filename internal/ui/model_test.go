@@ -198,7 +198,7 @@ func aFinishedRowIsSwitchedThoughItTracksNoUpstream(t *testing.T) {
 	m := update(t, overviewWithTwoRepositories(t), overviewMsg{rows: []overviewRow{repositoryRow{
 		FoundRepository: foundAt("first", "C:/dev/first"),
 		status:          gitrepo.Status{Branch: "fix", HasCommits: true, Files: []gitrepo.FileStatus{}},
-		defaultBranch:   "origin/main",
+		defaultBranch:   originMain(),
 		finished:        true,
 	}}, failures: []string{}})
 	next, cmd := m.Update(tea.KeyPressMsg{Code: 'p', Text: "p"})
@@ -338,7 +338,7 @@ func TestMayBeFinished(t *testing.T) {
 		},
 	} {
 		t.Run(name, func(t *testing.T) {
-			if got := mayBeFinished(test.status, "origin/main"); got != test.want {
+			if got := mayBeFinished(test.status, originMain()); got != test.want {
 				t.Fatalf("got %t, want %t", got, test.want)
 			}
 		})

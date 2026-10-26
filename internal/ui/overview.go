@@ -34,7 +34,7 @@ type overviewRow interface {
 type repositoryRow struct {
 	focus.FoundRepository
 	status               gitrepo.Status
-	defaultBranch        string
+	defaultBranch        gitrepo.RemoteBranch
 	commitsBehindDefault int
 	commitsOnNoRemote    int
 	finished             bool
@@ -243,20 +243,20 @@ func loadOverviewRow(found focus.FoundRepository) (repositoryRow, error) {
 		}
 		row.commitsOnNoRemote = onNoRemote
 	}
-	if defaultBranch == "" {
+	if defaultBranch.Ref == "" {
 		return row, nil
 	}
 	if mayBeFinished(status, defaultBranch) {
-		merged, err := found.Repository.MergedInto(ctx, "HEAD", defaultBranch)
+		merged, err := found.Repository.MergedInto(ctx, "HEAD", defaultBranch.Ref)
 		if err != nil {
 			return repositoryRow{}, err
 		}
 		row.finished = merged
 	}
-	if defaultBranch == status.Upstream {
+	if defaultBranch.Ref == status.Upstream {
 		return row, nil
 	}
-	behind, err := found.Repository.CommitsBehind(ctx, defaultBranch)
+	behind, err := found.Repository.CommitsBehind(ctx, defaultBranch.Ref)
 	if err != nil {
 		return repositoryRow{}, err
 	}
@@ -361,7 +361,7 @@ func (m Model) pullRepositoryRow(row repositoryRow) (tea.Model, tea.Cmd) {
 	case m.syncing[row.Repository.Dir] != "":
 		return m, nil
 	case row.finished:
-		pull = switchRequest{found: row.FoundRepository, branch: localBranch(row.defaultBranch)}.switchAndPull
+		pull = switchRequest{found: row.FoundRepository, branch: row.defaultBranch.Name}.switchAndPull
 	case row.status.Upstream == "":
 		return m.withFooterError(row.RelativePath + " tracks no upstream, so there is nothing to pull"), nil
 	case row.status.UpstreamGone:
@@ -417,13 +417,9 @@ func (m Model) reloadOverviewRow(dir string) tea.Cmd {
 }
 
 // A clean branch other than the default one, with no upstream left to pull, is finished once it is merged.
-func mayBeFinished(status gitrepo.Status, defaultBranch string) bool {
+func mayBeFinished(status gitrepo.Status, defaultBranch gitrepo.RemoteBranch) bool {
 	return len(status.Files) == 0 && (status.Upstream == "" || status.UpstreamGone) &&
-		status.Branch != "" && status.Branch != localBranch(defaultBranch)
-}
-
-func localBranch(defaultBranch string) string {
-	return strings.TrimPrefix(defaultBranch, "origin/")
+		status.Branch != "" && status.Branch != defaultBranch.Name
 }
 
 func (m Model) withOverviewSynced(msg syncedMsg) (tea.Model, tea.Cmd) {
@@ -549,7 +545,7 @@ func (r repositoryRow) cells() []string {
 	var behindDefault string
 	if r.commitsBehindDefault > 0 {
 		behindDefault = behindStyle.Render("↓"+strconv.Itoa(r.commitsBehindDefault)) +
-			mutedStyle.Render(" "+sanitizeText(r.defaultBranch))
+			mutedStyle.Render(" "+sanitizeText(r.defaultBranch.Ref))
 	}
 	return []string{
 		repositoryStyle.Render(folderGlyph + " " + sanitizeText(r.RelativePath)),
