@@ -430,6 +430,24 @@ func TestNAndShiftNJumpBetweenChangesAndWrapAround(t *testing.T) {
 	}
 }
 
+func TestNSkipsAChangeAlreadyAtTheTopOfTheScreen(t *testing.T) {
+	hunk := contextHunk(1, 100, "line")
+	for _, number := range []int{4, 60} {
+		hunk.Rows[number-1] = diff.Row{Old: diff.Line{Kind: diff.LineRemoved, Number: number, Text: "old"},
+			New: diff.Line{Kind: diff.LineAdded, Number: number, Text: "new"}}
+	}
+	m := reviewingRepository(t, gitrepo.Status{Files: twoFiles()})
+	m = update(t, m, tea.WindowSizeMsg{Width: 120, Height: 16})
+	m = update(t, m, diffMsg{dir: "C:/dev/repo", path: "a.go", contextLines: hunkContext,
+		fileDiff: diff.FileDiff{Hunks: []diff.Hunk{hunk}}})
+
+	m = update(t, m, tea.KeyPressMsg{Code: 'n', Text: "n"})
+
+	if topLineNumber(m) != 57 {
+		t.Fatalf("got top line %d, want 57, three lines above the change at 60", topLineNumber(m))
+	}
+}
+
 func TestTheFooterFitsAndQuestionMarkListsEveryKey(t *testing.T) {
 	m := reviewingRepository(t, gitrepo.Status{Files: twoFiles()})
 	footer := ansi.Strip(m.renderFooter())

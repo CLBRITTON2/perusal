@@ -69,14 +69,15 @@ func firstReaching(lines []renderedLine, anchor sourceLine) int {
 	return index
 }
 
-// nextChangeOffset wraps from the last change to the first.
+// nextChangeOffset skips a change at most hunkContext rows below where it would put it, since that one is already at
+// the top of the screen, and wraps from the last change to the first.
 func nextChangeOffset(lines []renderedLine, offset int, maxOffset int) int {
 	offsets := changeOffsets(lines, maxOffset)
 	if len(offsets) == 0 {
 		return offset
 	}
 	for _, changeOffset := range offsets {
-		if changeOffset > offset {
+		if changeOffset > offset+hunkContext {
 			return changeOffset
 		}
 	}
