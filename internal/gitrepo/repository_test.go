@@ -16,6 +16,17 @@ import (
 	"github.com/CLBRITTON2/perusal/internal/diff"
 )
 
+func TestMain(m *testing.M) {
+	tempDir, err := filepath.EvalSymlinks(os.TempDir())
+	if err != nil {
+		panic(err)
+	}
+	if err := os.Setenv("TMP", tempDir); err != nil {
+		panic(err)
+	}
+	os.Exit(m.Run())
+}
+
 func TestRunGit(t *testing.T) {
 	t.Run("failureCarriesWhatGitPrintedOnStdout", failureCarriesWhatGitPrintedOnStdout)
 }

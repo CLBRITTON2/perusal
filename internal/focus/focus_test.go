@@ -16,6 +16,17 @@ import (
 	"golang.org/x/sys/windows"
 )
 
+func TestMain(m *testing.M) {
+	tempDir, err := filepath.EvalSymlinks(os.TempDir())
+	if err != nil {
+		panic(err)
+	}
+	if err := os.Setenv("TMP", tempDir); err != nil {
+		panic(err)
+	}
+	os.Exit(m.Run())
+}
+
 func TestMapPath(t *testing.T) {
 	cases := []struct {
 		name      string
