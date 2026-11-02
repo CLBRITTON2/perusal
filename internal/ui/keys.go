@@ -22,7 +22,7 @@ var (
 	amendKey          = key.NewBinding(key.WithKeys("A"), key.WithHelp("A", "amend"))
 	confirmAmendKey   = key.NewBinding(key.WithKeys("enter"), key.WithHelp("enter", "amend"))
 	rewordKey         = key.NewBinding(key.WithKeys("r"), key.WithHelp("r", "reword"))
-	switchViewKey     = key.NewBinding(key.WithKeys("tab"), key.WithHelp("tab", "changes/log"))
+	switchViewKey     = key.NewBinding(key.WithKeys("tab"), key.WithHelp("tab", "next pane"))
 	scrollDownKey     = key.NewBinding(key.WithKeys("ctrl+d", "pgdown"), key.WithHelp("^d/^u", "scroll"))
 	scrollUpKey       = key.NewBinding(key.WithKeys("ctrl+u", "pgup"))
 	fullscreenKey     = key.NewBinding(key.WithKeys("d"), key.WithHelp("d", "fullscreen"))
@@ -44,6 +44,11 @@ var (
 	closeBranchesKey  = key.NewBinding(key.WithKeys("esc", "b"), key.WithHelp("esc", "close"))
 	workTreesKey      = key.NewBinding(key.WithKeys("w"), key.WithHelp("w", "work trees"))
 	closeWorkTreesKey = key.NewBinding(key.WithKeys("esc", "w"), key.WithHelp("esc", "close"))
+	stashKey          = key.NewBinding(key.WithKeys("s"), key.WithHelp("s", "stash"))
+	stashesKey        = key.NewBinding(key.WithKeys("S"), key.WithHelp("S", "stashes"))
+	popStashKey       = key.NewBinding(key.WithKeys("enter"), key.WithHelp("enter", "pop"))
+	dropStashKey      = key.NewBinding(key.WithKeys("D"), key.WithHelp("D", "drop"))
+	confirmDropKey    = key.NewBinding(key.WithKeys("enter"), key.WithHelp("enter", "drop"))
 	quitKey           = key.NewBinding(key.WithKeys("q"), key.WithHelp("q", "quit"))
 	forceQuitKey      = key.NewBinding(key.WithKeys("ctrl+c"))
 	nextFieldKey      = key.NewBinding(key.WithKeys("tab", "shift+tab"), key.WithHelp("tab", "next field"))
@@ -60,14 +65,17 @@ var (
 )
 
 var (
-	changesKeys = []key.Binding{downKey, stageKey, stageAllKey, discardKey}
+	changesKeys = []key.Binding{downKey, stageKey, stageAllKey, discardKey, stashKey}
 	logKeys     = []key.Binding{downKey, expandKey, searchKey, amendKey, rewordKey}
+	stashKeys   = []key.Binding{downKey, popStashKey, dropStashKey}
 	diffKeys    = []key.Binding{scrollDownKey, nextChangeKey, fullscreenKey, wholeFileKey, unifiedKey}
-	reviewKeys  = []key.Binding{commitKey, pushKey, switchViewKey, branchesKey, workTreesKey, overviewKey, quitKey}
+	reviewKeys  = []key.Binding{commitKey, pushKey, switchViewKey, stashesKey, branchesKey, workTreesKey, overviewKey,
+		quitKey}
 	// Not every key fits one line, so the footer leaves the rest to the key list.
 	reviewHelp    = []key.Binding{commitKey, pushKey, switchViewKey, keyListKey, quitKey}
 	changesHelp   = slices.Concat(changesKeys, reviewHelp)
 	logHelp       = slices.Concat(logKeys, reviewHelp)
+	stashHelp     = slices.Concat(stashKeys, reviewHelp)
 	overviewHelp  = []key.Binding{downKey, openRepositoryKey, fetchKey, pullKey, pushKey, closeOverviewKey, quitKey}
 	branchesHelp  = []key.Binding{downKey, switchBranchKey, deleteBranchKey, fetchBranchesKey, closeBranchesKey, quitKey}
 	workTreesHelp = []key.Binding{downKey, openRepositoryKey, closeWorkTreesKey, quitKey}

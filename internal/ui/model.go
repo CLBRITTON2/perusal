@@ -44,7 +44,11 @@ type viewKind int
 const (
 	viewChanges viewKind = iota
 	viewLog
+	viewStashes
 )
+
+// The left column's panes, top to bottom, which tab steps through.
+var listViews = []viewKind{viewChanges, viewLog, viewStashes}
 
 type screenMode int
 
@@ -160,12 +164,19 @@ type Model struct {
 	selectedCommit     int
 	selectedCommitFile int
 	// logOffset counts rows of the log tree, commit and file rows alike.
-	logOffset   int
+	logOffset int
+	// commitDiffs holds stashes too, keyed by their own commit hash.
 	commitDiffs map[string]commitDiff
 	expanded    map[string]bool
 	logFilter   searchTerms
 	searchInput textinput.Model
 	searchError string
+
+	stashes           []gitrepo.Stash
+	stashesLoadedAt   time.Time
+	selectedStash     int
+	selectedStashFile int
+	stashesOffset     int
 
 	diffView           viewport.Model
 	help               help.Model
@@ -209,6 +220,8 @@ func New(findRepositories RepositoryFinder, openRepository RepositoryOpener) Mod
 		selectedCommitFile: commitRow,
 		commitDiffs:        map[string]commitDiff{},
 		expanded:           map[string]bool{},
+		stashes:            []gitrepo.Stash{},
+		selectedStashFile:  commitRow,
 		searchInput:        searchInput,
 		diffView:           viewport.New(),
 		help:               helpView,
@@ -280,7 +293,9 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.branchCount = msg.branchCount
 		m.remoteBranchCount = msg.remoteBranchCount
 		m.workTrees = msg.workTrees
-		return m.withStatus(msg.status)
+		m = m.withStashes(msg.stashes, msg.loadedAt)
+		next, reload := m.withStatus(msg.status)
+		return next, tea.Batch(reload, m.loadSelectedStashDiff())
 	case diffMsg:
 		if msg.dir != m.repository.Dir || len(m.status.Files) == 0 || msg.path != m.status.Files[m.selectedChange].Path ||
 			msg.contextLines != m.contextLines() {
@@ -363,6 +378,11 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m.withFooterError(msg.err.Error()), nil
 	case workTreeOpenedMsg:
 		return m.withFocusedRepository(msg.repository)
+	case stashPopMsg:
+		if msg.dir != m.repository.Dir {
+			return m.withFooterNotice("popped " + msg.ref + " in " + msg.dir), nil
+		}
+		return m.withFooterNotice("popped " + msg.ref), m.reloadStatus()
 	case syncedMsg:
 		return m.withOverviewSynced(msg)
 	case fetchedAllMsg:
@@ -473,6 +493,7 @@ func (m Model) withStatus(status gitrepo.Status) (tea.Model, tea.Cmd) {
 func (m Model) updateBrowsing(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	m.footer = footer{}
 	onFile := m.view == viewChanges && len(m.status.Files) > 0
+	onStash := m.view == viewStashes && len(m.stashes) > 0
 	switch {
 	case key.Matches(msg, quitKey):
 		return m, tea.Quit
@@ -496,14 +517,16 @@ func (m Model) updateBrowsing(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		m.diffView.SetYOffset(previousChangeOffset(m.diffLines(), m.diffView.YOffset(), m.maxDiffOffset()))
 		return m, nil
 	case key.Matches(msg, switchViewKey):
-		return m.switchView()
+		return m.openView(listViews[(slices.Index(listViews, m.view)+1)%len(listViews)])
+	case key.Matches(msg, stashesKey):
+		return m.openView(viewStashes)
 	case key.Matches(msg, fullscreenKey):
 		previous := m.diffLines()
 		m.fullscreenDiff = !m.fullscreenDiff
 		return m.withPaneSizes().withDiffKeptInPlace(previous).withListScrolled(), nil
 	case key.Matches(msg, wholeFileKey):
 		m.wholeFile = !m.wholeFile
-		return m, tea.Batch(m.loadSelectedDiff(), m.loadSelectedCommitDiff())
+		return m, tea.Batch(m.loadSelectedDiff(), m.loadSelectedCommitDiff(), m.loadSelectedStashDiff())
 	case key.Matches(msg, unifiedKey):
 		previous := m.diffLines()
 		m.unified = !m.unified
@@ -542,6 +565,12 @@ func (m Model) updateBrowsing(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		return m.withConfirmation(m.repository.Dir, discardConfirmation(pluralize(len(m.status.Files), "file"),
 			"deletes untracked files and puts the rest back to HEAD",
 			repositoryRequest{repository: m.repository}.discardAll)), nil
+	case key.Matches(msg, stashKey) && onFile:
+		return m, repositoryRequest{repository: m.repository}.stash
+	case key.Matches(msg, popStashKey) && onStash:
+		return m, stashRequest{repository: m.repository, stash: m.stashes[m.selectedStash]}.pop
+	case key.Matches(msg, dropStashKey) && onStash:
+		return m.openDropStashPopup(), nil
 	case key.Matches(msg, commitKey):
 		if m.repository.Dir == "" {
 			return m, nil
@@ -565,16 +594,12 @@ func (m Model) updateBrowsing(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	return m, nil
 }
 
-func (m Model) switchView() (tea.Model, tea.Cmd) {
+func (m Model) openView(view viewKind) (tea.Model, tea.Cmd) {
 	m = m.withSearchClosed()
-	if m.view == viewChanges {
-		m.view = viewLog
-	} else {
-		m.view = viewChanges
-	}
+	m.view = view
 	m.diffView.SetYOffset(0)
 	m = m.withLayout()
-	return m, m.loadSelectedCommitDiff()
+	return m, tea.Batch(m.loadSelectedCommitDiff(), m.loadSelectedStashDiff())
 }
 
 func (m Model) withRepository(repository gitrepo.Repository, rejection string) Model {
@@ -847,8 +872,11 @@ func (m Model) updateConfirmPopup(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 }
 
 func (m Model) moveSelection(delta int) (tea.Model, tea.Cmd) {
-	if m.view == viewLog {
+	switch m.view {
+	case viewLog:
 		return m.selectLogRow(m.selectedLogRow(m.visibleLogRows()) + delta)
+	case viewStashes:
+		return m.selectStashRow(m.selectedStashRow(m.visibleStashRows()) + delta)
 	}
 	return m.selectFile(m.selectedChange + delta)
 }
@@ -966,42 +994,40 @@ func (m Model) withLogFilter(filter searchTerms) (tea.Model, tea.Cmd) {
 	return m, tea.Batch(m.loadSelectedCommitDiff(), m.reloadLog())
 }
 
-// file indexes the sections of the commit's commitDiff, or is commitRow for the commit itself.
-type logRow struct {
+// A row of the log or stash pane: commit indexes the commits or the stashes, and file the sections of its commitDiff,
+// or is commitRow for the commit or stash itself.
+type treeRow struct {
 	commit int
 	file   int
 }
 
-func (m Model) visibleLogRows() []logRow {
-	rows := []logRow{}
+func (m Model) visibleLogRows() []treeRow {
+	rows := []treeRow{}
 	for index, commit := range m.commits {
 		if !m.logFilter.matches(commit) {
 			continue
 		}
-		rows = append(rows, logRow{commit: index, file: commitRow})
+		rows = append(rows, treeRow{commit: index, file: commitRow})
 		if !m.expanded[commit.Hash] {
 			continue
 		}
 		for file := range m.commitDiffs[commit.Hash].sections {
-			rows = append(rows, logRow{commit: index, file: file})
+			rows = append(rows, treeRow{commit: index, file: file})
 		}
 	}
 	return rows
 }
 
 // -1 when the filter hides the selection.
-func (m Model) selectedLogRow(rows []logRow) int {
-	for index, row := range rows {
-		if row.commit == m.selectedCommit && row.file == m.selectedCommitFile {
-			return index
-		}
-	}
-	return -1
+func (m Model) selectedLogRow(rows []treeRow) int {
+	return slices.Index(rows, treeRow{commit: m.selectedCommit, file: m.selectedCommitFile})
 }
 
 func (m Model) clickList(mouse tea.Mouse) (tea.Model, tea.Cmd) {
-	if mouse.X < m.listOuterWidth() && mouse.Y == m.foldedPaneY() {
-		return m.switchView()
+	for _, view := range listViews {
+		if mouse.X < m.listOuterWidth() && view != m.view && mouse.Y == m.foldedPaneY(view) {
+			return m.openView(view)
+		}
 	}
 	index, hitRow := m.listIndexAt(mouse)
 	switch {
@@ -1009,6 +1035,8 @@ func (m Model) clickList(mouse tea.Mouse) (tea.Model, tea.Cmd) {
 		return m, nil
 	case m.view == viewLog:
 		return m.selectLogRow(index)
+	case m.view == viewStashes:
+		return m.selectStashRow(index)
 	}
 	return m.selectFile(index)
 }
@@ -1022,21 +1050,18 @@ func (m Model) rightClickList(mouse tea.Mouse) (tea.Model, tea.Cmd) {
 	return selected.openAmendPopup(), cmd
 }
 
-// listIndexAt returns the index of the changed file or log row under the mouse in the open pane.
+// listIndexAt returns the index of the changed file, log row or stash row under the mouse in the open pane.
 func (m Model) listIndexAt(mouse tea.Mouse) (int, bool) {
-	var firstRowY int
-	// A folded changes pane sits above the log and pushes it down a line.
-	if m.view == viewLog {
-		firstRowY = headerHeight + 2
-	} else {
-		firstRowY = headerHeight + 1
-	}
-	row := mouse.Y - firstRowY
+	// Each folded pane above the open one, plus its top border, pushes its rows down a line.
+	row := mouse.Y - headerHeight - 1 - slices.Index(listViews, m.view)
 	if mouse.X >= m.listOuterWidth() || row < 0 || row >= m.listInnerHeight() {
 		return 0, false
 	}
-	if m.view == viewLog {
+	switch m.view {
+	case viewLog:
 		return m.logOffset + row, m.logOffset+row < len(m.visibleLogRows())
+	case viewStashes:
+		return m.stashesOffset + row, m.stashesOffset+row < len(m.visibleStashRows())
 	}
 	return m.changesOffset + row, m.changesOffset+row < len(m.status.Files)
 }
@@ -1086,9 +1111,30 @@ func (m Model) selectedCommitHash() string {
 	return m.commits[m.selectedCommit].Hash
 }
 
-func (m Model) selectedCommitDiff() ([]diff.FileSection, bool) {
-	loadedDiff, found := m.commitDiffs[m.selectedCommitHash()]
-	return loadedDiff.sections, found
+// treeSelection is the commit or stash selected in the log or stash pane, its diff once loaded, and its file row.
+type treeSelection struct {
+	commit   gitrepo.Commit
+	sections []diff.FileSection
+	loaded   bool
+	file     int
+}
+
+// false outside the log and stash panes, and while the open one is empty.
+func (m Model) selectedTree() (treeSelection, bool) {
+	var commit gitrepo.Commit
+	var file int
+	switch {
+	case m.view == viewLog && len(m.commits) > 0:
+		commit = m.commits[m.selectedCommit]
+		file = m.selectedCommitFile
+	case m.view == viewStashes && len(m.stashes) > 0:
+		commit = m.stashes[m.selectedStash].Commit
+		file = m.selectedStashFile
+	default:
+		return treeSelection{}, false
+	}
+	loadedDiff, loaded := m.commitDiffs[commit.Hash]
+	return treeSelection{commit: commit, sections: loadedDiff.sections, loaded: loaded, file: file}, true
 }
 
 func (m Model) withLayout() Model {
@@ -1129,12 +1175,12 @@ func (m Model) maxDiffOffset() int {
 
 func (m Model) diffLines() []renderedLine {
 	width := m.diffInnerWidth()
-	sections, loaded := m.selectedCommitDiff()
+	tree, inTree := m.selectedTree()
 	switch {
-	case m.view == viewLog && loaded && m.selectedCommitFile != commitRow:
-		return renderFileDiff(sections[m.selectedCommitFile].FileDiff, m.changeLayout(), width)
-	case m.view == viewLog && loaded:
-		return renderCommit(m.commits[m.selectedCommit], sections, m.changeLayout(), width)
+	case inTree && tree.loaded && tree.file != commitRow:
+		return renderFileDiff(tree.sections[tree.file].FileDiff, m.changeLayout(), width)
+	case inTree && tree.loaded:
+		return renderCommit(tree.commit, tree.sections, m.changeLayout(), width)
 	case m.view == viewChanges && m.diffPath != "":
 		return renderFileDiff(m.fileDiff, m.changeLayout(), width)
 	default:
@@ -1155,6 +1201,8 @@ func (m Model) withListScrolled() Model {
 	m.overview = m.overview.scrolled(m.overviewTableInnerHeight())
 	m.branches.selectableList = m.branches.scrolled(m.paneInnerHeight())
 	m.workTreeList = m.workTreeList.scrolled(m.paneInnerHeight())
+	m.stashesOffset = scrolledOffset(m.stashesOffset, max(m.selectedStashRow(m.visibleStashRows()), 0),
+		m.listInnerHeight())
 	return m
 }
 
@@ -1195,16 +1243,18 @@ func (m Model) paneInnerHeight() int {
 	return max(m.columnHeight()-2, 0)
 }
 
-// Leaves out the open pane's two borders and the folded pane's line.
+// Leaves out the open pane's two borders and each folded pane's line.
 func (m Model) listInnerHeight() int {
-	return max(m.columnHeight()-3, 0)
+	return max(m.columnHeight()-2-(len(listViews)-1), 0)
 }
 
-func (m Model) foldedPaneY() int {
-	if m.view == viewLog {
-		return headerHeight
+// The panes before the open one fold at the top of the column and the rest at the bottom.
+func (m Model) foldedPaneY(view viewKind) int {
+	position := slices.Index(listViews, view)
+	if position < slices.Index(listViews, m.view) {
+		return headerHeight + position
 	}
-	return headerHeight + m.columnHeight() - 1
+	return headerHeight + m.columnHeight() - (len(listViews) - position)
 }
 
 func (m Model) popupInnerWidth() int {
@@ -1309,10 +1359,18 @@ func renderAheadBehind(tracking gitrepo.Tracking) string {
 
 func (m Model) renderLists() string {
 	innerWidth := m.listOuterWidth() - 2
-	if m.view == viewLog {
+	stashesLabel := positionLabel(m.selectedStash+1, len(m.stashes))
+	switch m.view {
+	case viewLog:
 		return lipgloss.JoinVertical(lipgloss.Left,
 			renderFoldedPane("changes", m.changesLabel(), innerWidth),
-			renderPane(m.logTitle(), "", m.logLabel(), m.renderLogRows(innerWidth), innerWidth, m.listInnerHeight()))
+			renderPane(m.logTitle(), "", m.logLabel(), m.renderLogRows(innerWidth), innerWidth, m.listInnerHeight()),
+			renderFoldedPane("stashes", stashesLabel, innerWidth))
+	case viewStashes:
+		return lipgloss.JoinVertical(lipgloss.Left,
+			renderFoldedPane("changes", m.changesLabel(), innerWidth),
+			renderFoldedPane(m.logTitle(), m.logLabel(), innerWidth),
+			renderPane("stashes", "", stashesLabel, m.renderStashRows(innerWidth), innerWidth, m.listInnerHeight()))
 	}
 	var lineCounts string
 	if m.stagedFileCount() > 0 {
@@ -1320,7 +1378,8 @@ func (m Model) renderLists() string {
 	}
 	return lipgloss.JoinVertical(lipgloss.Left,
 		renderPane("changes", lineCounts, m.changesLabel(), m.fileRows(innerWidth), innerWidth, m.listInnerHeight()),
-		renderFoldedPane(m.logTitle(), m.logLabel(), innerWidth))
+		renderFoldedPane(m.logTitle(), m.logLabel(), innerWidth),
+		renderFoldedPane("stashes", stashesLabel, innerWidth))
 }
 
 func (m Model) fileRows(innerWidth int) []string {
@@ -1355,7 +1414,7 @@ func (m Model) renderLogRows(innerWidth int) []string {
 	})
 }
 
-func (m Model) renderLogRow(row logRow, graph graphRow, path []bool, width int) string {
+func (m Model) renderLogRow(row treeRow, graph graphRow, path []bool, width int) string {
 	commit := m.commits[row.commit]
 	if row.file == commitRow {
 		var expandMarker string
@@ -1419,26 +1478,28 @@ func renderFileRow(file gitrepo.FileStatus) string {
 		" " + path
 }
 
-func renderCommitRow(commit gitrepo.Commit, search searchTerms, loadedAt time.Time, width int) string {
+func shortAge(elapsed time.Duration) string {
 	const day = 24 * time.Hour
-	elapsed := loadedAt.Sub(commit.AuthoredAt)
-	var age string
 	switch {
 	case elapsed < time.Minute:
-		age = "now"
+		return "now"
 	case elapsed < time.Hour:
-		age = strconv.Itoa(int(elapsed/time.Minute)) + "m"
+		return strconv.Itoa(int(elapsed/time.Minute)) + "m"
 	case elapsed < day:
-		age = strconv.Itoa(int(elapsed/time.Hour)) + "h"
+		return strconv.Itoa(int(elapsed/time.Hour)) + "h"
 	case elapsed < 14*day:
-		age = strconv.Itoa(int(elapsed/day)) + "d"
+		return strconv.Itoa(int(elapsed/day)) + "d"
 	case elapsed < 60*day:
-		age = strconv.Itoa(int(elapsed/(7*day))) + "w"
+		return strconv.Itoa(int(elapsed/(7*day))) + "w"
 	case elapsed < 365*day:
-		age = strconv.Itoa(int(elapsed/(30*day))) + "mo"
+		return strconv.Itoa(int(elapsed/(30*day))) + "mo"
 	default:
-		age = strconv.Itoa(int(elapsed/(365*day))) + "y"
+		return strconv.Itoa(int(elapsed/(365*day))) + "y"
 	}
+}
+
+func renderCommitRow(commit gitrepo.Commit, search searchTerms, loadedAt time.Time, width int) string {
+	age := shortAge(loadedAt.Sub(commit.AuthoredAt))
 	summaryWidth := max(width-len(age)-1, 0)
 	summary := search.highlight(commit.ShortHash, hashStyle) + " "
 	if len(commit.Refs) > 0 {
@@ -1452,19 +1513,19 @@ func renderCommitRow(commit gitrepo.Commit, search searchTerms, loadedAt time.Ti
 func (m Model) renderDiffPane() string {
 	width := m.diffInnerWidth()
 	height := m.paneInnerHeight()
+	tree, inTree := m.selectedTree()
 	switch {
 	case m.rejection != "":
 		reason := errorStyle.Render(lipgloss.Wrap(m.rejection, width, ""))
 		return renderPane("refused", "", "", strings.Split(reason, "\n"), width, height)
-	case m.view == viewLog && len(m.commits) > 0:
-		sections, loaded := m.selectedCommitDiff()
+	case inTree:
 		var lineCounts string
 		switch {
-		case loaded && m.selectedCommitFile != commitRow:
-			lineCounts = renderLineCounts(diff.CountLines(sections[m.selectedCommitFile].FileDiff))
-		case loaded:
+		case tree.loaded && tree.file != commitRow:
+			lineCounts = renderLineCounts(diff.CountLines(tree.sections[tree.file].FileDiff))
+		case tree.loaded:
 			total := diff.LineCounts{}
-			for _, section := range sections {
+			for _, section := range tree.sections {
 				counts := diff.CountLines(section.FileDiff)
 				total.Added += counts.Added
 				total.Removed += counts.Removed
@@ -1486,12 +1547,11 @@ func (m Model) renderDiffPane() string {
 }
 
 func (m Model) commitPaneTitle() string {
-	commit := m.commits[m.selectedCommit]
-	sections, loaded := m.selectedCommitDiff()
-	if loaded && m.selectedCommitFile != commitRow {
-		return sanitizeText(commit.ShortHash + " " + sections[m.selectedCommitFile].Path)
+	tree, _ := m.selectedTree()
+	if tree.loaded && tree.file != commitRow {
+		return sanitizeText(tree.commit.ShortHash + " " + tree.sections[tree.file].Path)
 	}
-	return sanitizeText(commit.ShortHash + " " + commit.Summary)
+	return sanitizeText(tree.commit.ShortHash + " " + tree.commit.Summary)
 }
 
 func (m Model) scrollLabel() string {
@@ -1519,6 +1579,8 @@ func (m Model) renderFooter() string {
 		return spaceBetween(" "+m.searchInput.View(), m.help.ShortHelpView(searchHelp)+" ", m.width)
 	case m.view == viewLog:
 		return m.renderHelpLine(logHelp)
+	case m.view == viewStashes:
+		return m.renderHelpLine(stashHelp)
 	default:
 		return m.renderHelpLine(changesHelp)
 	}
@@ -1558,9 +1620,12 @@ func (m Model) renderConfirmPopup() string {
 
 func (m Model) renderKeyListPopup() string {
 	var listKeys []key.Binding
-	if m.view == viewLog {
+	switch m.view {
+	case viewLog:
 		listKeys = logKeys
-	} else {
+	case viewStashes:
+		listKeys = stashKeys
+	default:
 		listKeys = changesKeys
 	}
 	columns := m.help.FullHelpView([][]key.Binding{listKeys, diffKeys, reviewKeys})

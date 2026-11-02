@@ -726,7 +726,7 @@ func clickingTheFoldedLogOpensIt(t *testing.T) {
 		{Hash: strings.Repeat("1", 40)}, {Hash: strings.Repeat("2", 40)},
 	}})
 
-	m = update(t, m, tea.MouseClickMsg{X: 3, Y: 28, Button: tea.MouseLeft})
+	m = update(t, m, tea.MouseClickMsg{X: 3, Y: 27, Button: tea.MouseLeft})
 	m = update(t, m, tea.MouseClickMsg{X: 3, Y: 4, Button: tea.MouseLeft})
 
 	if m.view != viewLog || m.selectedCommit != 1 {
@@ -738,7 +738,7 @@ func clickingTheFoldedChangesDuringASearchClosesIt(t *testing.T) {
 	m := logOf(t, []gitrepo.Commit{{Hash: strings.Repeat("1", 40)}})
 	m = update(t, m, tea.KeyPressMsg{Code: '/', Text: "/"})
 
-	m = update(t, m, tea.MouseClickMsg{X: 3, Y: m.foldedPaneY(), Button: tea.MouseLeft})
+	m = update(t, m, tea.MouseClickMsg{X: 3, Y: m.foldedPaneY(viewChanges), Button: tea.MouseLeft})
 
 	if m.view != viewChanges || m.mode != modeBrowsing {
 		t.Fatalf("got view %d, mode %d, want the changes view browsing", m.view, m.mode)
@@ -759,7 +759,8 @@ func expandingACommitListsItsFilesUnderIt(t *testing.T) {
 	m = update(t, m, tea.KeyPressMsg{Code: 'j', Text: "j"})
 	m = update(t, m, tea.KeyPressMsg{Code: 'j', Text: "j"})
 
-	want := []logRow{{commit: 0, file: commitRow}, {commit: 0, file: 0}, {commit: 0, file: 1}, {commit: 1, file: commitRow}}
+	want := []treeRow{{commit: 0, file: commitRow}, {commit: 0, file: 0}, {commit: 0, file: 1},
+		{commit: 1, file: commitRow}}
 	if !reflect.DeepEqual(m.visibleLogRows(), want) || m.selectedCommitFile != 1 || m.commitPaneTitle() != " b.go" {
 		t.Fatalf("got rows %v, selected file %d, title %q", m.visibleLogRows(), m.selectedCommitFile, m.commitPaneTitle())
 	}
@@ -773,7 +774,7 @@ func searchKeepsOnlyMatchingMessagesIgnoringCase(t *testing.T) {
 
 	m = typeSearch(t, m, "wr.p")
 
-	if !reflect.DeepEqual(m.visibleLogRows(), []logRow{{commit: 1, file: commitRow}}) || m.selectedCommit != 1 {
+	if !reflect.DeepEqual(m.visibleLogRows(), []treeRow{{commit: 1, file: commitRow}}) || m.selectedCommit != 1 {
 		t.Fatalf("got rows %v, selected commit %d", m.visibleLogRows(), m.selectedCommit)
 	}
 }
@@ -786,7 +787,7 @@ func anUppercaseLetterMakesTheSearchCaseSensitive(t *testing.T) {
 
 	m = typeSearch(t, m, "Fix")
 
-	if !reflect.DeepEqual(m.visibleLogRows(), []logRow{{commit: 1, file: commitRow}}) {
+	if !reflect.DeepEqual(m.visibleLogRows(), []treeRow{{commit: 1, file: commitRow}}) {
 		t.Fatalf("got rows %v", m.visibleLogRows())
 	}
 }
@@ -800,7 +801,7 @@ func searchNeedsEveryWordInAnyOrder(t *testing.T) {
 
 	m = typeSearch(t, m, "log fix")
 
-	if !reflect.DeepEqual(m.visibleLogRows(), []logRow{{commit: 1, file: commitRow}}) {
+	if !reflect.DeepEqual(m.visibleLogRows(), []treeRow{{commit: 1, file: commitRow}}) {
 		t.Fatalf("got rows %v", m.visibleLogRows())
 	}
 }
@@ -814,7 +815,7 @@ func searchLooksAtTheHashAuthorAndRefs(t *testing.T) {
 	for want, pattern := range []string{"ada", "v1", "3333"} {
 		m := typeSearch(t, logOf(t, commits), pattern)
 
-		if !reflect.DeepEqual(m.visibleLogRows(), []logRow{{commit: want, file: commitRow}}) {
+		if !reflect.DeepEqual(m.visibleLogRows(), []treeRow{{commit: want, file: commitRow}}) {
 			t.Fatalf("searching %q got rows %v, want commit %d", pattern, m.visibleLogRows(), want)
 		}
 	}

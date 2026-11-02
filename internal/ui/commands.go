@@ -43,6 +43,8 @@ type statusMsg struct {
 	branchCount       int
 	remoteBranchCount int
 	workTrees         []gitrepo.WorkTree
+	stashes           []gitrepo.Stash
+	loadedAt          time.Time
 }
 
 type diffMsg struct {
@@ -121,9 +123,13 @@ func (r repositoryRequest) loadStatus() tea.Msg {
 	if err != nil {
 		return gitFailureMsg{err: err}
 	}
+	stashes, err := r.repository.Stashes(context.Background())
+	if err != nil {
+		return gitFailureMsg{err: err}
+	}
 	return statusMsg{dir: r.repository.Dir, status: status, stagedLineCounts: stagedLineCounts,
 		branchCount: len(branches), remoteBranchCount: len(remoteOnlyBranches(branches, remoteBranches)),
-		workTrees: workTrees}
+		workTrees: workTrees, stashes: stashes, loadedAt: time.Now()}
 }
 
 func (r repositoryRequest) stageAll() tea.Msg {
@@ -273,22 +279,27 @@ type commitDiffRequest struct {
 
 func (r commitDiffRequest) load() tea.Msg {
 	text, err := r.repository.CommitDiff(context.Background(), r.hash, r.contextLines)
+	return commitDiffResult(r.repository.Dir, r.hash, r.contextLines, text, err)
+}
+
+// commitDiffResult parses and highlights the diff text of the commit or stash at hash.
+func commitDiffResult(dir string, hash string, contextLines int, text string, err error) tea.Msg {
 	if err != nil {
 		return gitFailureMsg{err: err}
 	}
 	sections, err := diff.ParseFiles(text)
 	if err != nil {
-		return gitFailureMsg{err: fmt.Errorf("parse diff of commit %s: %w", r.hash, err)}
+		return gitFailureMsg{err: fmt.Errorf("parse diff of commit %s: %w", hash, err)}
 	}
 	highlighted := []diff.FileSection{}
 	for _, section := range sections {
 		fileDiff, err := highlight.FileDiff(section.Path, section.FileDiff)
 		if err != nil {
-			return gitFailureMsg{err: fmt.Errorf("commit %s: %w", r.hash, err)}
+			return gitFailureMsg{err: fmt.Errorf("commit %s: %w", hash, err)}
 		}
 		highlighted = append(highlighted, diff.FileSection{Path: section.Path, FileDiff: fileDiff})
 	}
-	return commitDiffMsg{dir: r.repository.Dir, hash: r.hash, contextLines: r.contextLines, sections: highlighted}
+	return commitDiffMsg{dir: dir, hash: hash, contextLines: contextLines, sections: highlighted}
 }
 
 type commitRequest struct {
