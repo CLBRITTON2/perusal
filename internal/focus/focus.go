@@ -12,6 +12,7 @@ import (
 	"path/filepath"
 	"slices"
 	"strings"
+	"sync"
 
 	"github.com/fsnotify/fsnotify"
 	"golang.org/x/sys/windows"
@@ -150,7 +151,12 @@ func resolvePath(ctx context.Context, rules Rules, agentPath string) (gitrepo.Re
 // FindRepositories lists every work tree under the owner directory, checked as resolve checks a focused one. It does
 // not look inside a work tree, so a nested one is not listed.
 func FindRepositories(ctx context.Context, rules Rules) (Found, error) {
+	type uncheckedWorkTree struct {
+		relativePath string
+		dir          string
+	}
 	found := Found{Repositories: []FoundRepository{}, Refusals: []FoundRefusal{}}
+	workTrees := []uncheckedWorkTree{}
 	err := filepath.WalkDir(rules.OwnerDir, func(path string, entry fs.DirEntry, listErr error) error {
 		switch {
 		case entry == nil: // WalkDir passes a nil entry only when the root's Lstat fails
@@ -163,7 +169,12 @@ func FindRepositories(ctx context.Context, rules Rules) (Found, error) {
 			return fmt.Errorf("name %s below %s: %w", path, rules.OwnerDir, err)
 		}
 		name := filepath.ToSlash(relativePath)
-		repository, isWorkTree, err := openIfWorkTree(ctx, rules, path, listErr)
+		if listErr != nil {
+			found.Refusals = append(found.Refusals,
+				FoundRefusal{RelativePath: name, Err: fmt.Errorf("list %s: %w", path, listErr)})
+			return filepath.SkipDir
+		}
+		isWorkTree, err := hasDotGit(path)
 		switch {
 		case err != nil:
 			found.Refusals = append(found.Refusals, FoundRefusal{RelativePath: name, Err: err})
@@ -171,11 +182,28 @@ func FindRepositories(ctx context.Context, rules Rules) (Found, error) {
 		case !isWorkTree:
 			return nil
 		}
-		found.Repositories = append(found.Repositories, FoundRepository{RelativePath: name, Repository: repository})
+		workTrees = append(workTrees, uncheckedWorkTree{relativePath: name, dir: path})
 		return filepath.SkipDir
 	})
 	if err != nil {
 		return Found{}, err
+	}
+	opened := make([]gitrepo.Repository, len(workTrees))
+	errs := make([]error, len(workTrees))
+	var group sync.WaitGroup
+	for index, workTree := range workTrees {
+		group.Go(func() {
+			opened[index], errs[index] = openWorkTree(ctx, rules, workTree.dir)
+		})
+	}
+	group.Wait()
+	for index, workTree := range workTrees {
+		if errs[index] != nil {
+			found.Refusals = append(found.Refusals, FoundRefusal{RelativePath: workTree.relativePath, Err: errs[index]})
+		} else {
+			found.Repositories = append(found.Repositories, FoundRepository{RelativePath: workTree.relativePath,
+				Repository: opened[index]})
+		}
 	}
 	return found, nil
 }
@@ -184,24 +212,6 @@ func FindRepositories(ctx context.Context, rules Rules) (Found, error) {
 // directory, since git read it from a .git that passed them.
 func OpenWorkTree(ctx context.Context, rules Rules, dir string) (gitrepo.Repository, error) {
 	return openWorkTree(ctx, rules, filepath.FromSlash(dir))
-}
-
-// listErr is the error WalkDir hit listing dir.
-func openIfWorkTree(ctx context.Context, rules Rules, dir string, listErr error) (
-	gitrepo.Repository, bool, error,
-) {
-	if listErr != nil {
-		return gitrepo.Repository{}, false, fmt.Errorf("list %s: %w", dir, listErr)
-	}
-	isWorkTree, err := hasDotGit(dir)
-	if err != nil || !isWorkTree {
-		return gitrepo.Repository{}, false, err
-	}
-	repository, err := openWorkTree(ctx, rules, dir)
-	if err != nil {
-		return gitrepo.Repository{}, false, err
-	}
-	return repository, true, nil
 }
 
 // The owner's git runs the config and hooks of a .git, so one the agent could write is refused.

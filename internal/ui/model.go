@@ -369,6 +369,8 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m.withOverviewFetchedAll(msg)
 	case overviewRowMsg:
 		return m.withOverviewRow(msg.row), nil
+	case overviewRowFailureMsg:
+		return m.withOverviewRowFailed(msg), nil
 	case syncFailureMsg:
 		m.syncing = withoutDirs(m.syncing, []string{msg.dir})
 		return m.withFooterError(msg.err.Error()), nil
@@ -383,7 +385,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if m.mode != modeOverview {
 			return m, nil
 		}
-		return m.withOverviewLoaded(msg), nil
+		return m.withOverviewLoaded(msg)
 	case overviewFailureMsg:
 		return m.withModeClosed(modeOverview).withFooterError(msg.err.Error()), nil
 	case gitFailureMsg:

@@ -35,7 +35,7 @@ func TestTheOverviewListsTheFocusedRepositoriesFirstAndMarksThem(t *testing.T) {
 		repositoryRow{FoundRepository: foundAt("elsewhere", "C:/dev/elsewhere")},
 		repositoryRow{FoundRepository: foundAt("first", "C:/dev/first")},
 		repositoryRow{FoundRepository: foundAt("second", "C:/dev/second")},
-	}, failures: []string{}})
+	}})
 
 	lines := listLines(m.overview, m.overviewCells, "no repositories found", 118, m.paneInnerHeight())
 	got := []string{}
@@ -48,6 +48,56 @@ func TestTheOverviewListsTheFocusedRepositoriesFirstAndMarksThem(t *testing.T) {
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("got %q, want %q", got, want)
 	}
+}
+
+func TestPendingOverviewRow(t *testing.T) {
+	t.Run("showsLoadingUntilItsRowArrives", showsLoadingUntilItsRowArrives)
+	t.Run("leavesTheTableWithTheErrorWhenGitFails", leavesTheTableWithTheErrorWhenGitFails)
+}
+
+func showsLoadingUntilItsRowArrives(t *testing.T) {
+	m := focusOnSeveral(t, map[string]bool{"C:/dev/cwd": false, "C:/dev/first": true, "C:/dev/second": false})
+	m = update(t, m, tea.KeyPressMsg{Code: 'o', Text: "o"})
+	next, loads := m.Update(overviewMsg{rows: []overviewRow{
+		pendingRow{FoundRepository: foundAt("first", "C:/dev/first")},
+		pendingRow{FoundRepository: foundAt("second", "C:/dev/second")},
+	}})
+	m = asModel(t, next)
+	pending := overviewLines(m)
+
+	m = update(t, m, overviewRowMsg{row: repositoryRow{FoundRepository: foundAt("first", "C:/dev/first")}})
+
+	wantPending := []string{"▌● " + folderGlyph + " first loading...", "● " + folderGlyph + " second loading..."}
+	wantLoaded := []string{"▌● " + folderGlyph + " first " + branchGlyph + " detached HEAD clean",
+		"● " + folderGlyph + " second loading..."}
+	if loads == nil || !reflect.DeepEqual(pending, wantPending) || !reflect.DeepEqual(overviewLines(m), wantLoaded) {
+		t.Fatalf("got loads %v, %q then %q, want loads, %q then %q", loads, pending, overviewLines(m), wantPending,
+			wantLoaded)
+	}
+}
+
+func leavesTheTableWithTheErrorWhenGitFails(t *testing.T) {
+	m := focusOnSeveral(t, map[string]bool{"C:/dev/cwd": false, "C:/dev/first": false, "C:/dev/second": true})
+	m = update(t, m, tea.KeyPressMsg{Code: 'o', Text: "o"})
+	m = update(t, m, overviewMsg{rows: []overviewRow{
+		pendingRow{FoundRepository: foundAt("first", "C:/dev/first")},
+		pendingRow{FoundRepository: foundAt("second", "C:/dev/second")},
+	}})
+
+	m = update(t, m, overviewRowFailureMsg{dir: "C:/dev/first", err: errors.New("run git status in C:/dev/first")})
+
+	want := []string{"▌● " + folderGlyph + " second loading..."}
+	if !reflect.DeepEqual(overviewLines(m), want) || m.footer.text != "skipped run git status in C:/dev/first" {
+		t.Fatalf("got %q, footer %q, want %q and the error", overviewLines(m), m.footer.text, want)
+	}
+}
+
+func overviewLines(m Model) []string {
+	lines := []string{}
+	for _, line := range listLines(m.overview, m.overviewCells, "no repositories found", 118, m.paneInnerHeight()) {
+		lines = append(lines, strings.Join(strings.Fields(ansi.Strip(line)), " "))
+	}
+	return lines
 }
 
 func opensTheFirstFocusedRepositoryWithUncommittedChanges(t *testing.T) {
@@ -98,7 +148,7 @@ func TestEnterInTheOverviewReviewsTheSelectedRepositoryAndKeepsTheFocus(t *testi
 	m = update(t, m, overviewMsg{rows: []overviewRow{
 		repositoryRow{FoundRepository: foundAt("first", "C:/dev/first")},
 		repositoryRow{FoundRepository: foundAt("org/elsewhere", "C:/dev/org/elsewhere")},
-	}, failures: []string{}})
+	}})
 	screen := ansi.Strip(m.renderScreen())
 
 	m = update(t, m, tea.KeyPressMsg{Code: 'j', Text: "j"})
@@ -185,7 +235,7 @@ func aRowWhoseUpstreamWasDeletedIsExplained(t *testing.T) {
 		status: gitrepo.Status{
 			Branch: "fix", Tracking: gitrepo.Tracking{Upstream: "origin/fix", UpstreamGone: true}, HasCommits: true,
 		},
-	}}, failures: []string{}})
+	}}})
 	next, cmd := m.Update(tea.KeyPressMsg{Code: 'p', Text: "p"})
 	m = asModel(t, next)
 
@@ -200,7 +250,7 @@ func aFinishedRowIsSwitchedThoughItTracksNoUpstream(t *testing.T) {
 		status:          gitrepo.Status{Branch: "fix", HasCommits: true, Files: []gitrepo.FileStatus{}},
 		defaultBranch:   originMain(),
 		finished:        true,
-	}}, failures: []string{}})
+	}}})
 	next, cmd := m.Update(tea.KeyPressMsg{Code: 'p', Text: "p"})
 	m = asModel(t, next)
 
@@ -256,7 +306,7 @@ func aRepositoryNotUnderReviewClosesItsPopupOnItsResult(t *testing.T) {
 		status: gitrepo.Status{
 			Branch: "main", Tracking: gitrepo.Tracking{Upstream: "origin/main", Ahead: 1}, HasCommits: true,
 		},
-	}}, failures: []string{}})
+	}}})
 	m = update(t, m, tea.KeyPressMsg{Code: 'P', Text: "P"})
 	popup := ansi.Strip(m.renderConfirmPopup())
 
@@ -277,7 +327,7 @@ func aBranchWithNoUpstreamIsPublished(t *testing.T) {
 		FoundRepository:   foundAt("second", "C:/dev/second"),
 		status:            gitrepo.Status{Branch: "feature", HasCommits: true},
 		commitsOnNoRemote: 2,
-	}}, failures: []string{}})
+	}}})
 	screen := ansi.Strip(m.renderScreen())
 
 	m = update(t, m, tea.KeyPressMsg{Code: 'P', Text: "P"})
@@ -300,7 +350,7 @@ func TestTheOverviewDetailsTheSelectedRepository(t *testing.T) {
 			incoming: []gitrepo.Commit{{ShortHash: "bbb2222", Summary: "Add the remote change"}},
 		},
 		repositoryRow{FoundRepository: foundAt("second", "C:/dev/second")},
-	}, failures: []string{}})
+	}})
 	first := ansi.Strip(m.renderScreen())
 
 	m = update(t, m, tea.KeyPressMsg{Code: 'j', Text: "j"})
@@ -357,7 +407,7 @@ func overviewWithTwoRepositories(t *testing.T) Model {
 			},
 		},
 		repositoryRow{FoundRepository: foundAt("org/elsewhere", "C:/dev/org/elsewhere")},
-	}, failures: []string{}})
+	}})
 }
 
 func foundAt(relativePath string, dir string) focus.FoundRepository {

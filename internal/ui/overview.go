@@ -47,10 +47,13 @@ type refusedRow struct {
 	focus.FoundRefusal
 }
 
-// failures are the repositories git failed on, which get no row.
+// pendingRow is a repository whose git calls are still running.
+type pendingRow struct {
+	focus.FoundRepository
+}
+
 type overviewMsg struct {
-	rows     []overviewRow
-	failures []string
+	rows []overviewRow
 }
 
 type overviewFailureMsg struct {
@@ -72,6 +75,11 @@ type fetchedAllMsg struct {
 
 type overviewRowMsg struct {
 	row repositoryRow
+}
+
+type overviewRowFailureMsg struct {
+	dir string
+	err error
 }
 
 type syncFailureMsg struct {
@@ -112,7 +120,24 @@ type fetchAllRequest struct {
 }
 
 func (r fetchAllRequest) fetchAll() tea.Msg {
-	rows, failures := loadRows(r.found, fetchRow)
+	results := make([]repositoryRow, len(r.found))
+	errs := make([]error, len(r.found))
+	var group sync.WaitGroup
+	for index, repository := range r.found {
+		group.Go(func() {
+			results[index], errs[index] = fetchRow(repository)
+		})
+	}
+	group.Wait()
+	rows := []repositoryRow{}
+	failures := []string{}
+	for index, row := range results {
+		if errs[index] != nil {
+			failures = append(failures, errs[index].Error())
+		} else {
+			rows = append(rows, row)
+		}
+	}
 	return fetchedAllMsg{dirs: dirsOf(r.found), rows: rows, failures: failures}
 }
 
@@ -138,7 +163,7 @@ type overviewRowRequest struct {
 func (r overviewRowRequest) load() tea.Msg {
 	row, err := loadOverviewRow(r.found)
 	if err != nil {
-		return gitFailureMsg{err: err}
+		return overviewRowFailureMsg{dir: r.found.Repository.Dir, err: err}
 	}
 	return overviewRowMsg{row: row}
 }
@@ -164,10 +189,9 @@ func (r overviewRequest) load() tea.Msg {
 	if err != nil {
 		return overviewFailureMsg{err: err}
 	}
-	loaded, failures := loadRows(found.Repositories, loadOverviewRow)
 	rows := []overviewRow{}
-	for _, row := range loaded {
-		rows = append(rows, row)
+	for _, repository := range found.Repositories {
+		rows = append(rows, pendingRow{FoundRepository: repository})
 	}
 	for _, refused := range found.Refusals {
 		rows = append(rows, refusedRow{FoundRefusal: refused})
@@ -175,31 +199,7 @@ func (r overviewRequest) load() tea.Msg {
 	slices.SortFunc(rows, func(a overviewRow, b overviewRow) int {
 		return strings.Compare(a.relativePath(), b.relativePath())
 	})
-	return overviewMsg{rows: rows, failures: failures}
-}
-
-// loadRows runs load in every repository at once and returns the rows it loaded and the errors of the rest.
-func loadRows(found []focus.FoundRepository, load func(focus.FoundRepository) (repositoryRow, error)) ([]repositoryRow,
-	[]string) {
-	results := make([]repositoryRow, len(found))
-	errs := make([]error, len(found))
-	var group sync.WaitGroup
-	for index, repository := range found {
-		group.Go(func() {
-			results[index], errs[index] = load(repository)
-		})
-	}
-	group.Wait()
-	rows := []repositoryRow{}
-	failures := []string{}
-	for index, row := range results {
-		if errs[index] != nil {
-			failures = append(failures, errs[index].Error())
-		} else {
-			rows = append(rows, row)
-		}
-	}
-	return rows, failures
+	return overviewMsg{rows: rows}
 }
 
 func loadOverviewRow(found focus.FoundRepository) (repositoryRow, error) {
@@ -272,37 +272,75 @@ func (r refusedRow) relativePath() string {
 	return r.RelativePath
 }
 
+func (r pendingRow) relativePath() string {
+	return r.RelativePath
+}
+
 func (m Model) openOverview() (tea.Model, tea.Cmd) {
 	m.mode = modeOverview
 	m.overview = selectableList[overviewRow]{rows: []overviewRow{}}
 	return m, overviewRequest{findRepositories: m.findRepositories}.load
 }
 
-// Lists the focused repositories first and selects the one under review, so enter right away keeps it.
-func (m Model) withOverviewLoaded(msg overviewMsg) Model {
+// Lists the focused repositories first and selects the one under review, so enter right away keeps it. Each pending
+// row loads on its own, so the table shows before the slowest repository is done.
+func (m Model) withOverviewLoaded(msg overviewMsg) (tea.Model, tea.Cmd) {
 	rows := slices.Clone(msg.rows)
 	slices.SortStableFunc(rows, func(a overviewRow, b overviewRow) int {
 		return cmp.Compare(m.focusRank(a), m.focusRank(b))
 	})
 	loadedOverview := selectableList[overviewRow]{loaded: true, rows: rows, selected: 0, offset: 0}
 	m.overview = loadedOverview.withSelected(slices.IndexFunc(rows, isRowAt(m.repository.Dir)))
-	m = m.withListScrolled()
-	if len(msg.failures) == 0 {
-		return m
+	loads := []tea.Cmd{}
+	for _, row := range rows {
+		pending, isPending := row.(pendingRow)
+		if isPending {
+			loads = append(loads, overviewRowRequest{found: pending.FoundRepository}.load)
+		}
 	}
-	return m.withFooterError("skipped " + strings.Join(msg.failures, ", "))
+	return m.withListScrolled(), tea.Batch(loads...)
+}
+
+// A row git fails on while pending leaves the table, and a reloaded one keeps its last load.
+func (m Model) withOverviewRowFailed(msg overviewRowFailureMsg) Model {
+	index := slices.IndexFunc(m.overview.rows, isRowAt(msg.dir))
+	if index < 0 {
+		return m.withFooterError(msg.err.Error())
+	}
+	if _, isPending := m.overview.rows[index].(pendingRow); !isPending {
+		return m.withFooterError(msg.err.Error())
+	}
+	var selected int
+	if index < m.overview.selected {
+		selected = m.overview.selected - 1
+	} else {
+		selected = m.overview.selected
+	}
+	m.overview.rows = slices.Delete(slices.Clone(m.overview.rows), index, index+1)
+	m.overview = m.overview.withSelected(selected).scrolled(m.overviewTableInnerHeight())
+	return m.withFooterError("skipped " + msg.err.Error())
+}
+
+func rowRepository(row overviewRow) (gitrepo.Repository, bool) {
+	switch typedRow := row.(type) {
+	case repositoryRow:
+		return typedRow.Repository, true
+	case pendingRow:
+		return typedRow.Repository, true
+	}
+	return gitrepo.Repository{}, false
 }
 
 func isRowAt(dir string) func(overviewRow) bool {
 	return func(row overviewRow) bool {
-		foundRow, isRepository := row.(repositoryRow)
-		return isRepository && foundRow.Repository.Dir == dir
+		repository, isRepository := rowRepository(row)
+		return isRepository && repository.Dir == dir
 	}
 }
 
 func (m Model) isFocused(row overviewRow) bool {
-	foundRow, isRepository := row.(repositoryRow)
-	return isRepository && slices.Contains(m.focused, foundRow.Repository)
+	repository, isRepository := rowRepository(row)
+	return isRepository && slices.Contains(m.focused, repository)
 }
 
 func (m Model) focusRank(row overviewRow) int {
@@ -413,7 +451,11 @@ func (m Model) reloadOverviewRow(dir string) tea.Cmd {
 	if m.mode != modeOverview || index < 0 {
 		return nil
 	}
-	return overviewRowRequest{found: m.overview.rows[index].(repositoryRow).FoundRepository}.load
+	row, isRepository := m.overview.rows[index].(repositoryRow)
+	if !isRepository {
+		return nil
+	}
+	return overviewRowRequest{found: row.FoundRepository}.load
 }
 
 // A clean branch other than the default one, with no upstream left to pull, is finished once it is merged.
@@ -560,6 +602,13 @@ func (r refusedRow) cells() []string {
 	return []string{
 		mutedStyle.Render(folderGlyph + " " + sanitizeText(r.RelativePath)),
 		mutedStyle.Render(sanitizeText(r.Summary())),
+	}
+}
+
+func (r pendingRow) cells() []string {
+	return []string{
+		repositoryStyle.Render(folderGlyph + " " + sanitizeText(r.RelativePath)),
+		mutedStyle.Render("loading..."),
 	}
 }
 
