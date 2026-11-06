@@ -1,8 +1,10 @@
 package gitrepo
 
 import (
+	"bytes"
 	"context"
 	"errors"
+	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -19,17 +21,25 @@ func TestMirrorAgentWorkTree(t *testing.T) {
 	t.Run("refusesASnapshotNamingAPathInDotGit", refusesASnapshotNamingAPathInDotGit)
 }
 
+func TestSyncAgentCopy(t *testing.T) {
+	t.Run("cleansWhatTheOwnerCommitted", cleansWhatTheOwnerCommitted)
+	t.Run("keepsTheAgentsEditsOnTheOwnersNewCommit", keepsTheAgentsEditsOnTheOwnersNewCommit)
+	t.Run("followsTheOwnersBranchSwitch", followsTheOwnersBranchSwitch)
+	t.Run("leavesTheAgentOnACommitTheOwnerLacks", leavesTheAgentOnACommitTheOwnerLacks)
+}
+
 func showsTheAgentsEditsAsUnstagedChanges(t *testing.T) {
 	owner, agent := ownerAndAgentCopies(t)
 	writeFile(t, filepath.Join(agent, "a.txt"), "agent\n")
 	writeFile(t, filepath.Join(agent, "new.txt"), "new\n")
 	writeFile(t, filepath.Join(agent, "build.log"), "ignored\n")
 	removeFile(t, filepath.Join(agent, "b.txt"))
-	runSteps(t, agent, [][]string{{"-C", agent, "add", "a.txt"}})
+	runSteps(t, agent, [][]string{{"add", "a.txt"}})
 
-	mirrorErr := snapshotAndMirror(t, owner, agent)
+	mirrorErr := syncAndMirror(t, owner, agent)
 
-	assertWorkTreeChanges(t, owner, mirrorErr, []FileStatus{
+	requireMirrored(t, mirrorErr)
+	assertChangedFiles(t, owner, []FileStatus{
 		{Path: "a.txt", IndexStatus: ' ', WorktreeStatus: 'M'},
 		{Path: "b.txt", IndexStatus: ' ', WorktreeStatus: 'D'},
 		{Path: "new.txt", IndexStatus: '?', WorktreeStatus: '?'},
@@ -46,27 +56,28 @@ func followsTheAgentsNextSnapshot(t *testing.T) {
 	writeFile(t, filepath.Join(agent, "a.txt"), "agent\n")
 	writeFile(t, filepath.Join(agent, "new.txt"), "new\n")
 	removeFile(t, filepath.Join(agent, "b.txt"))
-	if err := snapshotAndMirror(t, owner, agent); err != nil {
+	if err := syncAndMirror(t, owner, agent); err != nil {
 		t.Fatal(err)
 	}
 	removeFile(t, filepath.Join(agent, "new.txt"))
-	runSteps(t, agent, [][]string{{"-C", agent, "restore", "b.txt"}})
+	runSteps(t, agent, [][]string{{"restore", "b.txt"}})
 
-	mirrorErr := snapshotAndMirror(t, owner, agent)
+	mirrorErr := syncAndMirror(t, owner, agent)
 
-	assertWorkTreeChanges(t, owner, mirrorErr, []FileStatus{{Path: "a.txt", IndexStatus: ' ', WorktreeStatus: 'M'}})
+	requireMirrored(t, mirrorErr)
+	assertChangedFiles(t, owner, []FileStatus{{Path: "a.txt", IndexStatus: ' ', WorktreeStatus: 'M'}})
 }
 
 func keepsAFileTheOwnerEditedAndRefusesTheSnapshot(t *testing.T) {
 	owner, agent := ownerAndAgentCopies(t)
 	writeFile(t, filepath.Join(agent, "a.txt"), "agent\n")
-	if err := snapshotAndMirror(t, owner, agent); err != nil {
+	if err := syncAndMirror(t, owner, agent); err != nil {
 		t.Fatal(err)
 	}
 	writeFile(t, filepath.Join(owner, "a.txt"), "owner\n")
 	writeFile(t, filepath.Join(agent, "a.txt"), "agent again\n")
 
-	mirrorErr := snapshotAndMirror(t, owner, agent)
+	mirrorErr := syncAndMirror(t, owner, agent)
 
 	if mirrorErr == nil || !strings.Contains(mirrorErr.Error(), "a.txt") {
 		t.Fatalf("got error %v, want git's refusal to overwrite a.txt", mirrorErr)
@@ -77,15 +88,18 @@ func keepsAFileTheOwnerEditedAndRefusesTheSnapshot(t *testing.T) {
 func refusesASnapshotTakenOnAnotherCommit(t *testing.T) {
 	owner, agent := ownerAndAgentCopies(t)
 	writeFile(t, filepath.Join(agent, "a.txt"), "agent\n")
-	runSteps(t, agent, [][]string{{"-C", agent, "commit", "--all", "--message", "Agent commit"}})
+	runSteps(t, agent, [][]string{{"commit", "--all", "--message", "Agent commit"}})
 	writeFile(t, filepath.Join(agent, "b.txt"), "agent\n")
+	if output, err := localAgentCopy(agent).Run(context.Background(), agentSnapshotScript(agent)); err != nil {
+		t.Fatalf("snapshot %s: %v: %s", agent, err, output)
+	}
 
-	mirrorErr := snapshotAndMirror(t, owner, agent)
+	mirrorErr := Repository{Dir: owner}.MirrorAgentWorkTree(context.Background(), agent)
 
 	if !errors.Is(mirrorErr, ErrAgentSnapshotRefused) {
 		t.Fatalf("got error %v, want %v", mirrorErr, ErrAgentSnapshotRefused)
 	}
-	assertWorkTreeChanges(t, owner, nil, []FileStatus{})
+	assertChangedFiles(t, owner, []FileStatus{})
 }
 
 func refusesASnapshotNamingAPathInDotGit(t *testing.T) {
@@ -94,14 +108,87 @@ func refusesASnapshotNamingAPathInDotGit(t *testing.T) {
 	dotGit := gitOutputFromInput(t, agent, "100644 blob "+blob+"\tconfig\n", "mktree")
 	tree := gitOutputFromInput(t, agent, "040000 tree "+dotGit+"\t.git\n", "mktree")
 	commit := strings.TrimSpace(gitOutput(t, agent, "commit-tree", tree, "-p", "HEAD", "-m", "Plant .git/config"))
-	runSteps(t, agent, [][]string{{"-C", agent, "update-ref", "refs/perusal/snapshot", commit}})
+	runSteps(t, agent, [][]string{{"update-ref", "refs/perusal/snapshot", commit}})
 
 	mirrorErr := Repository{Dir: owner}.MirrorAgentWorkTree(context.Background(), agent)
 
 	if mirrorErr == nil || !strings.Contains(mirrorErr.Error(), "hasDotgit") {
 		t.Fatalf("got error %v, want fsck's hasDotgit refusal", mirrorErr)
 	}
-	assertWorkTreeChanges(t, owner, nil, []FileStatus{})
+	assertChangedFiles(t, owner, []FileStatus{})
+}
+
+// The owner's new commit is missing from the agent's copy, so this also covers the push.
+func cleansWhatTheOwnerCommitted(t *testing.T) {
+	owner, agent := ownerAndAgentCopies(t)
+	writeFile(t, filepath.Join(agent, "a.txt"), "agent\n")
+	writeFile(t, filepath.Join(agent, "new.txt"), "new\n")
+	if err := syncAndMirror(t, owner, agent); err != nil {
+		t.Fatal(err)
+	}
+	runSteps(t, owner, [][]string{{"add", "a.txt"}, {"commit", "--message", "Take the agent's a.txt"}})
+
+	mirrorErr := syncAndMirror(t, owner, agent)
+
+	untracked := []FileStatus{{Path: "new.txt", IndexStatus: '?', WorktreeStatus: '?'}}
+	requireMirrored(t, mirrorErr)
+	assertChangedFiles(t, owner, untracked)
+	assertChangedFiles(t, agent, untracked)
+	assertSameHead(t, owner, agent)
+}
+
+func keepsTheAgentsEditsOnTheOwnersNewCommit(t *testing.T) {
+	owner, agent := ownerAndAgentCopies(t)
+	writeFile(t, filepath.Join(agent, "a.txt"), "agent\n")
+	if err := syncAndMirror(t, owner, agent); err != nil {
+		t.Fatal(err)
+	}
+	writeFile(t, filepath.Join(owner, "b.txt"), "owner\n")
+	runSteps(t, owner, [][]string{{"add", "b.txt"}, {"commit", "--message", "Owner commit"}})
+
+	mirrorErr := syncAndMirror(t, owner, agent)
+
+	edited := []FileStatus{{Path: "a.txt", IndexStatus: ' ', WorktreeStatus: 'M'}}
+	requireMirrored(t, mirrorErr)
+	assertChangedFiles(t, owner, edited)
+	assertChangedFiles(t, agent, edited)
+	assertFileHolds(t, filepath.Join(agent, "a.txt"), "agent\n")
+	assertFileHolds(t, filepath.Join(agent, "b.txt"), "owner\n")
+	assertSameHead(t, owner, agent)
+}
+
+func followsTheOwnersBranchSwitch(t *testing.T) {
+	owner, agent := ownerAndAgentCopies(t)
+	writeFile(t, filepath.Join(owner, "side.txt"), "side\n")
+	runSteps(t, owner, [][]string{
+		{"switch", "--create", "side"},
+		{"add", "side.txt"},
+		{"commit", "--message", "Side commit"},
+	})
+
+	mirrorErr := syncAndMirror(t, owner, agent)
+
+	requireMirrored(t, mirrorErr)
+	assertChangedFiles(t, agent, []FileStatus{})
+	assertFileHolds(t, filepath.Join(agent, "side.txt"), "side\n")
+	assertSameHead(t, owner, agent)
+}
+
+func leavesTheAgentOnACommitTheOwnerLacks(t *testing.T) {
+	owner, agent := ownerAndAgentCopies(t)
+	writeFile(t, filepath.Join(agent, "a.txt"), "agent\n")
+	runSteps(t, agent, [][]string{{"commit", "--all", "--message", "Agent commit"}})
+	agentCommit := revParse(t, agent, "HEAD")
+
+	mirrorErr := syncAndMirror(t, owner, agent)
+
+	if !errors.Is(mirrorErr, ErrAgentHeadUnknown) {
+		t.Fatalf("got error %v, want %v", mirrorErr, ErrAgentHeadUnknown)
+	}
+	if head := revParse(t, agent, "HEAD"); head != agentCommit {
+		t.Fatalf("got the agent's HEAD at %s, want it left at %s", head, agentCommit)
+	}
+	assertChangedFiles(t, owner, []FileStatus{})
 }
 
 // The agent's copy is a clone, as the VM's repositories are clones of the owner's from GitHub.
@@ -115,22 +202,41 @@ func ownerAndAgentCopies(t *testing.T) (string, string) {
 	writeFile(t, filepath.Join(owner, ".gitignore"), "*.log\n")
 	runSteps(t, owner, [][]string{
 		{"init", "--initial-branch=main", owner},
-		{"-C", owner, "add", "a.txt", "b.txt", ".gitignore"},
-		{"-C", owner, "commit", "--message", "Start"},
+		{"add", "a.txt", "b.txt", ".gitignore"},
+		{"commit", "--message", "Start"},
 		{"clone", owner, agent},
 	})
 	return owner, agent
 }
 
 // powershell.exe stands in for the VM's ssh login shell, and a local path for the scp-style ssh URL.
-func snapshotAndMirror(t *testing.T, owner string, agent string) error {
+func localAgentCopy(agent string) AgentCopy {
+	return AgentCopy{Dir: agent, Remote: agent, Run: func(ctx context.Context, script string) ([]byte, error) {
+		command := exec.CommandContext(ctx, "powershell.exe", "-NoProfile", "-NonInteractive", "-Command", script)
+		var stderr bytes.Buffer
+		command.Stderr = &stderr
+		output, err := command.Output()
+		if err != nil {
+			return output, fmt.Errorf("%w: %s", err, strings.TrimSpace(stderr.String()))
+		}
+		return output, nil
+	}}
+}
+
+func syncAndMirror(t *testing.T, owner string, agent string) error {
 	t.Helper()
-	output, err := exec.Command("powershell.exe", "-NoProfile", "-NonInteractive", "-Command",
-		agentSnapshotScript(agent)).CombinedOutput()
-	if err != nil {
-		t.Fatalf("snapshot %s: %v: %s", agent, err, output)
+	if err := (Repository{Dir: owner}).SyncAgentCopy(context.Background(), localAgentCopy(agent)); err != nil {
+		return err
 	}
 	return Repository{Dir: owner}.MirrorAgentWorkTree(context.Background(), agent)
+}
+
+func assertSameHead(t *testing.T, owner string, agent string) {
+	t.Helper()
+	ownerHead := gitOutput(t, owner, "rev-parse", "HEAD", "--symbolic-full-name", "HEAD")
+	if agentHead := gitOutput(t, agent, "rev-parse", "HEAD", "--symbolic-full-name", "HEAD"); agentHead != ownerHead {
+		t.Fatalf("got the agent's HEAD at %q, want the owner's %q", agentHead, ownerHead)
+	}
 }
 
 func gitOutputFromInput(t *testing.T, dir string, input string, args ...string) string {
@@ -149,11 +255,21 @@ func removeFile(t *testing.T, path string) {
 	}
 }
 
-func assertWorkTreeChanges(t *testing.T, dir string, mirrorErr error, want []FileStatus) {
+func requireMirrored(t *testing.T, mirrorErr error) {
 	t.Helper()
-	status, statusErr := Repository{Dir: dir}.Status(context.Background())
-	if mirrorErr != nil || statusErr != nil || !reflect.DeepEqual(status.Files, want) {
-		t.Fatalf("got %+v (mirror %v, status %v), want %+v", status.Files, mirrorErr, statusErr, want)
+	if mirrorErr != nil {
+		t.Fatal(mirrorErr)
+	}
+}
+
+func assertChangedFiles(t *testing.T, dir string, want []FileStatus) {
+	t.Helper()
+	workTree, err := Repository{Dir: dir}.Status(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(workTree.Files, want) {
+		t.Fatalf("got changed files %+v in %s, want %+v", workTree.Files, dir, want)
 	}
 }
 

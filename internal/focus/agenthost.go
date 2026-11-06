@@ -13,8 +13,8 @@ import (
 )
 
 // FollowAgentHost reads the focus file on rules.AgentHost over ssh every interval, since no change notice crosses ssh,
-// and sends a Result when what it reads changes. After each read it mirrors the agent's copy of every focused
-// repository into the owner's, and sends a failure on the second channel when it differs from that repository's last
+// and sends a Result when what it reads changes. After each read it moves the agent's copy of every focused repository
+// onto the owner's HEAD and mirrors it into the owner's, and sends a failure on the second channel when it differs from that repository's last
 // one. Both channels close when ctx ends.
 func FollowAgentHost(ctx context.Context, rules Rules, interval time.Duration) (<-chan Result, <-chan error) {
 	results := make(chan Result)
@@ -64,12 +64,16 @@ func pollAgentHost(ctx context.Context, rules Rules, interval time.Duration, res
 		var group sync.WaitGroup
 		for index, repository := range focused.Repositories {
 			group.Go(func() {
-				if err := repository.SnapshotAgentWorkTree(ctx, rules.AgentHost); err != nil {
+				// The agent's copy sits at the owner's path on the agent host.
+				agent := gitrepo.AgentCopy{Dir: repository.Dir, Remote: rules.AgentHost + ":" + repository.Dir,
+					Run: func(ctx context.Context, script string) ([]byte, error) {
+						return agenthost.Run(ctx, rules.AgentHost, script)
+					}}
+				if err := repository.SyncAgentCopy(ctx, agent); err != nil {
 					mirrorErrs[index] = err
 					return
 				}
-				// The agent's copy sits at the owner's path on the agent host.
-				mirrorErrs[index] = repository.MirrorAgentWorkTree(ctx, rules.AgentHost+":"+repository.Dir)
+				mirrorErrs[index] = repository.MirrorAgentWorkTree(ctx, agent.Remote)
 			})
 		}
 		group.Wait()
