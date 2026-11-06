@@ -20,7 +20,7 @@ var (
 // A SHA-1 or SHA-256 object name, as git prints it in full.
 var objectName = regexp.MustCompile(`^[0-9a-f]{40}([0-9a-f]{24})?$`)
 
-// AgentCopy is the agent's clone of a repository. Run runs a Windows PowerShell script where the clone lives, as
+// AgentCopy is the agent's clone of a repository. Run runs a PowerShell script where the clone lives, as
 // agenthost.Run does over ssh, and Remote is the clone's git URL as seen from the owner's copy.
 type AgentCopy struct {
 	Dir    string

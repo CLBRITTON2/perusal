@@ -9,8 +9,8 @@ import (
 	"strings"
 )
 
-// Run runs script in host's ssh login shell, which must be Windows PowerShell. sshd hands the command to PowerShell's
-// -c, so script must be one line without a double quote. The error leaves script out, so callers name the step.
+// Run runs script in host's ssh login shell, which must be PowerShell (5.1 or 7). sshd hands the command to its -c, so
+// script must be one line without a double quote. The error leaves script out, so callers name the step.
 func Run(ctx context.Context, host string, script string) ([]byte, error) {
 	// BatchMode makes ssh fail instead of asking for a passphrase or a host key over the TUI.
 	command := exec.CommandContext(ctx, "ssh", "-o", "BatchMode=yes", host, script)

@@ -124,7 +124,7 @@ working in, and switches as the agent moves between them. It reads
 - `agentDir` and `ownerDir` are one directory as the agent and you reach it. perusal maps a path under `agentDir`
   to the same path under `ownerDir`, and refuses anything outside it.
 - `agentHost`, when set, is the ssh host the agent works on, such as a VM, with `focusFile` at the same path there
-  and its own clone of each repository at the `ownerDir` path. Its ssh login shell must be Windows PowerShell, and ssh
+  and its own clone of each repository at the `ownerDir` path. Its ssh login shell must be PowerShell (5.1 or 7), and ssh
   must log in without a prompt. Every 2 seconds perusal reads `focusFile` over ssh, commits the agent's work tree of
   each focused repository there to `refs/perusal/snapshot` (through a temporary index, leaving the agent's own index
   alone), fetches it, and checks it out into your copy with `git read-tree -m -u`, leaving your index untouched. So
