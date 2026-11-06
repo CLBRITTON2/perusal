@@ -25,7 +25,8 @@ func runFollow(args []string) error {
 	if err != nil {
 		return fmt.Errorf("find the config directory: %w", err)
 	}
-	// The config names the account whose .git access is checked, so it must sit where the agent cannot write.
+	// The config names the account whose .git access is checked and the host perusal runs scripts on, so it must sit
+	// where the agent cannot write.
 	configPath := filepath.Join(configDir, "perusal", "config.json")
 	flags := flag.NewFlagSet("perusal follow", flag.ContinueOnError)
 	flags.Usage = func() {

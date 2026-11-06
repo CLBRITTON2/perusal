@@ -36,8 +36,9 @@ func LoadConfig(path string) (Config, error) {
 	if err := decoder.Decode(&config); err != nil {
 		return Config{}, fmt.Errorf("%w: parse %s: %w", ErrInvalidConfig, path, err)
 	}
-	if config.AgentAccount == "" {
-		return Config{}, fmt.Errorf("%w: %s sets no agentAccount", ErrInvalidConfig, path)
+	if config.AgentAccount == "" && config.AgentHost == "" {
+		return Config{}, fmt.Errorf("%w: %s sets neither agentAccount nor agentHost, want the account the agent runs as "+
+			"here or the ssh host it works on", ErrInvalidConfig, path)
 	}
 	// ssh would read a leading dash as an option, and git a colon as the end of the host in host:path.
 	if strings.HasPrefix(config.AgentHost, "-") || strings.Contains(config.AgentHost, ":") {

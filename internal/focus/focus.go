@@ -29,7 +29,11 @@ type Rules struct {
 	held     *heldGitDirs
 }
 
+// NewRules looks up no account when AgentHost is set, since that agent cannot reach this machine's .git directories.
 func NewRules(config Config) (Rules, error) {
+	if config.AgentHost != "" {
+		return Rules{Config: config, AgentSID: nil, held: &heldGitDirs{handles: map[string]windows.Handle{}}}, nil
+	}
 	sid, _, accountType, err := windows.LookupSID("", config.AgentAccount)
 	if err != nil {
 		return Rules{}, fmt.Errorf("look up account %s: %w", config.AgentAccount, err)
@@ -236,7 +240,7 @@ func checkedGitDir(rules Rules, workTree string) (string, error) {
 		return "", fmt.Errorf("inspect %s: %w", dotGit, err)
 	}
 	if !info.Mode().IsRegular() {
-		return rules.held.hold(dotGit, func(string) error { return verifyGitDir(dotGit, rules.AgentSID) })
+		return rules.held.hold(dotGit, func(string) error { return verifyAgentCannotWriteGitDir(rules, dotGit) })
 	}
 	// A linked work tree's .git file names its admin folder <repository .git>/worktrees/<id>. The agent can rewrite
 	// that file, so the folder must sit in a checked .git and name this work tree back in its own gitdir file.
@@ -253,7 +257,7 @@ func checkedGitDir(rules Rules, workTree string) (string, error) {
 		if !strings.EqualFold(filepath.Base(worktrees), "worktrees") {
 			return fmt.Errorf("%w: %s names %s, which is not in a worktrees folder", ErrNotLinkedWorkTree, dotGit, adminDir)
 		}
-		if err := verifyGitDir(filepath.Dir(worktrees), rules.AgentSID); err != nil {
+		if err := verifyAgentCannotWriteGitDir(rules, filepath.Dir(worktrees)); err != nil {
 			return err
 		}
 		backPointer, err := readAtMost(filepath.Join(adminDir, "gitdir"), maximumPointerFileBytes, ErrNotLinkedWorkTree)
@@ -270,6 +274,14 @@ func checkedGitDir(rules Rules, workTree string) (string, error) {
 		}
 		return nil
 	})
+}
+
+// The agent on AgentHost writes only its own clone there, and the mirror's fetch refuses a tree naming .git.
+func verifyAgentCannotWriteGitDir(rules Rules, gitDir string) error {
+	if rules.AgentHost != "" {
+		return nil
+	}
+	return verifyGitDir(gitDir, rules.AgentSID)
 }
 
 // git writes relative paths in worktree files when worktree.useRelativePaths is set.

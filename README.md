@@ -101,7 +101,8 @@ review with `*`. In follow mode, one that fails a check below is listed muted, a
 
 `perusal follow` is for an agent that runs as its own Windows account. It reviews the repositories the agent is
 working in, and switches as the agent moves between them. It reads
-`%APPDATA%\perusal\config.json`, where every key but `agentHost` is required:
+`%APPDATA%\perusal\config.json`, where `focusFile`, `agentDir` and `ownerDir` are required, and one of
+`agentAccount` and `agentHost`:
 
 ```json
 {
@@ -112,7 +113,8 @@ working in, and switches as the agent moves between them. It reads
 }
 ```
 
-- `agentAccount` is the Windows account the agent runs as.
+- `agentAccount` is the Windows account the agent runs as on this machine. perusal ignores it when `agentHost` is
+  set.
 - `focusFile` holds one absolute path per line, the directories the agent is working in, and is rewritten whenever
   they change. Something on the agent side has to write it, such as a [herdr](https://github.com/herdrdev/herdr)
   plugin, and its first line is where the agent's focused session works, such as its pane's directory. perusal opens
@@ -177,6 +179,9 @@ icacls C:\Users\you\dev\repo\.git\* /reset /T
 
 The deny lists the write bits one by one because `(W)` includes `SYNCHRONIZE`, which every open requests, so it would
 block reads too and git would no longer see the repository.
+
+With `agentHost` set, perusal skips the account checks and needs no deny, since the agent writes only its own clone on
+that host. Your `.git` gets only what perusal fetches, and the fetch refuses a tree that names `.git`.
 
 ## License
 

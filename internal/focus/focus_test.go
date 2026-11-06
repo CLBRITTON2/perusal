@@ -198,6 +198,26 @@ func TestFindRepositoriesRefusesAnUnprotectedOneAndSkipsANestedOne(t *testing.T)
 	}
 }
 
+func TestFindRepositoriesListsAnUnprotectedOneForAnAgentHost(t *testing.T) {
+	devDir := t.TempDir()
+	repository, _ := repositoryWithWorkTree(t, devDir)
+	rules, err := NewRules(Config{FocusFile: "", AgentDir: agentDevDir, OwnerDir: devDir, AgentHost: "agent-vm"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		if err := rules.held.release(); err != nil {
+			t.Error(err)
+		}
+	})
+
+	got, err := FindRepositories(context.Background(), rules)
+
+	if err != nil || len(got.Repositories) != 2 || len(got.Refusals) != 0 {
+		t.Fatalf("got %v, %v, want %s and its linked work tree", got, err, repository)
+	}
+}
+
 func TestFindRepositoriesListsALinkedWorkTree(t *testing.T) {
 	devDir := t.TempDir()
 	repository, _ := repositoryWithWorkTree(t, devDir)

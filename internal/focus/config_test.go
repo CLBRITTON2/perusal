@@ -22,6 +22,8 @@ func TestLoadConfig(t *testing.T) {
 		{"refusesARelativePath", `{"agentAccount": "claude", "focusFile": "C:\\f", "agentDir": "dev",
 			"ownerDir": "C:\\o"}`, ErrInvalidConfig},
 		{"refusesAMissingAccount", `{"focusFile": "C:\\f", "agentDir": "C:\\a", "ownerDir": "C:\\o"}`, ErrInvalidConfig},
+		{"loadsAnAgentHostConfigWithoutAccount", `{"focusFile": "C:\\f", "agentDir": "C:\\a", "ownerDir": "C:\\o",
+			"agentHost": "agent-vm"}`, nil},
 		{"refusesAnAgentHostSshWouldReadAsAnOption", `{"agentAccount": "claude", "focusFile": "C:\\f",
 			"agentDir": "C:\\a", "ownerDir": "C:\\o", "agentHost": "-oProxyCommand=calc"}`, ErrInvalidConfig},
 	}
