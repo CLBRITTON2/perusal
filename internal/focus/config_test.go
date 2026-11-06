@@ -22,6 +22,8 @@ func TestLoadConfig(t *testing.T) {
 		{"refusesARelativePath", `{"agentAccount": "claude", "focusFile": "C:\\f", "agentDir": "dev",
 			"ownerDir": "C:\\o"}`, ErrInvalidConfig},
 		{"refusesAMissingAccount", `{"focusFile": "C:\\f", "agentDir": "C:\\a", "ownerDir": "C:\\o"}`, ErrInvalidConfig},
+		{"refusesAnAgentHostSshWouldReadAsAnOption", `{"agentAccount": "claude", "focusFile": "C:\\f",
+			"agentDir": "C:\\a", "ownerDir": "C:\\o", "agentHost": "-oProxyCommand=calc"}`, ErrInvalidConfig},
 	}
 	for _, testCase := range testCases {
 		t.Run(testCase.name, func(t *testing.T) {

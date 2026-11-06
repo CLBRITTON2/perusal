@@ -115,6 +115,11 @@ func resolve(ctx context.Context, rules Rules) (Focus, error) {
 	if err != nil {
 		return Focus{}, err
 	}
+	return resolveContent(ctx, rules, content)
+}
+
+// resolveContent fails only when content is malformed or none of its paths passes the checks.
+func resolveContent(ctx context.Context, rules Rules, content string) (Focus, error) {
 	agentPaths, err := parseFocusFile(content)
 	if err != nil {
 		return Focus{}, fmt.Errorf("parse focus file %s: %w", rules.FocusFile, err)

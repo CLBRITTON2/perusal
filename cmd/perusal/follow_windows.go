@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"time"
 
 	tea "charm.land/bubbletea/v2"
 
@@ -13,6 +14,9 @@ import (
 	"github.com/CLBRITTON2/perusal/internal/gitrepo"
 	"github.com/CLBRITTON2/perusal/internal/ui"
 )
+
+// Each poll costs an ssh login per read and two per focused repository, about 2 s each on the VM.
+const agentHostPollInterval = 2 * time.Second
 
 const followUsage = "  perusal follow                  review the repositories the agent's focus file names\n"
 
@@ -48,9 +52,16 @@ func runFollow(args []string) error {
 func follow(rules focus.Rules) error {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
-	results, err := focus.Follow(ctx, rules)
-	if err != nil {
-		return err
+	var results <-chan focus.Result
+	var mirrorFailures <-chan error
+	if rules.AgentHost == "" {
+		watched, err := focus.Follow(ctx, rules)
+		if err != nil {
+			return err
+		}
+		results = watched
+	} else {
+		results, mirrorFailures = focus.FollowAgentHost(ctx, rules, agentHostPollInterval)
 	}
 	statePath, err := viewStatePath()
 	if err != nil {
@@ -65,20 +76,33 @@ func follow(rules focus.Rules) error {
 		return err
 	}
 	program := tea.NewProgram(model)
-	go forwardResults(program, results, rules.FocusFile)
+	go forwardResults(program, results, mirrorFailures, rules.FocusFile)
 	if err := runKeepingViewState(program, statePath); err != nil {
 		return fmt.Errorf("run perusal following %s: %w", rules.FocusFile, err)
 	}
 	return nil
 }
 
-func forwardResults(program *tea.Program, results <-chan focus.Result, focusFile string) {
-	for result := range results {
-		if result.Err != nil {
-			program.Send(ui.FocusRejection{Reason: result.Err.Error()})
-		} else {
-			program.Send(result.Focus)
+// forwardResults returns when results closes. mirrorFailures is nil when the agent works locally, which blocks its case.
+func forwardResults(program *tea.Program, results <-chan focus.Result, mirrorFailures <-chan error, focusFile string) {
+	for {
+		select {
+		case result, open := <-results:
+			if !open {
+				program.Send(ui.FocusRejection{Reason: "stopped watching focus file " + focusFile})
+				return
+			}
+			if result.Err != nil {
+				program.Send(ui.FocusRejection{Reason: result.Err.Error()})
+			} else {
+				program.Send(result.Focus)
+			}
+		case failure, open := <-mirrorFailures:
+			if !open {
+				mirrorFailures = nil
+				continue
+			}
+			program.Send(ui.MirrorFailure{Reason: failure.Error()})
 		}
 	}
-	program.Send(ui.FocusRejection{Reason: "stopped watching focus file " + focusFile})
 }

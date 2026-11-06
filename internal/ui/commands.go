@@ -28,6 +28,11 @@ type FocusRejection struct {
 	Reason string
 }
 
+// MirrorFailure goes to the footer and keeps the review, since the owner's copy still holds the last mirrored edits.
+type MirrorFailure struct {
+	Reason string
+}
+
 type pollTickMsg struct{}
 
 func nextPoll() tea.Cmd {

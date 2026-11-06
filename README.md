@@ -101,7 +101,7 @@ review with `*`. In follow mode, one that fails a check below is listed muted, a
 
 `perusal follow` is for an agent that runs as its own Windows account. It reviews the repositories the agent is
 working in, and switches as the agent moves between them. It reads
-`%APPDATA%\perusal\config.json`, where every key is required:
+`%APPDATA%\perusal\config.json`, where every key but `agentHost` is required:
 
 ```json
 {
@@ -121,6 +121,14 @@ working in, and switches as the agent moves between them. It reads
   the footer.
 - `agentDir` and `ownerDir` are one directory as the agent and you reach it. perusal maps a path under `agentDir`
   to the same path under `ownerDir`, and refuses anything outside it.
+- `agentHost`, when set, is the ssh host the agent works on, such as a VM, with `focusFile` at the same path there
+  and its own clone of each repository at the `ownerDir` path. Its ssh login shell must be Windows PowerShell, and ssh
+  must log in without a prompt. Every 2 seconds perusal reads `focusFile` over ssh, commits the agent's work tree of
+  each focused repository there to `refs/perusal/snapshot` (through a temporary index, leaving the agent's own index
+  alone), fetches it, and checks it out into your copy with `git read-tree -m -u`, leaving your index untouched. So
+  the agent's edits show up in your copy as unstaged changes. perusal refuses a snapshot taken on another commit than
+  your `HEAD`, and git refuses one that would overwrite a file you edited since the last one, either way shown in the
+  footer.
 
 The overview (`o`) lists every repository under `ownerDir` with its branch, its uncommitted file count, how far it is
 ahead of and behind its upstream, and how far it is behind `origin`'s default branch. The repositories the focus file

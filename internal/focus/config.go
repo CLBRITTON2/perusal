@@ -9,16 +9,20 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 )
 
 var ErrInvalidConfig = errors.New("invalid perusal config")
 
-// AgentDir and OwnerDir are one directory, as each account reaches it.
+// AgentDir and OwnerDir are one directory, as each account reaches it. AgentHost, when set, is the ssh host the agent
+// works on, with FocusFile and its own copy of each repository at the same paths there, and empty when the agent works
+// on this machine.
 type Config struct {
 	AgentAccount string `json:"agentAccount"`
 	FocusFile    string `json:"focusFile"`
 	AgentDir     string `json:"agentDir"`
 	OwnerDir     string `json:"ownerDir"`
+	AgentHost    string `json:"agentHost"`
 }
 
 func LoadConfig(path string) (Config, error) {
@@ -34,6 +38,11 @@ func LoadConfig(path string) (Config, error) {
 	}
 	if config.AgentAccount == "" {
 		return Config{}, fmt.Errorf("%w: %s sets no agentAccount", ErrInvalidConfig, path)
+	}
+	// ssh would read a leading dash as an option, and git a colon as the end of the host in host:path.
+	if strings.HasPrefix(config.AgentHost, "-") || strings.Contains(config.AgentHost, ":") {
+		return Config{}, fmt.Errorf("%w: %s sets agentHost to %q, want an ssh host name or alias", ErrInvalidConfig,
+			path, config.AgentHost)
 	}
 	paths := []struct {
 		key   string

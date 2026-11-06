@@ -266,6 +266,8 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m.withFocus(msg)
 	case FocusRejection:
 		return m.withRepository(gitrepo.Repository{}, sanitizeSingleLine(msg.Reason)), nil
+	case MirrorFailure:
+		return m.withFooterError(msg.Reason), nil
 	case pollTickMsg:
 		if m.repository.Dir == "" {
 			return m, tea.Sequence(m.loadUncommitted(), nextPoll())
