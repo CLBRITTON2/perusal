@@ -135,6 +135,8 @@ type Model struct {
 	mode             screenMode
 	popup            popupState
 	footer           footer
+	// The poll sends a mirror failure only when it changes, so the footer shows it until the next one.
+	mirrorFailure string
 
 	overview selectableList[overviewRow]
 	// syncing maps the Dir of each repository an overview pull or fetch is running in to what its row shows.
@@ -267,7 +269,8 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case FocusRejection:
 		return m.withRepository(gitrepo.Repository{}, sanitizeSingleLine(msg.Reason)), nil
 	case MirrorFailure:
-		return m.withFooterError(msg.Reason), nil
+		m.mirrorFailure = sanitizeSingleLine(msg.Reason)
+		return m, nil
 	case pollTickMsg:
 		if m.repository.Dir == "" {
 			return m, tea.Sequence(m.loadUncommitted(), nextPoll())
@@ -613,6 +616,7 @@ func (m Model) withRepository(repository gitrepo.Repository, rejection string) M
 	}
 	next.overview = m.overview
 	next.syncing = m.syncing
+	next.mirrorFailure = m.mirrorFailure
 	next.repository = repository
 	next.rejection = rejection
 	return next.withLayout()
@@ -1569,6 +1573,8 @@ func (m Model) renderFooter() string {
 		return fitToWidth(errorStyle.Render("✗ "+m.footer.text), m.width)
 	case m.footer.text != "":
 		return fitToWidth(successStyle.Render("✓ "+m.footer.text), m.width)
+	case m.mirrorFailure != "" && m.mode != modeSearching:
+		return fitToWidth(errorStyle.Render("✗ "+m.mirrorFailure), m.width)
 	case m.mode == modeOverview:
 		return m.renderHelpLine(overviewHelp)
 	case m.mode == modeBranches:

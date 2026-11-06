@@ -19,6 +19,50 @@ func TestMirrorAgentWorkTree(t *testing.T) {
 	t.Run("keepsAFileTheOwnerEditedAndRefusesTheSnapshot", keepsAFileTheOwnerEditedAndRefusesTheSnapshot)
 	t.Run("refusesASnapshotTakenOnAnotherCommit", refusesASnapshotTakenOnAnotherCommit)
 	t.Run("refusesASnapshotNamingAPathInDotGit", refusesASnapshotNamingAPathInDotGit)
+	t.Run("skipsTheFetchWhenTheSnapshotIsUnchanged", skipsTheFetchWhenTheSnapshotIsUnchanged)
+}
+
+func TestSnapshotAgentCopies(t *testing.T) {
+	t.Run("snapshotsEveryCloneInOneRunAndKeepsOneFailureToItsClone",
+		snapshotsEveryCloneInOneRunAndKeepsOneFailureToItsClone)
+}
+
+func skipsTheFetchWhenTheSnapshotIsUnchanged(t *testing.T) {
+	owner, agent := ownerAndAgentCopies(t)
+	writeFile(t, filepath.Join(agent, "a.txt"), "agent\n")
+	if err := syncAndMirror(t, owner, agent); err != nil {
+		t.Fatal(err)
+	}
+	snapshot := snapshotAgentCopy(t, agent)
+
+	mirrorErr := Repository{Dir: owner}.MirrorAgentWorkTree(context.Background(),
+		filepath.Join(t.TempDir(), "missing"), snapshot.Commit)
+
+	requireMirrored(t, mirrorErr)
+	assertChangedFiles(t, owner, []FileStatus{{Path: "a.txt", IndexStatus: ' ', WorktreeStatus: 'M'}})
+}
+
+func snapshotsEveryCloneInOneRunAndKeepsOneFailureToItsClone(t *testing.T) {
+	_, agent := ownerAndAgentCopies(t)
+	notAClone := t.TempDir()
+	runs := 0
+	run := func(ctx context.Context, script string) ([]byte, error) {
+		runs++
+		return localAgentCopy(agent).Run(ctx, script)
+	}
+
+	snapshots, err := SnapshotAgentCopies(context.Background(), run, []string{notAClone, agent})
+
+	if err != nil {
+		t.Fatal(err)
+	}
+	if runs != 1 || snapshots[0].Err == nil || !strings.Contains(snapshots[0].Err.Error(), notAClone) {
+		t.Fatalf("got %d runs and error %v for %s, want one run and an error naming it", runs, snapshots[0].Err, notAClone)
+	}
+	if snapshots[1].Err != nil || snapshots[1].Commit != revParse(t, agent, "refs/perusal/snapshot") ||
+		snapshots[1].Head != revParse(t, agent, "HEAD") || snapshots[1].Branch != "refs/heads/main" {
+		t.Fatalf("got snapshot %+v of %s, want its snapshot commit, HEAD and main", snapshots[1], agent)
+	}
 }
 
 func TestSyncAgentCopy(t *testing.T) {
@@ -90,11 +134,9 @@ func refusesASnapshotTakenOnAnotherCommit(t *testing.T) {
 	writeFile(t, filepath.Join(agent, "a.txt"), "agent\n")
 	runSteps(t, agent, [][]string{{"commit", "--all", "--message", "Agent commit"}})
 	writeFile(t, filepath.Join(agent, "b.txt"), "agent\n")
-	if output, err := localAgentCopy(agent).Run(context.Background(), agentSnapshotScript(agent)); err != nil {
-		t.Fatalf("snapshot %s: %v: %s", agent, err, output)
-	}
+	snapshot := snapshotAgentCopy(t, agent)
 
-	mirrorErr := Repository{Dir: owner}.MirrorAgentWorkTree(context.Background(), agent)
+	mirrorErr := Repository{Dir: owner}.MirrorAgentWorkTree(context.Background(), agent, snapshot.Commit)
 
 	if !errors.Is(mirrorErr, ErrAgentSnapshotRefused) {
 		t.Fatalf("got error %v, want %v", mirrorErr, ErrAgentSnapshotRefused)
@@ -110,7 +152,7 @@ func refusesASnapshotNamingAPathInDotGit(t *testing.T) {
 	commit := strings.TrimSpace(gitOutput(t, agent, "commit-tree", tree, "-p", "HEAD", "-m", "Plant .git/config"))
 	runSteps(t, agent, [][]string{{"update-ref", "refs/perusal/snapshot", commit}})
 
-	mirrorErr := Repository{Dir: owner}.MirrorAgentWorkTree(context.Background(), agent)
+	mirrorErr := Repository{Dir: owner}.MirrorAgentWorkTree(context.Background(), agent, commit)
 
 	if mirrorErr == nil || !strings.Contains(mirrorErr.Error(), "hasDotgit") {
 		t.Fatalf("got error %v, want fsck's hasDotgit refusal", mirrorErr)
@@ -225,10 +267,21 @@ func localAgentCopy(agent string) AgentCopy {
 
 func syncAndMirror(t *testing.T, owner string, agent string) error {
 	t.Helper()
-	if err := (Repository{Dir: owner}).SyncAgentCopy(context.Background(), localAgentCopy(agent)); err != nil {
+	snapshotCommit, err := Repository{Dir: owner}.SyncAgentCopy(context.Background(), localAgentCopy(agent),
+		snapshotAgentCopy(t, agent))
+	if err != nil {
 		return err
 	}
-	return Repository{Dir: owner}.MirrorAgentWorkTree(context.Background(), agent)
+	return Repository{Dir: owner}.MirrorAgentWorkTree(context.Background(), agent, snapshotCommit)
+}
+
+func snapshotAgentCopy(t *testing.T, agent string) AgentSnapshot {
+	t.Helper()
+	snapshots, err := SnapshotAgentCopies(context.Background(), localAgentCopy(agent).Run, []string{agent})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return snapshots[0]
 }
 
 func assertSameHead(t *testing.T, owner string, agent string) {

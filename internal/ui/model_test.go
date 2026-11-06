@@ -519,6 +519,26 @@ func TestTheFooterFitsAndQuestionMarkListsEveryKey(t *testing.T) {
 	}
 }
 
+func TestAMirrorFailureStaysInTheFooterAcrossKeysAndFocusSwitchesUntilItClears(t *testing.T) {
+	m := reviewingRepository(t, gitrepo.Status{Files: twoFiles()})
+	m = update(t, m, MirrorFailure{Reason: "claude/settings.json would be overwritten"})
+
+	m = update(t, m, tea.KeyPressMsg{Code: 'j', Text: "j"})
+	afterKey := ansi.Strip(m.renderFooter())
+	m = update(t, m, focusOnOne("C:/dev/other"))
+	afterFocusSwitch := ansi.Strip(m.renderFooter())
+	m = update(t, m, MirrorFailure{Reason: ""})
+
+	for _, footer := range []string{afterKey, afterFocusSwitch} {
+		if !strings.Contains(footer, "claude/settings.json would be overwritten") {
+			t.Fatalf("got footer %q, want the mirror failure", footer)
+		}
+	}
+	if footer := ansi.Strip(m.renderFooter()); !strings.Contains(footer, "? all keys") {
+		t.Fatalf("got footer %q after the mirror succeeded, want the key help", footer)
+	}
+}
+
 func topLineNumber(m Model) int {
 	return m.diffLines()[m.diffView.YOffset()].source.newNumber
 }

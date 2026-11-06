@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"errors"
 	"flag"
 	"fmt"
 	"os"
@@ -10,13 +11,15 @@ import (
 
 	tea "charm.land/bubbletea/v2"
 
+	"github.com/CLBRITTON2/perusal/internal/agenthost"
 	"github.com/CLBRITTON2/perusal/internal/focus"
 	"github.com/CLBRITTON2/perusal/internal/gitrepo"
 	"github.com/CLBRITTON2/perusal/internal/ui"
 )
 
-// Each poll costs an ssh login per read and two per focused repository, about 2 s each on the VM.
-const agentHostPollInterval = 2 * time.Second
+// The longest a wait for a change on the VM lasts. Each wait ends with a focus read and a HEAD check of every focused
+// repository, and only a change starts the snapshot, sync and mirror.
+const agentHostWaitTimeout = 2 * time.Second
 
 const followUsage = "  perusal follow                  review the repositories the agent's focus file names\n"
 
@@ -50,11 +53,11 @@ func runFollow(args []string) error {
 	return follow(rules)
 }
 
-func follow(rules focus.Rules) error {
+func follow(rules focus.Rules) (followErr error) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	var results <-chan focus.Result
-	var mirrorFailures <-chan error
+	var mirrorFailures <-chan string
 	if rules.AgentHost == "" {
 		watched, err := focus.Follow(ctx, rules)
 		if err != nil {
@@ -62,7 +65,13 @@ func follow(rules focus.Rules) error {
 		}
 		results = watched
 	} else {
-		results, mirrorFailures = focus.FollowAgentHost(ctx, rules, agentHostPollInterval)
+		session := agenthost.NewSession(rules.AgentHost)
+		defer func() {
+			// The poll's Run returns once ctx ends, so Close does not wait on it.
+			cancel()
+			followErr = errors.Join(followErr, session.Close())
+		}()
+		results, mirrorFailures = focus.FollowAgentHost(ctx, rules, session, agentHostWaitTimeout)
 	}
 	statePath, err := viewStatePath()
 	if err != nil {
@@ -85,7 +94,7 @@ func follow(rules focus.Rules) error {
 }
 
 // forwardResults returns when results closes. mirrorFailures is nil when the agent works locally, which blocks its case.
-func forwardResults(program *tea.Program, results <-chan focus.Result, mirrorFailures <-chan error, focusFile string) {
+func forwardResults(program *tea.Program, results <-chan focus.Result, mirrorFailures <-chan string, focusFile string) {
 	for {
 		select {
 		case result, open := <-results:
@@ -103,7 +112,7 @@ func forwardResults(program *tea.Program, results <-chan focus.Result, mirrorFai
 				mirrorFailures = nil
 				continue
 			}
-			program.Send(ui.MirrorFailure{Reason: failure.Error()})
+			program.Send(ui.MirrorFailure{Reason: failure})
 		}
 	}
 }

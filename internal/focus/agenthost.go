@@ -5,6 +5,8 @@ package focus
 import (
 	"context"
 	"fmt"
+	"maps"
+	"strings"
 	"sync"
 	"time"
 
@@ -12,30 +14,36 @@ import (
 	"github.com/CLBRITTON2/perusal/internal/gitrepo"
 )
 
-// FollowAgentHost reads the focus file on rules.AgentHost over ssh every interval, since no change notice crosses ssh,
-// and sends a Result when what it reads changes. After each read it moves the agent's copy of every focused repository
-// onto the owner's HEAD and mirrors it into the owner's, and sends a failure on the second channel when it differs from that repository's last
-// one. Both channels close when ctx ends.
-func FollowAgentHost(ctx context.Context, rules Rules, interval time.Duration) (<-chan Result, <-chan error) {
+// FollowAgentHost waits through session, up to waitTimeout at a time, for a change to the focus file on rules.AgentHost
+// or to the agent's copy of a focused repository, then reads the focus file and sends a Result when what it reads
+// changed. When the agent's side or the owner's HEAD of a repository changed, it moves the agent's copy of every
+// focused repository onto the owner's HEAD and mirrors it into the owner's. When the failed mirrors change, it sends
+// their errors joined on the second channel, and an empty string once every mirror succeeds again. Both channels close
+// when ctx ends.
+func FollowAgentHost(ctx context.Context, rules Rules, session *agenthost.Session,
+	waitTimeout time.Duration) (<-chan Result, <-chan string) {
 	results := make(chan Result)
-	mirrorFailures := make(chan error)
-	go pollAgentHost(ctx, rules, interval, results, mirrorFailures)
+	mirrorFailures := make(chan string)
+	go pollAgentHost(ctx, rules, session, waitTimeout, results, mirrorFailures)
 	return results, mirrorFailures
 }
 
-func pollAgentHost(ctx context.Context, rules Rules, interval time.Duration, results chan<- Result,
-	mirrorFailures chan<- error) {
+func pollAgentHost(ctx context.Context, rules Rules, session *agenthost.Session, waitTimeout time.Duration,
+	results chan<- Result, mirrorFailures chan<- string) {
 	defer close(results)
 	defer close(mirrorFailures)
-	// UTF-8 without a BOM, since Windows PowerShell writes the OEM code page by default.
-	readScript := "[Console]::OutputEncoding = New-Object Text.UTF8Encoding $false; [IO.File]::ReadAllText(" +
-		agenthost.QuotedString(rules.FocusFile) + ")"
+	readScript := "[IO.File]::ReadAllText(" + agenthost.QuotedString(rules.FocusFile) + ")"
 	lastContent := ""
 	lastReadFailure := ""
 	focused := Focus{Repositories: []gitrepo.Repository{}, Refusals: []error{}}
-	lastMirrorFailures := map[string]string{}
+	lastMirrorFailure := ""
+	lastOwnerHeads := map[string]string{}
 	for {
-		output, err := agenthost.Run(ctx, rules.AgentHost, readScript)
+		changed, waitErr := session.WaitForChange(ctx, agentDirs(focused), rules.FocusFile, waitTimeout)
+		if ctx.Err() != nil {
+			return
+		}
+		output, err := session.Run(ctx, readScript)
 		var readErr error
 		switch {
 		case err != nil:
@@ -54,48 +62,82 @@ func pollAgentHost(ctx context.Context, rules Rules, interval time.Duration, res
 		} else if string(output) != lastContent {
 			lastContent = string(output)
 			lastReadFailure = ""
+			changed = true
 			var resolveErr error
 			focused, resolveErr = resolveContent(ctx, rules, lastContent)
 			if !sendResult(ctx, results, Result{Focus: focused, Err: resolveErr}) {
 				return
 			}
 		}
-		mirrorErrs := make([]error, len(focused.Repositories))
-		var group sync.WaitGroup
-		for index, repository := range focused.Repositories {
-			group.Go(func() {
-				// The agent's copy sits at the owner's path on the agent host.
-				agent := gitrepo.AgentCopy{Dir: repository.Dir, Remote: rules.AgentHost + ":" + repository.Dir,
-					Run: func(ctx context.Context, script string) ([]byte, error) {
-						return agenthost.Run(ctx, rules.AgentHost, script)
-					}}
-				if err := repository.SyncAgentCopy(ctx, agent); err != nil {
-					mirrorErrs[index] = err
-					return
-				}
-				mirrorErrs[index] = repository.MirrorAgentWorkTree(ctx, agent.Remote)
-			})
-		}
-		group.Wait()
-		for index, repository := range focused.Repositories {
-			if mirrorErrs[index] == nil {
-				delete(lastMirrorFailures, repository.Dir)
-				continue
+		// The owner's commits, pulls and branch switches happen on this side, where no watcher sees them.
+		ownerHeads := map[string]string{}
+		for _, repository := range focused.Repositories {
+			ownerHead, err := repository.HeadAndBranch(ctx)
+			if err != nil {
+				// The sync below runs git on the same HEAD and reports the error.
+				changed = true
 			}
-			failure := mirrorErrs[index].Error()
-			if failure != lastMirrorFailures[repository.Dir] {
-				select {
-				case <-ctx.Done():
-					return
-				case mirrorFailures <- mirrorErrs[index]:
+			ownerHeads[repository.Dir] = ownerHead
+		}
+		failures := []string{}
+		if waitErr != nil {
+			failures = append(failures, waitErr.Error())
+		}
+		// A failed mirror is retried every poll, since the owner may fix it without the agent's side changing.
+		if !changed && waitErr == nil && lastMirrorFailure == "" && maps.Equal(ownerHeads, lastOwnerHeads) {
+			continue
+		}
+		lastOwnerHeads = ownerHeads
+		snapshots, err := gitrepo.SnapshotAgentCopies(ctx, session.Run, agentDirs(focused))
+		if err != nil {
+			failures = append(failures, err.Error())
+		} else {
+			mirrorErrs := make([]error, len(focused.Repositories))
+			var group sync.WaitGroup
+			for index, repository := range focused.Repositories {
+				group.Go(func() {
+					agent := gitrepo.AgentCopy{Dir: repository.Dir, Remote: rules.AgentHost + ":" + repository.Dir,
+						Run: session.Run}
+					snapshotCommit, err := repository.SyncAgentCopy(ctx, agent, snapshots[index])
+					if err != nil {
+						mirrorErrs[index] = err
+						return
+					}
+					mirrorErrs[index] = repository.MirrorAgentWorkTree(ctx, agent.Remote, snapshotCommit)
+				})
+			}
+			group.Wait()
+			for _, mirrorErr := range mirrorErrs {
+				if mirrorErr != nil {
+					failures = append(failures, mirrorErr.Error())
 				}
 			}
-			lastMirrorFailures[repository.Dir] = failure
 		}
-		select {
-		case <-ctx.Done():
-			return
-		case <-time.After(interval):
+		mirrorFailure := strings.Join(failures, ", ")
+		if mirrorFailure != lastMirrorFailure {
+			select {
+			case <-ctx.Done():
+				return
+			case mirrorFailures <- mirrorFailure:
+			}
+			lastMirrorFailure = mirrorFailure
+		}
+		if waitErr != nil {
+			// The failed wait returned at once.
+			select {
+			case <-ctx.Done():
+				return
+			case <-time.After(waitTimeout):
+			}
 		}
 	}
+}
+
+// agentDirs are the agent's copies of focused's repositories, which sit at the owner's paths on the agent host.
+func agentDirs(focused Focus) []string {
+	dirs := make([]string, len(focused.Repositories))
+	for index, repository := range focused.Repositories {
+		dirs[index] = repository.Dir
+	}
+	return dirs
 }
