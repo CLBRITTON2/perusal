@@ -13,6 +13,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/CLBRITTON2/perusal/internal/gitrepo"
 	"golang.org/x/sys/windows"
 )
 
@@ -52,6 +53,39 @@ func TestMapPath(t *testing.T) {
 				t.Fatalf("got %q, %v, want %q, %v", got, err, testCase.want, testCase.wantErr)
 			}
 		})
+	}
+}
+
+func TestAgentCopyDirs(t *testing.T) {
+	rules := Rules{Config: Config{AgentDir: `C:\Users\claude\dev`, OwnerDir: `C:\Users\Chris\dev`}}
+	cases := []struct {
+		name          string
+		repositoryDir string
+		want          []string
+	}{
+		{"mapsARepository", `C:\Users\Chris\dev\perusal`, []string{`C:\Users\claude\dev\perusal`}},
+		{"mapsANestedRepository", `C:\Users\Chris\dev\openziti\ziti`, []string{`C:\Users\claude\dev\openziti\ziti`}},
+		{"mapsTheOwnerDirectoryItself", `C:\Users\Chris\dev`, []string{`C:\Users\claude\dev`}},
+		{"ignoresCase", `c:\users\chris\DEV\perusal`, []string{`C:\Users\claude\dev\perusal`}},
+	}
+	for _, testCase := range cases {
+		t.Run(testCase.name, func(t *testing.T) {
+			got, err := agentCopyDirs(rules, []gitrepo.Repository{{Dir: testCase.repositoryDir}})
+
+			if err != nil || !slices.Equal(got, testCase.want) {
+				t.Fatalf("got %q, %v, want %q", got, err, testCase.want)
+			}
+		})
+	}
+}
+
+func TestAgentCopyDirsRefusesARepositoryOutsideTheOwnerDirectory(t *testing.T) {
+	rules := Rules{Config: Config{AgentDir: `C:\Users\claude\dev`, OwnerDir: `C:\Users\Chris\dev`}}
+
+	got, err := agentCopyDirs(rules, []gitrepo.Repository{{Dir: `C:\Users\Chris\devtools\x`}})
+
+	if err == nil {
+		t.Fatalf("got %q, want an error", got)
 	}
 }
 

@@ -4,8 +4,10 @@ package focus
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"maps"
+	"path/filepath"
 	"strings"
 	"sync"
 	"time"
@@ -36,10 +38,11 @@ func pollAgentHost(ctx context.Context, rules Rules, session *agenthost.Session,
 	lastContent := ""
 	lastReadFailure := ""
 	focused := Focus{Repositories: []gitrepo.Repository{}, Refusals: []error{}}
+	focusedAgentDirs := []string{}
 	lastMirrorFailure := ""
 	lastOwnerHeads := map[string]string{}
 	for {
-		changed, waitErr := session.WaitForChange(ctx, agentDirs(focused), rules.FocusFile, waitTimeout)
+		changed, waitErr := session.WaitForChange(ctx, focusedAgentDirs, rules.FocusFile, waitTimeout)
 		if ctx.Err() != nil {
 			return
 		}
@@ -55,6 +58,7 @@ func pollAgentHost(ctx context.Context, rules Rules, session *agenthost.Session,
 		if readErr != nil {
 			lastContent = ""
 			focused = Focus{Repositories: []gitrepo.Repository{}, Refusals: []error{}}
+			focusedAgentDirs = []string{}
 			if readErr.Error() != lastReadFailure && !sendResult(ctx, results, Result{Err: readErr}) {
 				return
 			}
@@ -63,9 +67,16 @@ func pollAgentHost(ctx context.Context, rules Rules, session *agenthost.Session,
 			lastContent = string(output)
 			lastReadFailure = ""
 			changed = true
-			var resolveErr error
-			focused, resolveErr = resolveContent(ctx, rules, lastContent)
-			if !sendResult(ctx, results, Result{Focus: focused, Err: resolveErr}) {
+			resolved, resolveErr := resolveContent(ctx, rules, lastContent)
+			resolvedAgentDirs, agentDirsErr := agentCopyDirs(rules, resolved.Repositories)
+			if agentDirsErr != nil {
+				focused = Focus{Repositories: []gitrepo.Repository{}, Refusals: []error{}}
+				focusedAgentDirs = []string{}
+			} else {
+				focused = resolved
+				focusedAgentDirs = resolvedAgentDirs
+			}
+			if !sendResult(ctx, results, Result{Focus: focused, Err: errors.Join(resolveErr, agentDirsErr)}) {
 				return
 			}
 		}
@@ -88,7 +99,7 @@ func pollAgentHost(ctx context.Context, rules Rules, session *agenthost.Session,
 			continue
 		}
 		lastOwnerHeads = ownerHeads
-		snapshots, err := gitrepo.SnapshotAgentCopies(ctx, session.Run, agentDirs(focused))
+		snapshots, err := gitrepo.SnapshotAgentCopies(ctx, session.Run, focusedAgentDirs)
 		if err != nil {
 			failures = append(failures, err.Error())
 		} else {
@@ -96,8 +107,8 @@ func pollAgentHost(ctx context.Context, rules Rules, session *agenthost.Session,
 			var group sync.WaitGroup
 			for index, repository := range focused.Repositories {
 				group.Go(func() {
-					agent := gitrepo.AgentCopy{Dir: repository.Dir, Remote: rules.AgentHost + ":" + repository.Dir,
-						Run: session.Run}
+					agent := gitrepo.AgentCopy{Dir: focusedAgentDirs[index],
+						Remote: rules.AgentHost + ":" + focusedAgentDirs[index], Run: session.Run}
 					snapshotCommit, err := repository.SyncAgentCopy(ctx, agent, snapshots[index])
 					if err != nil {
 						mirrorErrs[index] = err
@@ -133,11 +144,20 @@ func pollAgentHost(ctx context.Context, rules Rules, session *agenthost.Session,
 	}
 }
 
-// agentDirs are the agent's copies of focused's repositories, which sit at the owner's paths on the agent host.
-func agentDirs(focused Focus) []string {
-	dirs := make([]string, len(focused.Repositories))
-	for index, repository := range focused.Repositories {
-		dirs[index] = repository.Dir
+// agentCopyDirs are the agent's copies of repositories on the agent host, each at the same path under rules.AgentDir as
+// the repository under rules.OwnerDir.
+func agentCopyDirs(rules Rules, repositories []gitrepo.Repository) ([]string, error) {
+	dirs := make([]string, len(repositories))
+	for index, repository := range repositories {
+		relativePath, err := filepath.Rel(rules.OwnerDir, repository.Dir)
+		if err != nil {
+			return nil, fmt.Errorf("map repository %s from %s to %s: %w", repository.Dir, rules.OwnerDir,
+				rules.AgentDir, err)
+		}
+		if relativePath == ".." || strings.HasPrefix(relativePath, ".."+string(filepath.Separator)) {
+			return nil, fmt.Errorf("%s is not under %s", repository.Dir, rules.OwnerDir)
+		}
+		dirs[index] = filepath.Join(rules.AgentDir, relativePath)
 	}
-	return dirs
+	return dirs, nil
 }

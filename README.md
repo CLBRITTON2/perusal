@@ -121,11 +121,12 @@ working in, and switches as the agent moves between them. It reads
   the first repository with uncommitted changes, or the first one when all are clean. A new list that starts with the
   same repository and still names the one under review keeps it open, and a path that fails a check below is shown in
   the footer.
-- `agentDir` and `ownerDir` are one directory as the agent and you reach it. perusal maps a path under `agentDir`
-  to the same path under `ownerDir`, and refuses anything outside it.
-- `agentHost`, when set, is the ssh host the agent works on, such as a VM, with `focusFile` at the same path there
-  and its own clone of each repository at the `ownerDir` path. Its ssh login shell must be PowerShell (5.1 or 7), and ssh
-  must log in without a prompt. Every 2 seconds perusal reads `focusFile` over ssh, commits the agent's work tree of
+- `agentDir` and `ownerDir` are one directory as the agent and you reach it, or with `agentHost` set, the agent's dev
+  directory there and yours here. perusal maps a path under `agentDir` to the same path under `ownerDir`, and refuses
+  anything outside it.
+- `agentHost`, when set, is the ssh host the agent works on, such as a VM, with `focusFile` there and its own clone of
+  each repository at the same path under `agentDir` as yours under `ownerDir`. Its ssh login shell must be PowerShell
+  (5.1 or 7), and ssh must log in without a prompt. Every 2 seconds perusal reads `focusFile` over ssh, commits the agent's work tree of
   each focused repository there to `refs/perusal/snapshot` (through a temporary index, leaving the agent's own index
   alone), fetches it, and checks it out into your copy with `git read-tree -m -u`, leaving your index untouched. So
   the agent's edits show up in your copy as unstaged changes. git refuses a snapshot that would overwrite a file you
