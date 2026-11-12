@@ -1,6 +1,7 @@
 package ui
 
 import (
+	"errors"
 	"slices"
 	"strings"
 	"testing"
@@ -174,6 +175,75 @@ func closesTheListAndReloadsTheStatus(t *testing.T) {
 	if switching == nil || reloading == nil || m.mode == modeBranches || m.footer.text != "switched to wip" {
 		t.Fatalf("got switch %v, reload %v, mode %d, footer %q, want the list closed after the switch", switching,
 			reloading, m.mode, m.footer.text)
+	}
+}
+
+func TestNewBranch(t *testing.T) {
+	t.Run("isCreatedFromTheDefaultBranchWithTheUncommittedFilesAndClosesTheList",
+		isCreatedFromTheDefaultBranchWithTheUncommittedFilesAndClosesTheList)
+	t.Run("isRefusedWhenTheDefaultBranchIsUnknown", isRefusedWhenTheDefaultBranchIsUnknown)
+	t.Run("needsAName", needsAName)
+	t.Run("showsGitsRefusalInThePopup", showsGitsRefusalInThePopup)
+}
+
+func isCreatedFromTheDefaultBranchWithTheUncommittedFilesAndClosesTheList(t *testing.T) {
+	m := branchesOf(t, gitrepo.Status{Branch: "fix", Files: twoFiles()}, originMain())
+	m = update(t, m, tea.KeyPressMsg{Code: 'n', Text: "n"})
+	for _, letter := range "feat" {
+		m = update(t, m, tea.KeyPressMsg{Code: letter, Text: string(letter)})
+	}
+	popup := ansi.Strip(m.renderNewBranchPopup())
+
+	next, creating := m.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
+	m = asModel(t, next)
+	running := m.popup.running
+	next, reloading := m.Update(branchSwitchMsg{dir: "C:/dev/repo", branch: "feat"})
+	m = asModel(t, next)
+
+	if !strings.Contains(popup, "new branch from origin/main") || !strings.Contains(popup, "feat") ||
+		!strings.Contains(popup, "takes along 2 uncommitted files") {
+		t.Fatalf("got popup:\n%s", popup)
+	}
+	if creating == nil || !running || reloading == nil || m.popup.kind != noPopup || m.mode == modeBranches ||
+		m.footer.text != "switched to feat" {
+		t.Fatalf("got create %v (running %v), reload %v, popup %d, mode %d, footer %q, want the list closed on feat",
+			creating, running, reloading, m.popup.kind, m.mode, m.footer.text)
+	}
+}
+
+func isRefusedWhenTheDefaultBranchIsUnknown(t *testing.T) {
+	m := branchesOf(t, gitrepo.Status{Branch: "fix"}, gitrepo.RemoteBranch{})
+
+	m = update(t, m, tea.KeyPressMsg{Code: 'n', Text: "n"})
+
+	if m.popup.kind != noPopup || !m.footer.isError {
+		t.Fatalf("got popup %d, footer %q, want a refusal", m.popup.kind, m.footer.text)
+	}
+}
+
+func needsAName(t *testing.T) {
+	m := branchesOf(t, gitrepo.Status{Branch: "fix"}, originMain())
+	m = update(t, m, tea.KeyPressMsg{Code: 'n', Text: "n"})
+
+	next, creating := m.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
+	m = asModel(t, next)
+
+	if creating != nil || m.popup.kind != newBranchPopup || m.popup.err != "the name is required" {
+		t.Fatalf("got create %v, popup %d, error %q, want the popup kept open asking for a name", creating,
+			m.popup.kind, m.popup.err)
+	}
+}
+
+func showsGitsRefusalInThePopup(t *testing.T) {
+	m := branchesOf(t, gitrepo.Status{Branch: "fix"}, originMain())
+	m = update(t, m, tea.KeyPressMsg{Code: 'n', Text: "n"})
+	m = update(t, m, tea.KeyPressMsg{Code: tea.KeyEnter})
+
+	m = update(t, m, popupFailureMsg{dir: "C:/dev/repo", err: errors.New("a branch named 'main' already exists")})
+
+	if m.popup.kind != newBranchPopup || m.popup.running || !strings.Contains(m.popup.err, "already exists") {
+		t.Fatalf("got popup %d, running %v, error %q, want git's refusal in the open popup", m.popup.kind,
+			m.popup.running, m.popup.err)
 	}
 }
 

@@ -40,6 +40,8 @@ var (
 	switchBranchKey   = key.NewBinding(key.WithKeys("enter"), key.WithHelp("enter", "switch"))
 	deleteBranchKey   = key.NewBinding(key.WithKeys("D"), key.WithHelp("D", "delete"))
 	confirmDeleteKey  = key.NewBinding(key.WithKeys("enter"), key.WithHelp("enter", "delete"))
+	newBranchKey      = key.NewBinding(key.WithKeys("n"), key.WithHelp("n", "new"))
+	createBranchKey   = key.NewBinding(key.WithKeys("enter"), key.WithHelp("enter", "create"))
 	fetchBranchesKey  = key.NewBinding(key.WithKeys("f"), key.WithHelp("f", "fetch"))
 	closeBranchesKey  = key.NewBinding(key.WithKeys("esc", "b"), key.WithHelp("esc", "close"))
 	workTreesKey      = key.NewBinding(key.WithKeys("w"), key.WithHelp("w", "work trees"))
@@ -72,12 +74,13 @@ var (
 	reviewKeys  = []key.Binding{commitKey, pushKey, switchViewKey, stashesKey, branchesKey, workTreesKey, overviewKey,
 		quitKey}
 	// Not every key fits one line, so the footer leaves the rest to the key list.
-	reviewHelp    = []key.Binding{commitKey, pushKey, switchViewKey, keyListKey, quitKey}
-	changesHelp   = slices.Concat(changesKeys, reviewHelp)
-	logHelp       = slices.Concat(logKeys, reviewHelp)
-	stashHelp     = slices.Concat(stashKeys, reviewHelp)
-	overviewHelp  = []key.Binding{downKey, openRepositoryKey, fetchKey, pullKey, pushKey, closeOverviewKey, quitKey}
-	branchesHelp  = []key.Binding{downKey, switchBranchKey, deleteBranchKey, fetchBranchesKey, closeBranchesKey, quitKey}
+	reviewHelp   = []key.Binding{commitKey, pushKey, switchViewKey, keyListKey, quitKey}
+	changesHelp  = slices.Concat(changesKeys, reviewHelp)
+	logHelp      = slices.Concat(logKeys, reviewHelp)
+	stashHelp    = slices.Concat(stashKeys, reviewHelp)
+	overviewHelp = []key.Binding{downKey, openRepositoryKey, fetchKey, pullKey, pushKey, closeOverviewKey, quitKey}
+	branchesHelp = []key.Binding{downKey, switchBranchKey, newBranchKey, deleteBranchKey, fetchBranchesKey,
+		closeBranchesKey, quitKey}
 	workTreesHelp = []key.Binding{downKey, openRepositoryKey, closeWorkTreesKey, quitKey}
 	searchHelp    = []key.Binding{keepSearchKey, clearSearchKey}
 	commitHelp    = []key.Binding{nextFieldKey, submitKey, cancelKey}

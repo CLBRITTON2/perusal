@@ -112,6 +112,16 @@ func (r Repository) SwitchTracking(ctx context.Context, ref string) error {
 	return r.run(ctx, "switch", "--track", ref)
 }
 
+// CreateBranch creates branch at start and switches to it, taking uncommitted changes along, and git refuses a name that
+// is invalid or taken. The new branch tracks nothing, so the first push publishes it under its own name. It leaves the
+// agent's mirrored edits behind.
+func (r Repository) CreateBranch(ctx context.Context, branch string, start string) error {
+	if err := r.removeMirroredAgentEdits(ctx); err != nil {
+		return err
+	}
+	return r.run(ctx, "switch", "--create", branch, "--no-track", start)
+}
+
 // DeleteBranch deletes branch whether or not it is merged, since plain --delete refuses a squash merged branch.
 func (r Repository) DeleteBranch(ctx context.Context, branch string) error {
 	return r.run(ctx, "branch", "--delete", "--force", branch)

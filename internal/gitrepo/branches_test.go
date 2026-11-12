@@ -103,6 +103,41 @@ func cloneWithTwoRemotes(t *testing.T) string {
 	return clone
 }
 
+func TestCreateBranchStartsAtTheStartPointWithNoUpstreamAndKeepsUncommittedChanges(t *testing.T) {
+	_, clone := pushedClone(t)
+	runSteps(t, clone, [][]string{{"-C", clone, "commit", "--allow-empty", "--message", "Local"}})
+	writeFile(t, filepath.Join(clone, "edit.txt"), "edit\n")
+	repository := Repository{Dir: clone}
+
+	err := repository.CreateBranch(context.Background(), "feature", "origin/main")
+
+	branches, branchesErr := repository.Branches(context.Background())
+	want := Branch{Name: "feature", Current: true}
+	if err != nil || branchesErr != nil || !slices.Contains(branches, want) {
+		t.Fatalf("got %v, %+v (%v), want %+v", err, branches, branchesErr, want)
+	}
+	if head, start := revParse(t, clone, "HEAD"), revParse(t, clone, "origin/main"); head != start {
+		t.Fatalf("got HEAD %s, want origin/main %s", head, start)
+	}
+	if uncommitted := gitOutput(t, clone, "status", "--porcelain"); uncommitted != "?? edit.txt\n" {
+		t.Fatalf("got status %q, want the uncommitted edit.txt", uncommitted)
+	}
+}
+
+func TestCreateBranchRefusesAnInvalidOrTakenName(t *testing.T) {
+	for _, name := range []string{"main", "bad..name", "has space"} {
+		t.Run(name, func(t *testing.T) {
+			_, clone := pushedClone(t)
+
+			err := Repository{Dir: clone}.CreateBranch(context.Background(), name, "origin/main")
+
+			if err == nil {
+				t.Fatalf("got no error creating %q", name)
+			}
+		})
+	}
+}
+
 func TestDeleteBranchDeletesABranchWithChangesTheDefaultBranchLacks(t *testing.T) {
 	_, clone := pushedClone(t)
 	runSteps(t, clone, [][]string{{"-C", clone, "switch", "--create", "feature"}})

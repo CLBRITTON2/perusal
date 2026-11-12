@@ -5,6 +5,7 @@ import (
 	"errors"
 	"path"
 	"slices"
+	"strings"
 	"sync"
 
 	"charm.land/bubbles/v2/key"
@@ -124,6 +125,19 @@ func (r remoteBranchRequest) switchTo() tea.Msg {
 	return branchSwitchMsg{dir: r.repository.Dir, branch: r.remoteBranch.Name}
 }
 
+type newBranchRequest struct {
+	repository gitrepo.Repository
+	branch     string
+	start      string
+}
+
+func (r newBranchRequest) create() tea.Msg {
+	if err := r.repository.CreateBranch(context.Background(), r.branch, r.start); err != nil {
+		return popupFailureMsg{dir: r.repository.Dir, err: err}
+	}
+	return branchSwitchMsg{dir: r.repository.Dir, branch: r.branch}
+}
+
 func (r branchRequest) delete() tea.Msg {
 	return popupResult(r.repository.Dir, r.repository.DeleteBranch(context.Background(), r.branch), "deleted "+r.branch)
 }
@@ -175,6 +189,8 @@ func (m Model) updateBranches(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		return m.switchToSelectedBranch()
 	case key.Matches(msg, deleteBranchKey):
 		return m.openDeleteBranchPopup(), nil
+	case key.Matches(msg, newBranchKey):
+		return m.openNewBranchPopup()
 	case key.Matches(msg, fetchBranchesKey):
 		return m.withFooterNotice("fetching..."), repositoryRequest{repository: m.repository}.fetchBranches
 	}
@@ -240,6 +256,49 @@ func (m Model) openDeleteBranchPopup() Model {
 		run:         branchRequest{repository: m.repository, branch: row.branch.Name}.delete,
 		runningText: "deleting...",
 	})
+}
+
+// A new branch starts at origin's default branch and takes the uncommitted changes along, unlike a switch.
+func (m Model) openNewBranchPopup() (tea.Model, tea.Cmd) {
+	if m.branches.defaultBranch.Ref == "" {
+		return m.withFooterError("origin's default branch is unknown, so perusal has no start for a new branch"), nil
+	}
+	m.popup = popupState{kind: newBranchPopup, dir: m.repository.Dir}
+	m.branchNameInput.Reset()
+	return m, m.branchNameInput.Focus()
+}
+
+func (m Model) updateNewBranchPopup(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
+	if m.popup.running {
+		return m, nil
+	}
+	switch {
+	case key.Matches(msg, cancelKey):
+		return m.withPopupClosed(), nil
+	case key.Matches(msg, createBranchKey):
+		name := strings.TrimSpace(m.branchNameInput.Value())
+		if name == "" {
+			m.popup.err = "the name is required"
+			return m, nil
+		}
+		m.popup.running = true
+		m.popup.err = ""
+		return m, newBranchRequest{repository: m.repository, branch: name, start: m.branches.defaultBranch.Ref}.create
+	}
+	var cmd tea.Cmd
+	m.branchNameInput, cmd = m.branchNameInput.Update(msg)
+	return m, cmd
+}
+
+func (m Model) renderNewBranchPopup() string {
+	lines := []string{
+		titleStyle.Render("new branch from " + sanitizeText(m.branches.defaultBranch.Ref)),
+		renderField(m.branchNameInput.View(), true, m.fieldInnerWidth(), 1),
+	}
+	if len(m.status.Files) > 0 {
+		lines = append(lines, textStyle.Render("takes along "+pluralize(len(m.status.Files), "uncommitted file")))
+	}
+	return m.renderPopup(lines, "creating...", []key.Binding{createBranchKey, cancelKey})
 }
 
 func (m Model) branchCells(row branchRow) []string {

@@ -68,6 +68,7 @@ const (
 	rewordPopup
 	confirmPopup
 	keyListPopup
+	newBranchPopup
 )
 
 // confirmation is a confirm popup's text and the git run its confirmKey starts, both fixed when the popup opens.
@@ -185,6 +186,7 @@ type Model struct {
 	summaryInput       textinput.Model
 	descriptionBox     textarea.Model
 	editingDescription bool
+	branchNameInput    textinput.Model
 }
 
 func New(findRepositories RepositoryFinder, openRepository RepositoryOpener) Model {
@@ -197,6 +199,9 @@ func New(findRepositories RepositoryFinder, openRepository RepositoryOpener) Mod
 	descriptionBox.Prompt = ""
 	searchInput := textinput.New()
 	searchInput.Prompt = "/"
+	branchNameInput := textinput.New()
+	branchNameInput.Placeholder = "Name"
+	branchNameInput.Prompt = ""
 	helpView := help.New()
 	helpView.ShortSeparator = "  "
 	helpView.Styles.ShortKey = helpKeyStyle
@@ -229,6 +234,7 @@ func New(findRepositories RepositoryFinder, openRepository RepositoryOpener) Mod
 		help:               helpView,
 		summaryInput:       summaryInput,
 		descriptionBox:     descriptionBox,
+		branchNameInput:    branchNameInput,
 	}
 }
 
@@ -362,6 +368,10 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if msg.dir != m.repository.Dir {
 			return m.withFooterNotice("switched " + msg.dir + " to " + msg.branch), nil
 		}
+		// A new branch arrives with its popup still open.
+		if m.popup.kind == newBranchPopup {
+			m = m.withPopupClosed()
+		}
 		m = m.withModeClosed(modeBranches).withFooterNotice("switched to " + msg.branch)
 		return m, m.reloadStatus()
 	case branchesFetchedMsg:
@@ -425,6 +435,8 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m.updateConfirmPopup(msg)
 		case m.popup.kind == keyListPopup:
 			return m.updateKeyList(msg)
+		case m.popup.kind == newBranchPopup:
+			return m.updateNewBranchPopup(msg)
 		case m.mode == modeOverview:
 			return m.updateOverview(msg)
 		case m.mode == modeBranches:
@@ -453,6 +465,11 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	}
 	if m.popup.editsMessage() {
 		return m.updateFocusedField(msg)
+	}
+	if m.popup.kind == newBranchPopup {
+		var cmd tea.Cmd
+		m.branchNameInput, cmd = m.branchNameInput.Update(msg)
+		return m, cmd
 	}
 	if m.mode == modeSearching {
 		var cmd tea.Cmd
@@ -737,6 +754,7 @@ func (m Model) withPopupClosed() Model {
 	m.popup = popupState{}
 	m.summaryInput.Blur()
 	m.descriptionBox.Blur()
+	m.branchNameInput.Blur()
 	return m
 }
 
@@ -1284,6 +1302,8 @@ func (m Model) View() tea.View {
 		view = tea.NewView(m.overlayPopup(m.renderScreen(), m.renderConfirmPopup()))
 	case m.popup.kind == keyListPopup:
 		view = tea.NewView(m.overlayPopup(m.renderScreen(), m.renderKeyListPopup()))
+	case m.popup.kind == newBranchPopup:
+		view = tea.NewView(m.overlayPopup(m.renderScreen(), m.renderNewBranchPopup()))
 	default:
 		view = tea.NewView(m.renderScreen())
 	}
