@@ -126,16 +126,12 @@ working in, and switches as the agent moves between them. It reads
   anything outside it.
 - `agentHost`, when set, is the ssh host the agent works on, such as a VM, with `focusFile` there and its own clone of
   each repository at the same path under `agentDir` as yours under `ownerDir`. Its ssh login shell must be PowerShell
-  (5.1 or 7), and ssh must log in without a prompt. Every 2 seconds perusal reads `focusFile` over ssh, commits the agent's work tree of
-  each focused repository there to `refs/perusal/snapshot` (through a temporary index, leaving the agent's own index
-  alone), fetches it, and checks it out into your copy with `git read-tree -m -u`, leaving your index untouched. So
-  the agent's edits show up in your copy as unstaged changes. git refuses a snapshot that would overwrite a file you
-  edited since the last one, shown in the footer.
-  When your `HEAD` or branch moves (a commit, pull or branch switch), perusal pushes your `HEAD` to
-  `refs/perusal/owner` in the agent's copy and moves that copy onto it: it merges the agent's uncommitted edits onto
-  your commit (yours wins where they conflict), moves its branch and `HEAD` there and resets its index. So edits you
-  committed turn clean there, and ones you did not stay uncommitted. It refuses to move the agent's copy off a commit
-  your copy lacks, such as one the agent made.
+  (5.1 or 7), and ssh must log in without a prompt. perusal reads `focusFile` over ssh, and when the agent commits in
+  a focused repository, fetches the commit and moves your work tree from the agent's commit it last took on that
+  branch (or where the branch left your `HEAD`, the first time) to the new one with `git read-tree -m -u`, leaving
+  your index and `HEAD` untouched. So the agent's commits show up in your copy as unstaged changes, and committing
+  them yourself changes nothing for the next one. The agent's uncommitted edits stay on the agent host. git refuses a
+  commit that would overwrite a file you edited since the last take, shown in the footer until a take succeeds.
 
 The overview (`o`) lists every repository under `ownerDir` with its branch, its uncommitted file count, how far it is
 ahead of and behind its upstream, and how far it is behind `origin`'s default branch. The repositories the focus file

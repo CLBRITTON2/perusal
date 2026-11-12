@@ -17,8 +17,8 @@ import (
 	"github.com/CLBRITTON2/perusal/internal/ui"
 )
 
-// The longest a wait for a change on the VM lasts. Each wait ends with a focus read and a HEAD check of every focused
-// repository, and only a change starts the snapshot, sync and mirror.
+// The longest a wait for a change on the VM lasts. Each wait ends with a focus read, and only a change reads the
+// agent's HEADs and takes its new commits.
 const agentHostWaitTimeout = 2 * time.Second
 
 const followUsage = "  perusal follow                  review the repositories the agent's focus file names\n"
@@ -57,7 +57,7 @@ func follow(rules focus.Rules) (followErr error) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	var results <-chan focus.Result
-	var mirrorFailures <-chan string
+	var takeFailures <-chan string
 	if rules.AgentHost == "" {
 		watched, err := focus.Follow(ctx, rules)
 		if err != nil {
@@ -71,7 +71,7 @@ func follow(rules focus.Rules) (followErr error) {
 			cancel()
 			followErr = errors.Join(followErr, session.Close())
 		}()
-		results, mirrorFailures = focus.FollowAgentHost(ctx, rules, session, agentHostWaitTimeout)
+		results, takeFailures = focus.FollowAgentHost(ctx, rules, session, agentHostWaitTimeout)
 	}
 	statePath, err := viewStatePath()
 	if err != nil {
@@ -86,15 +86,15 @@ func follow(rules focus.Rules) (followErr error) {
 		return err
 	}
 	program := tea.NewProgram(model)
-	go forwardResults(program, results, mirrorFailures, rules.FocusFile)
+	go forwardResults(program, results, takeFailures, rules.FocusFile)
 	if err := runKeepingViewState(program, statePath); err != nil {
 		return fmt.Errorf("run perusal following %s: %w", rules.FocusFile, err)
 	}
 	return nil
 }
 
-// forwardResults returns when results closes. mirrorFailures is nil when the agent works locally, which blocks its case.
-func forwardResults(program *tea.Program, results <-chan focus.Result, mirrorFailures <-chan string, focusFile string) {
+// forwardResults returns when results closes. takeFailures is nil when the agent works locally, which blocks its case.
+func forwardResults(program *tea.Program, results <-chan focus.Result, takeFailures <-chan string, focusFile string) {
 	for {
 		select {
 		case result, open := <-results:
@@ -107,12 +107,12 @@ func forwardResults(program *tea.Program, results <-chan focus.Result, mirrorFai
 			} else {
 				program.Send(result.Focus)
 			}
-		case failure, open := <-mirrorFailures:
+		case failure, open := <-takeFailures:
 			if !open {
-				mirrorFailures = nil
+				takeFailures = nil
 				continue
 			}
-			program.Send(ui.MirrorFailure{Reason: failure})
+			program.Send(ui.TakeFailure{Reason: failure})
 		}
 	}
 }

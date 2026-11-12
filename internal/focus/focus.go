@@ -276,7 +276,7 @@ func checkedGitDir(rules Rules, workTree string) (string, error) {
 	})
 }
 
-// The agent on AgentHost writes only its own clone there, and the mirror's fetch refuses a tree naming .git.
+// The agent on AgentHost writes only its own clone there, and the take's fetch refuses a tree naming .git.
 func verifyAgentCannotWriteGitDir(rules Rules, gitDir string) error {
 	if rules.AgentHost != "" {
 		return nil

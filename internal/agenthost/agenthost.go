@@ -98,8 +98,8 @@ func (session *Session) Run(ctx context.Context, script string) ([]byte, error) 
 
 // WaitForChange waits up to timeout for a change to file or to anything under one of dirs, all Windows paths on the
 // host. The first wait on a new set of paths, as in a new shell, reports a change, since nothing watched before it.
-// Changes inside a .git's objects, logs and refs\perusal do not count, since a snapshot writes them. A watcher whose
-// buffer overflowed counts as a change. A dir missing on the host is not watched.
+// Changes inside a .git's objects and logs do not count, since a commit that writes them also moves a ref. A watcher
+// whose buffer overflowed counts as a change. A dir missing on the host is not watched.
 func (session *Session) WaitForChange(ctx context.Context, dirs []string, file string,
 	timeout time.Duration) (bool, error) {
 	quotedDirs := make([]string, len(dirs))
@@ -110,7 +110,7 @@ func (session *Session) WaitForChange(ctx context.Context, dirs []string, file s
 	if separator < 0 {
 		return false, fmt.Errorf("ssh %s: watch %s: want a full path", session.host, file)
 	}
-	// Events queue in the shell between waits, so a change made while a snapshot ran still counts.
+	// Events queue in the shell between waits, so a change made while a take ran still counts.
 	script := strings.Join([]string{
 		"$watchKey = " + QuotedString(file+"|"+strings.Join(dirs, "|")),
 		"$changed = $global:perusalWatchKey -ne $watchKey",
@@ -133,12 +133,12 @@ func (session *Session) WaitForChange(ctx context.Context, dirs []string, file s
 		"while (-not $changed) { " +
 			"$seconds = [int][Math]::Ceiling(($deadline - (Get-Date)).TotalSeconds); if ($seconds -le 0) { break }; " +
 			"if ($null -eq (Wait-Event -Timeout $seconds)) { break }; " +
-			// Lets the rest of a burst, such as a save or a checkout, land before the snapshot.
+			// Lets the rest of a burst, such as a commit or a checkout, land before the take.
 			"Start-Sleep -Milliseconds 200; " +
 			"foreach ($fileEvent in @(Get-Event)) { Remove-Event -EventIdentifier $fileEvent.EventIdentifier; " +
 			"$sourceArgs = $fileEvent.SourceEventArgs; " +
 			`if ($sourceArgs -is [IO.ErrorEventArgs] -or ` +
-			`$sourceArgs.FullPath -notmatch '\\\.git\\(objects|logs|refs\\perusal)(\\|$)') { $changed = $true } } }`,
+			`$sourceArgs.FullPath -notmatch '\\\.git\\(objects|logs)(\\|$)') { $changed = $true } } }`,
 		"if ($changed) { 'changed' } else { 'unchanged' }",
 	}, "; ")
 	output, err := session.Run(ctx, script)

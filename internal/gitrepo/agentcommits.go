@@ -3,11 +3,18 @@ package gitrepo
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"os"
+	"path/filepath"
+	"regexp"
 	"strings"
 
 	"github.com/CLBRITTON2/perusal/internal/agenthost"
 )
+
+// A SHA-1 or SHA-256 object name, as git prints it in full.
+var objectName = regexp.MustCompile(`^[0-9a-f]{40}([0-9a-f]{24})?$`)
 
 // AgentHead is the commit the agent's copy has checked out and the ref HEAD points to there (empty when detached), or
 // the error that stopped reading them.
@@ -69,8 +76,11 @@ func agentHeadsScript(dirs []string) string {
 	for index, dir := range dirs {
 		quotedDirs[index] = agenthost.QuotedString(dir)
 	}
+	// Exit codes are checked by hand: with $ErrorActionPreference Stop, PowerShell 5.1 turns git's warnings on a
+	// redirected stderr into errors.
 	return strings.Join([]string{
-		agentScriptPrelude(),
+		"function Invoke-Git { $output = git -C $repoDir @args; if ($LASTEXITCODE -ne 0) " +
+			"{ throw ('git ' + ($args -join ' ') + ' exited with ' + $LASTEXITCODE) }; $output }",
 		"$heads = @(foreach ($repoDir in @(" + strings.Join(quotedDirs, ", ") + ")) { try { " +
 			"$head = Invoke-Git rev-parse HEAD; $branch = [string](git -C $repoDir symbolic-ref --quiet HEAD); " +
 			"[pscustomobject]@{ dir = $repoDir; head = $head; branch = $branch; error = '' } " +
@@ -87,9 +97,10 @@ func agentTakenRef(branch string) string {
 	return "refs/perusal/taken/" + strings.TrimPrefix(branch, "refs/")
 }
 
-// TakeAgentCommits brings the agent's commits on head's branch into r's work tree as unstaged changes, leaving r's index
-// and HEAD as they are. It fetches head's branch from remote, a git URL of the agent's copy, and moves r's work tree from
-// the agent's commit it last took on that branch, or the merge base with r's HEAD the first time, to the fetched one.
+// TakeAgentCommits brings the agent's commits on head's branch into r's work tree as unstaged changes, leaving r's
+// index and HEAD as they are. It fetches head's branch from remote, a git URL of the agent's copy, and moves r's work
+// tree from the agent's commit it last took on that branch, or the merge base with r's HEAD the first time, to the
+// fetched one.
 // It reports whether the work tree changed. git refuses the whole move when a file it changes differs from the commit
 // it moves from, as one the owner edited does, and the next call retries it.
 func (r Repository) TakeAgentCommits(ctx context.Context, remote string, head AgentHead) (bool, error) {
@@ -150,4 +161,39 @@ func headName(branch string) string {
 		return "detached HEAD"
 	}
 	return strings.TrimPrefix(branch, "refs/heads/")
+}
+
+// moveWorkTree moves r's work tree from commit from to commit to, leaving r's index as it is. A temporary index holds
+// r's work tree, so read-tree updates a file that still matches from, keeps one that already matches to, as after the
+// owner commits or pulls, and refuses one that matches neither.
+func (r Repository) moveWorkTree(ctx context.Context, from string, to string) (moveErr error) {
+	indexDir, err := os.MkdirTemp("", "perusal-take-")
+	if err != nil {
+		return fmt.Errorf("create a directory for the temporary index of %s: %w", r.Dir, err)
+	}
+	defer func() {
+		if err := os.RemoveAll(indexDir); err != nil {
+			moveErr = errors.Join(moveErr, fmt.Errorf("remove the temporary index of %s: %w", r.Dir, err))
+		}
+	}()
+	temporaryIndex := []string{"GIT_INDEX_FILE=" + filepath.Join(indexDir, "index")}
+	for _, args := range [][]string{
+		{"read-tree", from},
+		{"add", "--all"},
+		{"read-tree", "-m", "-u", from, to},
+	} {
+		if _, err := runGit(ctx, r, args, "", temporaryIndex); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// optionalRevParse is the commit ref names, or empty when ref does not exist.
+func (r Repository) optionalRevParse(ctx context.Context, ref string) (string, error) {
+	hasRef, err := r.gitSucceeds(ctx, "rev-parse", "--verify", "--quiet", ref+"^{commit}")
+	if err != nil || !hasRef {
+		return "", err
+	}
+	return r.revParse(ctx, ref)
 }

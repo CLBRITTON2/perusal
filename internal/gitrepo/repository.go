@@ -320,12 +320,8 @@ func (r Repository) Pull(ctx context.Context) error {
 	return r.run(ctx, "pull", "--ff-only", "--no-rebase")
 }
 
-// Switch creates branch from the remote branch of that name when it exists only there. It leaves the agent's mirrored
-// edits behind.
+// Switch creates branch from the remote branch of that name when it exists only there.
 func (r Repository) Switch(ctx context.Context, branch string) error {
-	if err := r.removeMirroredAgentEdits(ctx); err != nil {
-		return err
-	}
 	return r.run(ctx, "switch", branch)
 }
 

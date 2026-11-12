@@ -24,19 +24,19 @@ func TestSession(t *testing.T) {
 				startsANewShellAfterAScriptTimesOut(t, shellName)
 			})
 			t.Run("refusesAResultOverOneMebibyte", func(t *testing.T) { refusesAResultOverOneMebibyte(t, shellName) })
-			t.Run("waitForChangeReportsAWriteToTheFileOrUnderADirButNotASnapshot", func(t *testing.T) {
-				waitForChangeReportsAWriteToTheFileOrUnderADirButNotASnapshot(t, shellName)
+			t.Run("waitForChangeReportsAWriteToTheFileOrUnderADirButNotToGitObjects", func(t *testing.T) {
+				waitForChangeReportsAWriteToTheFileOrUnderADirButNotToGitObjects(t, shellName)
 			})
 		})
 	}
 }
 
-func waitForChangeReportsAWriteToTheFileOrUnderADirButNotASnapshot(t *testing.T, shellName string) {
+func waitForChangeReportsAWriteToTheFileOrUnderADirButNotToGitObjects(t *testing.T, shellName string) {
 	session := localSession(t, shellName)
 	focusFile := filepath.Join(t.TempDir(), "focus")
 	workTree := t.TempDir()
-	snapshotRefs := filepath.Join(workTree, ".git", "refs", "perusal")
-	if err := os.MkdirAll(snapshotRefs, 0o755); err != nil {
+	objects := filepath.Join(workTree, ".git", "objects")
+	if err := os.MkdirAll(objects, 0o755); err != nil {
 		t.Fatal(err)
 	}
 	waitForChange := func(write func()) bool {
@@ -57,13 +57,13 @@ func waitForChangeReportsAWriteToTheFileOrUnderADirButNotASnapshot(t *testing.T,
 	}
 
 	first := waitForChange(func() {})
-	snapshot := waitForChange(writeTo(filepath.Join(snapshotRefs, "snapshot")))
+	object := waitForChange(writeTo(filepath.Join(objects, "object")))
 	focus := waitForChange(writeTo(focusFile))
 	edit := waitForChange(writeTo(filepath.Join(workTree, "a.txt")))
 
-	if !first || snapshot || !focus || !edit {
-		t.Fatalf("got first wait %t, snapshot %t, focus file %t, edit %t, want only the snapshot unchanged", first,
-			snapshot, focus, edit)
+	if !first || object || !focus || !edit {
+		t.Fatalf("got first wait %t, object %t, focus file %t, edit %t, want only the object unchanged", first,
+			object, focus, edit)
 	}
 }
 

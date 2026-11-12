@@ -28,9 +28,9 @@ type FocusRejection struct {
 	Reason string
 }
 
-// MirrorFailure goes to the footer and keeps the review, since the owner's copy still holds the last mirrored edits.
-// An empty Reason means every mirror succeeds again.
-type MirrorFailure struct {
+// TakeFailure goes to the footer and keeps the review, since the owner's copy still holds the last taken commit.
+// An empty Reason means every take succeeds again.
+type TakeFailure struct {
 	Reason string
 }
 
