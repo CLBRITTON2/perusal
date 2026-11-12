@@ -16,13 +16,15 @@ var ErrInvalidConfig = errors.New("invalid perusal config")
 
 // AgentDir and OwnerDir are one directory, as each account reaches it. AgentHost, when set, is the ssh host the agent
 // works on, with FocusFile there and its own copy of each repository at the same path under AgentDir as the owner's
-// under OwnerDir, and empty when the agent works on this machine.
+// under OwnerDir, and empty when the agent works on this machine. TakeAgentCommits, which needs AgentHost, brings the
+// agent's commits into the owner's work tree as unstaged changes, in place of mirroring its uncommitted edits.
 type Config struct {
-	AgentAccount string `json:"agentAccount"`
-	FocusFile    string `json:"focusFile"`
-	AgentDir     string `json:"agentDir"`
-	OwnerDir     string `json:"ownerDir"`
-	AgentHost    string `json:"agentHost"`
+	AgentAccount     string `json:"agentAccount"`
+	FocusFile        string `json:"focusFile"`
+	AgentDir         string `json:"agentDir"`
+	OwnerDir         string `json:"ownerDir"`
+	AgentHost        string `json:"agentHost"`
+	TakeAgentCommits bool   `json:"takeAgentCommits"`
 }
 
 func LoadConfig(path string) (Config, error) {
@@ -39,6 +41,10 @@ func LoadConfig(path string) (Config, error) {
 	if config.AgentAccount == "" && config.AgentHost == "" {
 		return Config{}, fmt.Errorf("%w: %s sets neither agentAccount nor agentHost, want the account the agent runs as "+
 			"here or the ssh host it works on", ErrInvalidConfig, path)
+	}
+	if config.TakeAgentCommits && config.AgentHost == "" {
+		return Config{}, fmt.Errorf("%w: %s sets takeAgentCommits without agentHost, the host the commits come from",
+			ErrInvalidConfig, path)
 	}
 	// ssh would read a leading dash as an option, and git a colon as the end of the host in host:path.
 	if strings.HasPrefix(config.AgentHost, "-") || strings.Contains(config.AgentHost, ":") {

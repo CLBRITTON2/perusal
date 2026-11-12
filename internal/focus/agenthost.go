@@ -19,7 +19,8 @@ import (
 // FollowAgentHost waits through session, up to waitTimeout at a time, for a change to the focus file on rules.AgentHost
 // or to the agent's copy of a focused repository, then reads the focus file and sends a Result when what it reads
 // changed. When the agent's side or the owner's HEAD of a repository changed, it moves the agent's copy of every
-// focused repository onto the owner's HEAD and mirrors it into the owner's. When the failed mirrors change, it sends
+// focused repository onto the owner's HEAD and mirrors it into the owner's, or with rules.TakeAgentCommits leaves the
+// agent's copy alone and takes its new commits into the owner's work tree. When the failed mirrors change, it sends
 // their errors joined on the second channel, and an empty string once every mirror succeeds again. Both channels close
 // when ctx ends.
 func FollowAgentHost(ctx context.Context, rules Rules, session *agenthost.Session,
@@ -99,8 +100,9 @@ func pollAgentHost(ctx context.Context, rules Rules, session *agenthost.Session,
 			continue
 		}
 		lastOwnerHeads = ownerHeads
-		snapshots, err := gitrepo.SnapshotAgentCopies(ctx, session.Run, focusedAgentDirs)
-		if err != nil {
+		if rules.TakeAgentCommits {
+			failures = append(failures, takeAgentCommits(ctx, rules, session, focused.Repositories, focusedAgentDirs)...)
+		} else if snapshots, err := gitrepo.SnapshotAgentCopies(ctx, session.Run, focusedAgentDirs); err != nil {
 			failures = append(failures, err.Error())
 		} else {
 			mirrorErrs := make([]error, len(focused.Repositories))
@@ -142,6 +144,31 @@ func pollAgentHost(ctx context.Context, rules Rules, session *agenthost.Session,
 			}
 		}
 	}
+}
+
+// takeAgentCommits brings the agent's new commits in each focused repository into the owner's, leaving the agent's copies
+// as they are, and returns what failed.
+func takeAgentCommits(ctx context.Context, rules Rules, session *agenthost.Session, repositories []gitrepo.Repository,
+	agentDirs []string) []string {
+	heads, err := gitrepo.ReadAgentHeads(ctx, session.Run, agentDirs)
+	if err != nil {
+		return []string{err.Error()}
+	}
+	takeErrs := make([]error, len(repositories))
+	var group sync.WaitGroup
+	for index, repository := range repositories {
+		group.Go(func() {
+			_, takeErrs[index] = repository.TakeAgentCommits(ctx, rules.AgentHost+":"+agentDirs[index], heads[index])
+		})
+	}
+	group.Wait()
+	failures := []string{}
+	for _, takeErr := range takeErrs {
+		if takeErr != nil {
+			failures = append(failures, takeErr.Error())
+		}
+	}
+	return failures
 }
 
 // agentCopyDirs are the agent's copies of repositories on the agent host, each at the same path under rules.AgentDir as

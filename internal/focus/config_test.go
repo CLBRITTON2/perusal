@@ -26,6 +26,8 @@ func TestLoadConfig(t *testing.T) {
 			"agentHost": "agent-vm"}`, nil},
 		{"refusesAnAgentHostSshWouldReadAsAnOption", `{"agentAccount": "claude", "focusFile": "C:\\f",
 			"agentDir": "C:\\a", "ownerDir": "C:\\o", "agentHost": "-oProxyCommand=calc"}`, ErrInvalidConfig},
+		{"refusesTakingAgentCommitsWithoutAnAgentHost", `{"agentAccount": "claude", "focusFile": "C:\\f",
+			"agentDir": "C:\\a", "ownerDir": "C:\\o", "takeAgentCommits": true}`, ErrInvalidConfig},
 	}
 	for _, testCase := range testCases {
 		t.Run(testCase.name, func(t *testing.T) {
