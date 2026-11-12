@@ -104,8 +104,11 @@ func (r Repository) RemoteBranches(ctx context.Context) ([]RemoteBranch, error) 
 }
 
 // SwitchTracking creates the local branch for ref and switches to it, where a plain switch is ambiguous when two
-// remotes have a branch of that name.
+// remotes have a branch of that name. It leaves the agent's mirrored edits behind.
 func (r Repository) SwitchTracking(ctx context.Context, ref string) error {
+	if err := r.removeMirroredAgentEdits(ctx); err != nil {
+		return err
+	}
 	return r.run(ctx, "switch", "--track", ref)
 }
 

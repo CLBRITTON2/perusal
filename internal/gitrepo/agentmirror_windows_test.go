@@ -69,6 +69,8 @@ func TestSyncAgentCopy(t *testing.T) {
 	t.Run("cleansWhatTheOwnerCommitted", cleansWhatTheOwnerCommitted)
 	t.Run("keepsTheAgentsEditsOnTheOwnersNewCommit", keepsTheAgentsEditsOnTheOwnersNewCommit)
 	t.Run("followsTheOwnersBranchSwitch", followsTheOwnersBranchSwitch)
+	t.Run("keepsTheAgentsEditsOnTheBranchTheyWereMadeOn", keepsTheAgentsEditsOnTheBranchTheyWereMadeOn)
+	t.Run("followsAnOwnerSwitchMadeOutsidePerusal", followsAnOwnerSwitchMadeOutsidePerusal)
 	t.Run("leavesTheAgentOnACommitTheOwnerLacks", leavesTheAgentOnACommitTheOwnerLacks)
 }
 
@@ -214,6 +216,79 @@ func followsTheOwnersBranchSwitch(t *testing.T) {
 	assertChangedFiles(t, agent, []FileStatus{})
 	assertFileHolds(t, filepath.Join(agent, "side.txt"), "side\n")
 	assertSameHead(t, owner, agent)
+}
+
+// side deletes the a.txt the agent edits on main, which a merge of the edits onto side cannot resolve.
+func keepsTheAgentsEditsOnTheBranchTheyWereMadeOn(t *testing.T) {
+	owner, agent := ownerAndAgentCopies(t)
+	runSteps(t, owner, [][]string{
+		{"switch", "--create", "side"},
+		{"rm", "--quiet", "a.txt"},
+		{"commit", "--message", "Drop a.txt"},
+		{"switch", "main"},
+	})
+	writeFile(t, filepath.Join(agent, "a.txt"), "agent\n")
+	writeFile(t, filepath.Join(agent, "new.txt"), "new\n")
+	if err := syncAndMirror(t, owner, agent); err != nil {
+		t.Fatal(err)
+	}
+	ownerCopy := Repository{Dir: owner}
+	if err := ownerCopy.Switch(context.Background(), "side"); err != nil {
+		t.Fatal(err)
+	}
+
+	sideErr := syncAndMirror(t, owner, agent)
+
+	requireMirrored(t, sideErr)
+	assertChangedFiles(t, owner, []FileStatus{})
+	assertChangedFiles(t, agent, []FileStatus{})
+	assertSameHead(t, owner, agent)
+	if err := ownerCopy.Switch(context.Background(), "main"); err != nil {
+		t.Fatal(err)
+	}
+
+	mainErr := syncAndMirror(t, owner, agent)
+
+	edited := []FileStatus{
+		{Path: "a.txt", IndexStatus: ' ', WorktreeStatus: 'M'},
+		{Path: "new.txt", IndexStatus: '?', WorktreeStatus: '?'},
+	}
+	requireMirrored(t, mainErr)
+	assertChangedFiles(t, owner, edited)
+	assertChangedFiles(t, agent, edited)
+	assertFileHolds(t, filepath.Join(owner, "a.txt"), "agent\n")
+	assertSameHead(t, owner, agent)
+}
+
+// A switch made with git rather than perusal leaves the last mirror on the old branch. side and main differ in b.txt,
+// and the agent's edit to it, saved for side, comes back with the switch.
+func followsAnOwnerSwitchMadeOutsidePerusal(t *testing.T) {
+	owner, agent := ownerAndAgentCopies(t)
+	writeFile(t, filepath.Join(owner, "b.txt"), "side\n")
+	runSteps(t, owner, [][]string{
+		{"switch", "--create", "side"},
+		{"commit", "--all", "--message", "Side b.txt"},
+	})
+	if err := syncAndMirror(t, owner, agent); err != nil {
+		t.Fatal(err)
+	}
+	writeFile(t, filepath.Join(agent, "b.txt"), "agent\n")
+	if err := syncAndMirror(t, owner, agent); err != nil {
+		t.Fatal(err)
+	}
+	if err := (Repository{Dir: owner}).Switch(context.Background(), "main"); err != nil {
+		t.Fatal(err)
+	}
+	if err := syncAndMirror(t, owner, agent); err != nil {
+		t.Fatal(err)
+	}
+	runSteps(t, owner, [][]string{{"switch", "side"}})
+
+	mirrorErr := syncAndMirror(t, owner, agent)
+
+	requireMirrored(t, mirrorErr)
+	assertChangedFiles(t, owner, []FileStatus{{Path: "b.txt", IndexStatus: ' ', WorktreeStatus: 'M'}})
+	assertFileHolds(t, filepath.Join(owner, "b.txt"), "agent\n")
 }
 
 func leavesTheAgentOnACommitTheOwnerLacks(t *testing.T) {

@@ -90,10 +90,12 @@ func SnapshotAgentCopies(ctx context.Context, run func(ctx context.Context, scri
 }
 
 // SyncAgentCopy returns the snapshot commit to mirror. When the agent's HEAD or branch in snapshot differs from r's,
-// as after the owner commits, pulls or switches branches, it pushes r's HEAD to refs/perusal/owner in agent, moves
-// agent's work tree onto it with the agent's uncommitted edits merged in (r's side wins where the two conflict), moves
-// agent's HEAD and branch there, resets agent's index to it, and snapshots again. It refuses to move agent off a commit
-// r lacks, such as one the agent made, so no agent commit is dropped.
+// as after the owner commits, pulls or switches branches, it pushes r's HEAD to refs/perusal/owner in agent and moves
+// agent's work tree, HEAD, branch and index onto it, then snapshots again. On the same branch the agent's uncommitted
+// edits come along, merged in (r's side wins where the two conflict). On a branch switch they stay behind in
+// agentEditsRef of the old branch, and the edits saved for the new branch, if any, come back merged onto it, so no edit
+// crosses branches. It refuses to move agent off a commit r lacks, such as one the agent made, so no agent commit is
+// dropped.
 func (r Repository) SyncAgentCopy(ctx context.Context, agent AgentCopy, snapshot AgentSnapshot) (string, error) {
 	if snapshot.Err != nil {
 		return "", snapshot.Err
@@ -119,7 +121,7 @@ func (r Repository) SyncAgentCopy(ctx context.Context, agent AgentCopy, snapshot
 	if err := r.run(ctx, "push", "--quiet", "--no-verify", agent.Remote, "+"+head+":refs/perusal/owner"); err != nil {
 		return "", err
 	}
-	output, err := agent.Run(ctx, agentMoveScript(agent.Dir, snapshot.Head, head, branch))
+	output, err := agent.Run(ctx, agentMoveScript(agent.Dir, snapshot.Head, snapshot.Branch, head, branch))
 	if err != nil {
 		return "", fmt.Errorf("move the agent's copy of %s onto %s: %w", r.Dir, head, err)
 	}
@@ -171,10 +173,19 @@ func agentSnapshotScript(dirs []string) string {
 	}, "; ")
 }
 
+// agentEditsRef holds the agent's uncommitted edits on branch (empty when detached) while another branch is checked
+// out, as a snapshot commit whose parent is the commit they were made on.
+func agentEditsRef(branch string) string {
+	if branch == "" {
+		return "refs/perusal/edits/detached"
+	}
+	return "refs/perusal/edits/" + strings.TrimPrefix(branch, "refs/")
+}
+
 // agentMoveScript checks that the agent's HEAD is still from, so a commit made since the snapshot is not dropped. The
-// merge runs on a fresh snapshot, and the refresh of the temporary index lets read-tree refuse a file the agent wrote
+// move starts from a fresh snapshot, and the refresh of the temporary index lets read-tree refuse a file the agent wrote
 // since then. It prints the snapshot commit taken after the move.
-func agentMoveScript(dir string, from string, to string, branch string) string {
+func agentMoveScript(dir string, from string, fromBranch string, to string, branch string) string {
 	var moveHead string
 	if branch == "" {
 		moveHead = "$null = Invoke-Git update-ref --no-deref HEAD " + to
@@ -182,19 +193,37 @@ func agentMoveScript(dir string, from string, to string, branch string) string {
 		moveHead = "$null = Invoke-Git update-ref " + agenthost.QuotedString(branch) + " " + to + "; " +
 			"$null = Invoke-Git symbolic-ref HEAD " + agenthost.QuotedString(branch)
 	}
-	return strings.Join([]string{
+	steps := []string{
 		agentScriptPrelude(),
 		"$repoDir = " + agenthost.QuotedString(dir),
 		"$head = Invoke-Git rev-parse HEAD",
 		"if ($head -ne '" + from + "') { throw ('HEAD moved to ' + $head + ' since the snapshot') }",
 		"$snapshot = Save-Snapshot",
-		"$merged = @(Invoke-Git merge-tree --write-tree --merge-base " + from + " -X theirs $snapshot " + to + ")[0]",
-		"Invoke-WithTemporaryIndex { $null = Invoke-Git read-tree $snapshot; " +
-			"$null = Invoke-Git update-index -q --refresh; $null = Invoke-Git read-tree -m -u $snapshot $merged }",
+	}
+	leftRef := agenthost.QuotedString(agentEditsRef(fromBranch))
+	savedRef := agenthost.QuotedString(agentEditsRef(branch))
+	if fromBranch == branch {
+		steps = append(steps, "$target = @(Invoke-Git merge-tree --write-tree --merge-base "+from+" -X theirs $snapshot "+
+			to+")[0]")
+	} else {
+		steps = append(steps,
+			// An edit-free snapshot drops the ref, so a stale set of edits never comes back.
+			"if ((Invoke-Git rev-parse ($snapshot + '^{tree}')) -ne (Invoke-Git rev-parse '"+from+"^{tree}')) "+
+				"{ $null = Invoke-Git update-ref "+leftRef+" $snapshot } "+
+				"else { $null = Invoke-Git update-ref -d "+leftRef+" }",
+			"$saved = [string](git -C $repoDir rev-parse --verify --quiet ("+savedRef+" + '^{commit}'))",
+			"if ($saved) { $target = @(Invoke-Git merge-tree --write-tree --merge-base ($saved + '^') -X theirs $saved "+
+				to+")[0] } else { $target = Invoke-Git rev-parse '"+to+"^{tree}' }")
+	}
+	steps = append(steps,
+		"Invoke-WithTemporaryIndex { $null = Invoke-Git read-tree $snapshot; "+
+			"$null = Invoke-Git update-index -q --refresh; $null = Invoke-Git read-tree -m -u $snapshot $target }",
 		moveHead,
-		"$null = Invoke-Git reset --quiet",
-		"Save-Snapshot",
-	}, "; ")
+		"$null = Invoke-Git reset --quiet")
+	if fromBranch != branch {
+		steps = append(steps, "if ($saved) { $null = Invoke-Git update-ref -d "+savedRef+" }")
+	}
+	return strings.Join(append(steps, "Save-Snapshot"), "; ")
 }
 
 // Exit codes are checked by hand: with $ErrorActionPreference Stop, PowerShell 5.1 turns git's warnings on a
@@ -222,11 +251,11 @@ func agentScriptPrelude() string {
 }
 
 // MirrorAgentWorkTree fetches refs/perusal/snapshot from remote, a git URL of the agent's copy of r, unless the last
-// fetch already got snapshotCommit, and moves r's work tree from the snapshot it last mirrored, or HEAD the first time,
-// to the fetched one. r's index stays as it is, so the agent's edits show as unstaged changes. It refuses a snapshot
-// taken on another commit than r's HEAD, and git refuses to overwrite a file that differs from both the last mirrored
-// snapshot and the fetched one, as one the owner edited does.
-func (r Repository) MirrorAgentWorkTree(ctx context.Context, remote string, snapshotCommit string) (mirrorErr error) {
+// fetch already got snapshotCommit, and moves r's work tree from the snapshot it last mirrored, or HEAD the first time
+// and after HEAD moved without perusal, to the fetched one. r's index stays as it is, so the agent's edits show as
+// unstaged changes. It refuses a snapshot taken on another commit than r's HEAD, and git refuses to overwrite a file
+// that differs from both the last mirrored snapshot and the fetched one, as one the owner edited does.
+func (r Repository) MirrorAgentWorkTree(ctx context.Context, remote string, snapshotCommit string) error {
 	lastFetched, err := r.optionalRevParse(ctx, "refs/perusal/agent-fetched")
 	if err != nil {
 		return err
@@ -258,37 +287,65 @@ func (r Repository) MirrorAgentWorkTree(ctx context.Context, remote string, snap
 	if err != nil {
 		return err
 	}
-	var mirrored string
+	// A mirror on another commit is stale, left by a switch, commit or pull made outside perusal, which keeps the edits
+	// it carried in the work tree as the owner's.
+	mirrored := head
 	if lastMirrored != "" {
-		mirrored = lastMirrored
-	} else {
-		mirrored = head
+		mirroredBase, err := r.revParse(ctx, lastMirrored+"^")
+		if err != nil {
+			return err
+		}
+		if mirroredBase == head {
+			mirrored = lastMirrored
+		}
 	}
 	if mirrored == snapshot {
 		return nil
 	}
+	if err := r.moveWorkTree(ctx, mirrored, snapshot); err != nil {
+		return err
+	}
+	return r.run(ctx, "update-ref", "refs/perusal/agent", snapshot)
+}
+
+// removeMirroredAgentEdits moves r's work tree from the last mirrored snapshot back to HEAD and forgets that snapshot,
+// so a branch switch takes none of the agent's edits along. The agent's copy still holds them and keeps them for this
+// branch. A file the owner edited since the mirror stops it. Without a mirror it does nothing.
+func (r Repository) removeMirroredAgentEdits(ctx context.Context) error {
+	lastMirrored, err := r.optionalRevParse(ctx, "refs/perusal/agent")
+	if err != nil || lastMirrored == "" {
+		return err
+	}
+	if err := r.moveWorkTree(ctx, lastMirrored, "HEAD"); err != nil {
+		return fmt.Errorf("remove the agent's mirrored edits from %s before the switch: %w", r.Dir, err)
+	}
+	return r.run(ctx, "update-ref", "-d", "refs/perusal/agent")
+}
+
+// moveWorkTree moves r's work tree from commit from to commit to, leaving r's index as it is. A temporary index holds
+// r's work tree, so read-tree updates a file that still matches from, keeps one that already matches to, as after the
+// owner commits or pulls, and refuses one that matches neither.
+func (r Repository) moveWorkTree(ctx context.Context, from string, to string) (moveErr error) {
 	indexDir, err := os.MkdirTemp("", "perusal-mirror-")
 	if err != nil {
 		return fmt.Errorf("create a directory for the temporary index of %s: %w", r.Dir, err)
 	}
 	defer func() {
 		if err := os.RemoveAll(indexDir); err != nil {
-			mirrorErr = errors.Join(mirrorErr, fmt.Errorf("remove the temporary index of %s: %w", r.Dir, err))
+			moveErr = errors.Join(moveErr, fmt.Errorf("remove the temporary index of %s: %w", r.Dir, err))
 		}
 	}()
 	temporaryIndex := []string{"GIT_INDEX_FILE=" + filepath.Join(indexDir, "index")}
-	// The temporary index holds r's work tree, so read-tree updates a file that still matches mirrored, keeps one that
-	// already matches the snapshot, as after the owner commits or pulls, and refuses one that matches neither.
 	for _, args := range [][]string{
-		{"read-tree", mirrored},
+		{"read-tree", from},
 		{"add", "--all"},
-		{"read-tree", "-m", "-u", mirrored, snapshot},
+		{"read-tree", "-m", "-u", from, to},
 	} {
 		if _, err := runGit(ctx, r, args, "", temporaryIndex); err != nil {
 			return err
 		}
 	}
-	return r.run(ctx, "update-ref", "refs/perusal/agent", snapshot)
+	return nil
 }
 
 // optionalRevParse is the commit ref names, or empty when ref does not exist.
