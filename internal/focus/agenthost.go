@@ -4,6 +4,7 @@ package focus
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"path/filepath"
@@ -65,6 +66,39 @@ func CreateWorkTree(ctx context.Context, rules Rules, session *agenthost.Session
 	return missing.Clone.AddWorkTreeFromAgent(ctx, rules.AgentHost+":"+missing.AgentDir, heads[0], missing.Dir)
 }
 
+// existingOnAgentHost keeps the missing worktrees whose agent copy is still on the agent host, since the focus file
+// keeps listing a worktree after it was removed there, and offering to copy it would fail. It runs nothing when
+// missingWorkTrees is empty.
+func existingOnAgentHost(ctx context.Context, run func(ctx context.Context, script string) ([]byte, error),
+	missingWorkTrees []MissingWorkTree) ([]MissingWorkTree, error) {
+	if len(missingWorkTrees) == 0 {
+		return []MissingWorkTree{}, nil
+	}
+	quotedDirs := make([]string, len(missingWorkTrees))
+	for index, missing := range missingWorkTrees {
+		quotedDirs[index] = agenthost.QuotedString(missing.AgentDir)
+	}
+	script := "ConvertTo-Json -Compress -InputObject @(foreach ($dir in @(" + strings.Join(quotedDirs, ", ") +
+		")) { Test-Path -LiteralPath $dir -PathType Container })"
+	output, err := run(ctx, script)
+	if err != nil {
+		return []MissingWorkTree{}, fmt.Errorf("check which of the agent's worktrees %s exist: %w",
+			strings.Join(quotedDirs, ", "), err)
+	}
+	var exists []bool
+	if err := json.Unmarshal(output, &exists); err != nil || len(exists) != len(missingWorkTrees) {
+		return []MissingWorkTree{}, fmt.Errorf("check which of the agent's worktrees %s exist: want %d booleans, "+
+			"got %q: %v", strings.Join(quotedDirs, ", "), len(missingWorkTrees), output, err)
+	}
+	existing := []MissingWorkTree{}
+	for index, missing := range missingWorkTrees {
+		if exists[index] {
+			existing = append(existing, missing)
+		}
+	}
+	return existing, nil
+}
+
 func pollAgentHost(ctx context.Context, rules Rules, session *agenthost.Session, waitTimeout time.Duration,
 	results chan<- Result, takeFailures chan<- string) {
 	defer close(results)
@@ -103,7 +137,10 @@ func pollAgentHost(ctx context.Context, rules Rules, session *agenthost.Session,
 			contentChanged := string(output) != lastContent
 			lastContent = string(output)
 			lastReadFailure = ""
-			resolved, resolveErr := resolveContent(ctx, rules, lastContent)
+			resolvedPaths, resolveErr := resolveContent(ctx, rules, lastContent)
+			offeredWorkTrees, offeredErr := existingOnAgentHost(ctx, session.Run, resolvedPaths.MissingWorkTrees)
+			resolved := Focus{Repositories: resolvedPaths.Repositories, Refusals: resolvedPaths.Refusals,
+				MissingWorkTrees: offeredWorkTrees}
 			resolvesEachPoll = lacksOwnerCopy(resolved, resolveErr)
 			resolvedAgentDirs, agentDirsErr := agentCopyDirs(rules, resolved.Repositories)
 			if agentDirsErr != nil {
@@ -113,7 +150,7 @@ func pollAgentHost(ctx context.Context, rules Rules, session *agenthost.Session,
 				focused = resolved
 				focusedAgentDirs = resolvedAgentDirs
 			}
-			resolvedResult := Result{Focus: focused, Err: errors.Join(resolveErr, agentDirsErr)}
+			resolvedResult := Result{Focus: focused, Err: errors.Join(resolveErr, offeredErr, agentDirsErr)}
 			if contentChanged || !isSameResult(lastResult, resolvedResult) {
 				changed = true
 				if !sendResult(ctx, results, resolvedResult) {

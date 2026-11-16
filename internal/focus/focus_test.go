@@ -89,6 +89,22 @@ func TestAgentCopyDirsRefusesARepositoryOutsideTheOwnerDirectory(t *testing.T) {
 	}
 }
 
+func TestExistingOnAgentHostDropsAWorkTreeRemovedOnTheAgentHost(t *testing.T) {
+	agentDir := t.TempDir()
+	kept := MissingWorkTree{AgentDir: agentDir, RelativePath: "worktrees/repo/kept"}
+	removed := MissingWorkTree{AgentDir: filepath.Join(agentDir, "removed"), RelativePath: "worktrees/repo/removed"}
+	// powershell.exe stands in for the agent host's ssh login shell.
+	runLocalScript := func(ctx context.Context, script string) ([]byte, error) {
+		return exec.CommandContext(ctx, "powershell.exe", "-NoProfile", "-NonInteractive", "-Command", script).Output()
+	}
+
+	existing, err := existingOnAgentHost(context.Background(), runLocalScript, []MissingWorkTree{kept, removed})
+
+	if err != nil || !slices.Equal(existing, []MissingWorkTree{kept}) {
+		t.Fatalf("got %+v, %v, want only %+v", existing, err, kept)
+	}
+}
+
 func TestParseFocusFile(t *testing.T) {
 	t.Run("readsOnePathPerLineWithAnyLineBreak", readsOnePathPerLineWithAnyLineBreak)
 	t.Run("refusesAnEmptyLine", refusesAnEmptyLine)
