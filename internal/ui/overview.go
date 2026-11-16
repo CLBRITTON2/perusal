@@ -104,6 +104,23 @@ func (r pullRequest) pull() tea.Msg {
 	return syncedMsg{row: row, notice: "pulled " + r.found.RelativePath}
 }
 
+type rebaseRequest struct {
+	found focus.FoundRepository
+}
+
+func (r rebaseRequest) rebase() tea.Msg {
+	dir := r.found.Repository.Dir
+	base, err := r.found.Repository.RebaseOntoDefault(context.Background())
+	if err != nil {
+		return syncFailureMsg{dir: dir, err: err}
+	}
+	row, err := loadOverviewRow(r.found)
+	if err != nil {
+		return syncFailureMsg{dir: dir, err: err}
+	}
+	return syncedMsg{row: row, notice: "rebased " + r.found.RelativePath + " onto " + base.Ref}
+}
+
 type fetchRequest struct {
 	found focus.FoundRepository
 }
@@ -382,6 +399,8 @@ func (m Model) updateOverview(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		return m.fetchAll()
 	case key.Matches(msg, pullKey):
 		return m.withSelectedRepository(m.pullRepositoryRow)
+	case key.Matches(msg, rebaseKey):
+		return m.withSelectedRepository(m.rebaseRepositoryRow)
 	case key.Matches(msg, pushKey):
 		return m.withSelectedRepository(m.pushRepositoryRow)
 	case key.Matches(msg, cherryPickKey):
@@ -476,6 +495,19 @@ func (m Model) pullRepositoryRow(row repositoryRow) (tea.Model, tea.Cmd) {
 		pull = pullRequest{found: row.FoundRepository}.pull
 	}
 	return m.withSyncing([]string{row.Repository.Dir}, "pulling..."), pull
+}
+
+// rebaseRepositoryRow refuses uncommitted changes, since a rebase that stops on a conflict would mix them in.
+func (m Model) rebaseRepositoryRow(row repositoryRow) (tea.Model, tea.Cmd) {
+	switch {
+	case m.syncing[row.Repository.Dir] != "":
+		return m, nil
+	case row.status.Branch == "":
+		return m.withFooterError(row.RelativePath + " has a detached HEAD, so there is no branch to rebase"), nil
+	case len(row.status.Files) > 0:
+		return m.withFooterError(row.RelativePath + " has uncommitted changes, commit or stash them to rebase"), nil
+	}
+	return m.withSyncing([]string{row.Repository.Dir}, "rebasing..."), rebaseRequest{found: row.FoundRepository}.rebase
 }
 
 func (m Model) fetchRepositoryRow(row repositoryRow) (tea.Model, tea.Cmd) {

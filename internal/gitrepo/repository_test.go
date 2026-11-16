@@ -198,6 +198,66 @@ func TestDefaultBranch(t *testing.T) {
 	t.Run("failsWhenOriginHeadPointsOutsideOrigin", failsWhenOriginHeadPointsOutsideOrigin)
 }
 
+func TestRebaseOntoDefault(t *testing.T) {
+	t.Run("rebaseOntoDefaultMovesBranchOntoOriginsMain", rebaseOntoDefaultMovesBranchOntoOriginsMain)
+	t.Run("rebaseOntoDefaultPrefersUpstreamOverOrigin", rebaseOntoDefaultPrefersUpstreamOverOrigin)
+	t.Run("rebaseOntoDefaultAbortsAndKeepsHeadOnConflict", rebaseOntoDefaultAbortsAndKeepsHeadOnConflict)
+}
+
+func rebaseOntoDefaultMovesBranchOntoOriginsMain(t *testing.T) {
+	remote, clone := featureBehindMain(t, "feature.txt")
+	runSteps(t, clone, [][]string{{"remote", "set-head", "origin", "main"}})
+
+	base, err := Repository{Dir: clone}.RebaseOntoDefault(context.Background())
+
+	remoteMain := revParse(t, remote, "main")
+	if err != nil || base != (RemoteBranch{Ref: "origin/main", Name: "main"}) ||
+		revParse(t, clone, "HEAD^") != remoteMain || messageAt(t, clone, "HEAD") != "Feature" {
+		t.Fatalf("got %+v, %v, HEAD^ %s, want origin/main and Feature on %s", base, err, revParse(t, clone, "HEAD^"),
+			remoteMain)
+	}
+}
+
+func rebaseOntoDefaultPrefersUpstreamOverOrigin(t *testing.T) {
+	remote, clone := featureBehindMain(t, "feature.txt")
+	parent := t.TempDir()
+	upstream := filepath.Join(parent, "upstream.git")
+	upstreamClone := filepath.Join(parent, "upstream-work")
+	runSteps(t, parent, [][]string{
+		{"clone", "--bare", remote, upstream},
+		{"clone", upstream, upstreamClone},
+		{"-C", upstreamClone, "commit", "--allow-empty", "--message", "Upstream only"},
+		{"-C", upstreamClone, "push"},
+		{"-C", clone, "remote", "add", "upstream", upstream},
+		{"-C", clone, "fetch", "upstream"},
+		{"-C", clone, "remote", "set-head", "upstream", "main"},
+	})
+
+	base, err := Repository{Dir: clone}.RebaseOntoDefault(context.Background())
+
+	upstreamMain := revParse(t, upstream, "main")
+	if err != nil || base != (RemoteBranch{Ref: "upstream/main", Name: "main"}) ||
+		revParse(t, clone, "HEAD^") != upstreamMain {
+		t.Fatalf("got %+v, %v, HEAD^ %s, want upstream/main and HEAD^ at %s", base, err, revParse(t, clone, "HEAD^"),
+			upstreamMain)
+	}
+}
+
+func rebaseOntoDefaultAbortsAndKeepsHeadOnConflict(t *testing.T) {
+	_, clone := featureBehindMain(t, "shared.txt")
+	runSteps(t, clone, [][]string{{"remote", "set-head", "origin", "main"}})
+	headBefore := revParse(t, clone, "HEAD")
+
+	_, err := Repository{Dir: clone}.RebaseOntoDefault(context.Background())
+
+	porcelainStatus := gitOutput(t, clone, "status", "--porcelain")
+	if err == nil || !strings.Contains(err.Error(), "aborted the rebase onto origin/main") ||
+		revParse(t, clone, "HEAD") != headBefore || porcelainStatus != "" {
+		t.Fatalf("got %v, HEAD %s, status %q, want an aborted rebase leaving HEAD at %s and a clean tree", err,
+			revParse(t, clone, "HEAD"), porcelainStatus, headBefore)
+	}
+}
+
 func failsWhenOriginHeadPointsOutsideOrigin(t *testing.T) {
 	_, clone := pushedClone(t)
 	runSteps(t, clone, [][]string{{"symbolic-ref", "refs/remotes/origin/HEAD", "refs/heads/main"}})
@@ -910,6 +970,31 @@ func repositoryWithHistory(t *testing.T, contents []string) string {
 			{"-C", clone, "add", "a.txt"}, {"-C", clone, "commit", "--message", "Write " + content}})
 	}
 	return clone
+}
+
+// featureBehindMain is a clone on branch feature, whose one commit writes featurePath, while another clone has pushed
+// a commit writing shared.txt to origin's main, so a featurePath of shared.txt conflicts.
+func featureBehindMain(t *testing.T, featurePath string) (string, string) {
+	t.Helper()
+	remote, _ := pushedClone(t)
+	parent := t.TempDir()
+	clone := filepath.Join(parent, "work")
+	otherClone := filepath.Join(parent, "other")
+	runSteps(t, parent, [][]string{
+		{"clone", remote, clone},
+		{"clone", remote, otherClone},
+	})
+	writeFile(t, filepath.Join(otherClone, "shared.txt"), "main\n")
+	writeFile(t, filepath.Join(clone, featurePath), "feature\n")
+	runSteps(t, parent, [][]string{
+		{"-C", otherClone, "add", "shared.txt"},
+		{"-C", otherClone, "commit", "--message", "Main"},
+		{"-C", otherClone, "push"},
+		{"-C", clone, "switch", "--create", "feature"},
+		{"-C", clone, "add", featurePath},
+		{"-C", clone, "commit", "--message", "Feature"},
+	})
+	return remote, clone
 }
 
 func pushedClone(t *testing.T) (string, string) {

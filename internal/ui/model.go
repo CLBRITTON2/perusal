@@ -142,7 +142,7 @@ type Model struct {
 	takeFailure string
 
 	overview selectableList[overviewRow]
-	// syncing maps the Dir of each repository an overview pull or fetch is running in to what its row shows.
+	// syncing maps the Dir of each repository an overview pull, fetch or rebase is running in to what its row shows.
 	syncing      map[string]string
 	branches     branchList
 	workTreeList selectableList[workTreeRow]

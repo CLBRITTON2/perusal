@@ -207,7 +207,11 @@ func (r Repository) StagedLineCounts(ctx context.Context) (diff.LineCounts, erro
 // DefaultBranch is origin's default branch as of the last fetch, such as origin/main. It is the zero RemoteBranch when
 // origin/HEAD is unset, as in a repository that was pushed to origin instead of cloned from it.
 func (r Repository) DefaultBranch(ctx context.Context) (RemoteBranch, error) {
-	output, err := r.git(ctx, "symbolic-ref", "--quiet", "--short", "refs/remotes/origin/HEAD")
+	return r.remoteDefaultBranch(ctx, "origin")
+}
+
+func (r Repository) remoteDefaultBranch(ctx context.Context, remote string) (RemoteBranch, error) {
+	output, err := r.git(ctx, "symbolic-ref", "--quiet", "--short", "refs/remotes/"+remote+"/HEAD")
 	switch {
 	case isExitCodeOne(err):
 		return RemoteBranch{}, nil
@@ -215,10 +219,10 @@ func (r Repository) DefaultBranch(ctx context.Context) (RemoteBranch, error) {
 		return RemoteBranch{}, err
 	}
 	ref := strings.TrimSpace(string(output))
-	name, isOrigins := strings.CutPrefix(ref, "origin/")
-	if !isOrigins {
-		return RemoteBranch{}, fmt.Errorf("read origin's default branch in %s: refs/remotes/origin/HEAD points to %s, "+
-			"outside origin, git remote set-head origin --auto resets it", r.Dir, ref)
+	name, isRemotes := strings.CutPrefix(ref, remote+"/")
+	if !isRemotes {
+		return RemoteBranch{}, fmt.Errorf("read %s's default branch in %s: refs/remotes/%s/HEAD points to %s, "+
+			"outside %s, git remote set-head %s --auto resets it", remote, r.Dir, remote, ref, remote, remote)
 	}
 	return RemoteBranch{Ref: ref, Name: name}, nil
 }
@@ -382,6 +386,49 @@ func (r Repository) CherryPickBranch(ctx context.Context, branch string) (int, e
 	}
 	return 0, fmt.Errorf("aborted the cherry-pick of %s onto %s, so %s is as it was: %w", branch, defaultBranch.Name,
 		defaultBranch.Name, pickErr)
+}
+
+// RebaseOntoDefault fetches upstream, the repository a fork was made from, or origin when there is no upstream remote,
+// and rebases HEAD onto that remote's default branch, which it returns. A rebase that stops on a conflict is aborted,
+// so the branch stays as it was.
+func (r Repository) RebaseOntoDefault(ctx context.Context) (RemoteBranch, error) {
+	remotesOutput, err := r.git(ctx, "remote")
+	if err != nil {
+		return RemoteBranch{}, err
+	}
+	var remote string
+	if slices.Contains(strings.Fields(string(remotesOutput)), "upstream") {
+		remote = "upstream"
+	} else {
+		remote = "origin"
+	}
+	if err := r.run(ctx, "fetch", "--prune", remote); err != nil {
+		return RemoteBranch{}, err
+	}
+	base, err := r.remoteDefaultBranch(ctx, remote)
+	if err != nil {
+		return RemoteBranch{}, err
+	}
+	if base == (RemoteBranch{}) {
+		return RemoteBranch{}, fmt.Errorf("rebase %s: refs/remotes/%s/HEAD is unset, so %s's default branch is "+
+			"unknown, git remote set-head %s --auto sets it", r.Dir, remote, remote, remote)
+	}
+	// A rebase.autoStash config would otherwise carry along the uncommitted changes the overview refuses.
+	rebaseErr := r.run(ctx, "rebase", "--no-autostash", base.Ref)
+	if rebaseErr == nil {
+		return base, nil
+	}
+	isStopped, err := r.gitSucceeds(ctx, "rev-parse", "--verify", "--quiet", "REBASE_HEAD")
+	if err != nil {
+		return RemoteBranch{}, errors.Join(rebaseErr, err)
+	}
+	if !isStopped {
+		return RemoteBranch{}, rebaseErr
+	}
+	if err := r.run(ctx, "rebase", "--abort"); err != nil {
+		return RemoteBranch{}, errors.Join(rebaseErr, err)
+	}
+	return RemoteBranch{}, fmt.Errorf("aborted the rebase onto %s, so the branch is as it was: %w", base.Ref, rebaseErr)
 }
 
 // Switch creates branch from the remote branch of that name when it exists only there.

@@ -35,6 +35,7 @@ var (
 	pullKey           = key.NewBinding(key.WithKeys("p"), key.WithHelp("p", "pull"))
 	fetchKey          = key.NewBinding(key.WithKeys("f"), key.WithHelp("f/F", "fetch"))
 	fetchAllKey       = key.NewBinding(key.WithKeys("F"))
+	rebaseKey         = key.NewBinding(key.WithKeys("R"), key.WithHelp("R", "rebase"))
 	cherryPickKey     = key.NewBinding(key.WithKeys("C"), key.WithHelp("C", "cherry-pick to main"))
 	confirmPickKey    = key.NewBinding(key.WithKeys("enter"), key.WithHelp("enter", "cherry-pick"))
 	refreshKey        = key.NewBinding(key.WithKeys("r"), key.WithHelp("r", "refresh"))
@@ -83,7 +84,7 @@ var (
 	changesHelp  = slices.Concat(changesKeys, reviewHelp)
 	logHelp      = slices.Concat(logKeys, reviewHelp)
 	stashHelp    = slices.Concat(stashKeys, reviewHelp)
-	overviewHelp = []key.Binding{downKey, openRepositoryKey, fetchKey, pullKey, pushKey, cherryPickKey,
+	overviewHelp = []key.Binding{downKey, openRepositoryKey, fetchKey, pullKey, rebaseKey, pushKey, cherryPickKey,
 		refreshKey, closeOverviewKey, quitKey}
 	branchesHelp = []key.Binding{downKey, switchBranchKey, newBranchKey, deleteBranchKey, fetchBranchesKey,
 		closeBranchesKey, quitKey}

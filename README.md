@@ -50,6 +50,7 @@ perusal -repo <dir>  # review the repository <dir> is in
 | `o` | anywhere | in follow mode, open the overview of every repository under `ownerDir` |
 | `f` `F` | overview | fetch the selected repository or every one, dropping the remote branches that were deleted |
 | `p` | overview | fast-forward the selected repository to its upstream, or a finished branch to the default one |
+| `R` | overview | fetch `upstream`, or `origin` without one, and rebase the selected branch onto its default branch, aborting on a conflict |
 | `P` | overview | push or publish the selected repository's branch |
 | `C` | overview | cherry-pick the selected work tree's commits onto the default branch in its main clone, to push from there |
 | `r` | overview | list the repositories and work trees under `ownerDir` again, picking up ones added or removed |
