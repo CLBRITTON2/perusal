@@ -448,6 +448,24 @@ func TestMayBeFinished(t *testing.T) {
 	}
 }
 
+func TestRefreshInTheOverviewListsAnAddedRepositoryAndKeepsTheSelection(t *testing.T) {
+	m := update(t, overviewWithTwoRepositories(t), tea.KeyPressMsg{Code: 'j', Text: "j"})
+	next, cmd := m.Update(tea.KeyPressMsg{Code: 'r', Text: "r"})
+	m = asModel(t, next)
+
+	m = update(t, m, overviewMsg{rows: []overviewRow{
+		pendingRow{FoundRepository: foundAt("added", "C:/dev/added")},
+		pendingRow{FoundRepository: foundAt("first", "C:/dev/first")},
+		pendingRow{FoundRepository: foundAt("org/elsewhere", "C:/dev/org/elsewhere")},
+	}})
+
+	selected, _ := m.overview.selectedRow()
+	if cmd == nil || len(m.overview.rows) != 3 || selected.relativePath() != "org/elsewhere" {
+		t.Fatalf("got command %v, %d rows, %q selected, want a reload listing 3 with org/elsewhere still selected",
+			cmd, len(m.overview.rows), selected.relativePath())
+	}
+}
+
 func overviewWithTwoRepositories(t *testing.T) Model {
 	t.Helper()
 	m := focusOnSeveral(t, map[string]bool{"C:/dev/cwd": false, "C:/dev/first": true, "C:/dev/second": false})

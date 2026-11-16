@@ -283,15 +283,24 @@ func (m Model) openOverview() (tea.Model, tea.Cmd) {
 	return m, overviewRequest{findRepositories: m.findRepositories}.load
 }
 
-// Lists the focused repositories first and selects the one under review, so enter right away keeps it. Each pending
-// row loads on its own, so the table shows before the slowest repository is done.
+// Lists the focused repositories first and keeps the selected repository on a refresh, or else selects the one under
+// review, so enter right away keeps it. Each pending row loads on its own, so the table shows before the slowest
+// repository is done.
 func (m Model) withOverviewLoaded(msg overviewMsg) (tea.Model, tea.Cmd) {
 	rows := slices.Clone(msg.rows)
 	slices.SortStableFunc(rows, func(a overviewRow, b overviewRow) int {
 		return cmp.Compare(m.focusRank(a), m.focusRank(b))
 	})
+	selectedRow, _ := m.overview.selectedRow()
+	selectedRepository, isRepository := rowRepository(selectedRow)
+	var selectedDir string
+	if isRepository {
+		selectedDir = selectedRepository.Dir
+	} else {
+		selectedDir = m.repository.Dir
+	}
 	loadedOverview := selectableList[overviewRow]{loaded: true, rows: rows, selected: 0, offset: 0}
-	m.overview = loadedOverview.withSelected(slices.IndexFunc(rows, isRowAt(m.repository.Dir)))
+	m.overview = loadedOverview.withSelected(slices.IndexFunc(rows, isRowAt(selectedDir)))
 	loads := []tea.Cmd{}
 	for _, row := range rows {
 		pending, isPending := row.(pendingRow)
@@ -377,6 +386,8 @@ func (m Model) updateOverview(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		return m.withSelectedRepository(m.pushRepositoryRow)
 	case key.Matches(msg, cherryPickKey):
 		return m.withSelectedRepository(m.cherryPickRepositoryRow)
+	case key.Matches(msg, refreshKey):
+		return m, overviewRequest{findRepositories: m.findRepositories}.load
 	}
 	return m, nil
 }
