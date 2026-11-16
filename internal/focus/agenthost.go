@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"path/filepath"
+	"slices"
 	"strings"
 	"sync"
 	"time"
@@ -19,13 +20,49 @@ import (
 // or to the agent's copy of a focused repository, then reads the focus file and sends a Result when what it reads
 // changed. When the agent's side changed, it takes the agent's new commits in every focused repository into the owner's
 // work tree. When the failed takes change, it sends their errors joined on the second channel, and an empty string once
-// every take succeeds again. Both channels close when ctx ends.
+// every take succeeds again. While a focused path has no owner copy, it resolves the focus file every poll, so a
+// worktree the owner adds, by hand or with CreateWorkTree, is picked up with no change to the focus file. Both channels
+// close when ctx ends.
 func FollowAgentHost(ctx context.Context, rules Rules, session *agenthost.Session,
 	waitTimeout time.Duration) (<-chan Result, <-chan string) {
 	results := make(chan Result)
 	takeFailures := make(chan string)
 	go pollAgentHost(ctx, rules, session, waitTimeout, results, takeFailures)
 	return results, takeFailures
+}
+
+// lacksOwnerCopy reports whether a focused path resolved to no owner work tree, which the owner can fix without the
+// focus file changing.
+func lacksOwnerCopy(resolved Focus, resolveErr error) bool {
+	return len(resolved.MissingWorkTrees) > 0 || errors.Is(resolveErr, ErrNotWorkTree) ||
+		slices.ContainsFunc(resolved.Refusals, func(refusal error) bool { return errors.Is(refusal, ErrNotWorkTree) })
+}
+
+// isSameResult reports whether two resolves found the same, so a repeated resolve sends nothing that would reset the
+// footer.
+func isSameResult(previous Result, next Result) bool {
+	return slices.Equal(previous.Focus.Repositories, next.Focus.Repositories) &&
+		slices.Equal(previous.Focus.MissingWorkTrees, next.Focus.MissingWorkTrees) &&
+		slices.EqualFunc(previous.Focus.Refusals, next.Focus.Refusals, isSameError) &&
+		isSameError(previous.Err, next.Err)
+}
+
+func isSameError(previous error, next error) bool {
+	if previous == nil || next == nil {
+		return previous == next
+	}
+	return previous.Error() == next.Error()
+}
+
+// CreateWorkTree adds the owner's copy of missing at missing.Dir, on the branch the agent's copy has checked out, and
+// returns the commit that branch starts at.
+func CreateWorkTree(ctx context.Context, rules Rules, session *agenthost.Session, missing MissingWorkTree) (string,
+	error) {
+	heads, err := gitrepo.ReadAgentHeads(ctx, session.Run, []string{missing.AgentDir})
+	if err != nil {
+		return "", err
+	}
+	return missing.Clone.AddWorkTreeFromAgent(ctx, rules.AgentHost+":"+missing.AgentDir, heads[0], missing.Dir)
 }
 
 func pollAgentHost(ctx context.Context, rules Rules, session *agenthost.Session, waitTimeout time.Duration,
@@ -35,6 +72,8 @@ func pollAgentHost(ctx context.Context, rules Rules, session *agenthost.Session,
 	readScript := "[IO.File]::ReadAllText(" + agenthost.QuotedString(rules.FocusFile) + ")"
 	lastContent := ""
 	lastReadFailure := ""
+	lastResult := Result{}
+	resolvesEachPoll := false
 	focused := Focus{Repositories: []gitrepo.Repository{}, Refusals: []error{}}
 	focusedAgentDirs := []string{}
 	lastTakeFailure := ""
@@ -60,11 +99,12 @@ func pollAgentHost(ctx context.Context, rules Rules, session *agenthost.Session,
 				return
 			}
 			lastReadFailure = readErr.Error()
-		} else if string(output) != lastContent {
+		} else if string(output) != lastContent || resolvesEachPoll {
+			contentChanged := string(output) != lastContent
 			lastContent = string(output)
 			lastReadFailure = ""
-			changed = true
 			resolved, resolveErr := resolveContent(ctx, rules, lastContent)
+			resolvesEachPoll = lacksOwnerCopy(resolved, resolveErr)
 			resolvedAgentDirs, agentDirsErr := agentCopyDirs(rules, resolved.Repositories)
 			if agentDirsErr != nil {
 				focused = Focus{Repositories: []gitrepo.Repository{}, Refusals: []error{}}
@@ -73,9 +113,14 @@ func pollAgentHost(ctx context.Context, rules Rules, session *agenthost.Session,
 				focused = resolved
 				focusedAgentDirs = resolvedAgentDirs
 			}
-			if !sendResult(ctx, results, Result{Focus: focused, Err: errors.Join(resolveErr, agentDirsErr)}) {
-				return
+			resolvedResult := Result{Focus: focused, Err: errors.Join(resolveErr, agentDirsErr)}
+			if contentChanged || !isSameResult(lastResult, resolvedResult) {
+				changed = true
+				if !sendResult(ctx, results, resolvedResult) {
+					return
+				}
 			}
+			lastResult = resolvedResult
 		}
 		// A failed take is retried every poll, since the owner may fix it without the agent's side changing.
 		if !changed && waitErr == nil && lastTakeFailure == "" {

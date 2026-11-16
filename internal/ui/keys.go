@@ -66,6 +66,8 @@ var (
 	clearSearchKey    = key.NewBinding(key.WithKeys("esc"), key.WithHelp("esc", "clear"))
 	keyListKey        = key.NewBinding(key.WithKeys("?"), key.WithHelp("?", "all keys"))
 	closeKeyListKey   = key.NewBinding(key.WithKeys("esc", "?"), key.WithHelp("esc", "close"))
+	// Not enter: this popup opens on its own, so a key already on its way must not confirm it.
+	confirmCreateKey = key.NewBinding(key.WithKeys("c"), key.WithHelp("c", "create"))
 )
 
 var (

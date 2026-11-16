@@ -211,6 +211,81 @@ func doesNotOpenTheRepositoryAboveAnUnusableGitDir(t *testing.T) {
 	}
 }
 
+func TestMissingWorkTree(t *testing.T) {
+	t.Run("resolveReportsAnAgentHostsWorkTreeTheOwnerLacksOnce", resolveReportsAnAgentHostsWorkTreeTheOwnerLacksOnce)
+	t.Run("resolveRefusesTheSamePathWithoutAnAgentHost", resolveRefusesTheSamePathWithoutAnAgentHost)
+	t.Run("resolveAgainFindsTheSameWhileTheWorkTreeIsMissing", resolveAgainFindsTheSameWhileTheWorkTreeIsMissing)
+}
+
+func resolveAgainFindsTheSameWhileTheWorkTreeIsMissing(t *testing.T) {
+	devDir := t.TempDir()
+	rules := guestRules(t, devDir, focusFileHolding(t, strings.Join(claudeXFocusLines(t, devDir), "\n")))
+	rules.AgentHost = "agent-vm"
+
+	first, firstErr := resolve(context.Background(), rules)
+	second, secondErr := resolve(context.Background(), rules)
+
+	if !lacksOwnerCopy(first, firstErr) {
+		t.Fatalf("got %+v, %v, want it to lack the owner's copy of claude-x", first, firstErr)
+	}
+	if !isSameResult(Result{Focus: first, Err: firstErr}, Result{Focus: second, Err: secondErr}) {
+		t.Fatalf("got %+v, %v then %+v, %v, want the same twice", first, firstErr, second, secondErr)
+	}
+	if isSameResult(Result{Focus: first, Err: firstErr}, Result{Focus: Focus{}, Err: firstErr}) {
+		t.Fatalf("got %+v the same as an empty focus", first)
+	}
+}
+
+func resolveReportsAnAgentHostsWorkTreeTheOwnerLacksOnce(t *testing.T) {
+	devDir := t.TempDir()
+	rules := guestRules(t, devDir, focusFileHolding(t, strings.Join(claudeXFocusLines(t, devDir), "\n")))
+	rules.AgentHost = "agent-vm"
+
+	got, err := resolve(context.Background(), rules)
+
+	want := MissingWorkTree{
+		AgentDir:     agentDevDir + `\worktrees\org\repo\claude-x`,
+		Dir:          filepath.Join(devDir, "worktrees", "org", "repo", "claude-x"),
+		RelativePath: "worktrees/org/repo/claude-x",
+	}
+	if err != nil || len(got.Repositories) != 0 || len(got.MissingWorkTrees) != 1 || len(got.Refusals) != 1 ||
+		!errors.Is(got.Refusals[0], ErrNotWorkTree) {
+		t.Fatalf("got %+v, %v, want claude-x missing once and worktrees\\nothing refused", got, err)
+	}
+	missing := got.MissingWorkTrees[0]
+	same, sameErr := isSameDirectory(missing.Clone.Dir, filepath.Join(devDir, "org", "repo"))
+	missing.Clone = gitrepo.Repository{}
+	if missing != want || sameErr != nil || !same {
+		t.Fatalf("got %+v (clone same: %v, %v), want %+v with org\\repo's clone", got.MissingWorkTrees[0], same,
+			sameErr, want)
+	}
+}
+
+func resolveRefusesTheSamePathWithoutAnAgentHost(t *testing.T) {
+	devDir := t.TempDir()
+	rules := guestRules(t, devDir, focusFileHolding(t, strings.Join(claudeXFocusLines(t, devDir), "\n")))
+
+	got, err := resolve(context.Background(), rules)
+
+	if !errors.Is(err, ErrNotWorkTree) || len(got.MissingWorkTrees) != 0 {
+		t.Fatalf("got %+v, %v, want every path refused", got, err)
+	}
+}
+
+// claudeXFocusLines makes org\repo a protected clone and returns focus lines naming its worktree claude-x, which does
+// not exist, from a folder inside it and from its root, then a worktrees path with no clone.
+func claudeXFocusLines(t *testing.T, devDir string) []string {
+	t.Helper()
+	clone := filepath.Join(devDir, "org", "repo")
+	gitInit(t, clone)
+	denyGuests(t, filepath.Join(clone, ".git"), deniedWriteMask)
+	return []string{
+		agentDevDir + `\worktrees\org\repo\claude-x\cmd`,
+		agentDevDir + `\worktrees\org\repo\claude-x`,
+		agentDevDir + `\worktrees\nothing\here`,
+	}
+}
+
 func TestFindRepositoriesRefusesAnUnprotectedOneAndSkipsANestedOne(t *testing.T) {
 	devDir := t.TempDir()
 	gitInit(t, filepath.Join(devDir, "org", "repo"))

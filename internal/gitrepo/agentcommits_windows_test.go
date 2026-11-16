@@ -3,6 +3,7 @@ package gitrepo
 import (
 	"bytes"
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"os/exec"
@@ -18,6 +19,87 @@ func TestTakeAgentCommits(t *testing.T) {
 	t.Run("keepsAFileTheOwnerEditedAndRefusesTheCommit", keepsAFileTheOwnerEditedAndRefusesTheCommit)
 	t.Run("skipsTheFetchWhenTheAgentsHeadIsTaken", skipsTheFetchWhenTheAgentsHeadIsTaken)
 	t.Run("refusesACommitNamingAPathInDotGit", refusesACommitNamingAPathInDotGit)
+	t.Run("refusesACommitWritingOverMaximumTakenBytes", refusesACommitWritingOverMaximumTakenBytes)
+}
+
+func refusesACommitWritingOverMaximumTakenBytes(t *testing.T) {
+	owner, agent := ownerAndAgentCopies(t)
+	blob := gitOutputFromInput(t, agent, strings.Repeat("0", maximumTakenBytes+1), "hash-object", "-w", "--stdin")
+	tree := gitOutputFromInput(t, agent, "100644 blob "+blob+"\tlarge.txt\n", "mktree")
+	commit := strings.TrimSpace(gitOutput(t, agent, "commit-tree", tree, "-p", "HEAD", "-m", "Add large.txt"))
+	runSteps(t, agent, [][]string{{"update-ref", "refs/heads/main", commit}})
+
+	changed, err := takeAgentCommits(t, owner, agent)
+
+	if !errors.Is(err, ErrTakenCommitsTooLarge) || changed {
+		t.Fatalf("got changed %v, error %v, want ErrTakenCommitsTooLarge", changed, err)
+	}
+	assertChangedFiles(t, owner, []FileStatus{})
+}
+
+func TestAddWorkTreeFromAgent(t *testing.T) {
+	t.Run("addsTheAgentsBranchAtWhereItLeftOriginsDefaultBranch", addsTheAgentsBranchAtWhereItLeftOriginsDefaultBranch)
+	t.Run("refusesADetachedHead", refusesADetachedHead)
+}
+
+func addsTheAgentsBranchAtWhereItLeftOriginsDefaultBranch(t *testing.T) {
+	owner, agent := ownerAndAgentClonesOfOrigin(t)
+	branchPoint := revParse(t, agent, "HEAD")
+	runSteps(t, agent, [][]string{{"switch", "--create", "claude/x"}})
+	writeFile(t, filepath.Join(agent, "agent.txt"), "agent\n")
+	commitAll(t, agent, "Agent")
+	writeFile(t, filepath.Join(owner, "a.txt"), "moved on\n")
+	commitAll(t, owner, "Origin moves on")
+	runSteps(t, owner, [][]string{{"push", "origin", "main"}})
+	workTree := filepath.Join(t.TempDir(), "claude-x")
+
+	base, err := Repository{Dir: owner}.AddWorkTreeFromAgent(context.Background(), agent, readAgentHead(t, agent),
+		workTree)
+
+	if err != nil || base != branchPoint {
+		t.Fatalf("got base %s, error %v, want %s, where claude/x left main", base, err, branchPoint)
+	}
+	if head := revParse(t, workTree, "HEAD"); head != branchPoint {
+		t.Fatalf("got the new work tree's HEAD at %s, want %s", head, branchPoint)
+	}
+	if branch := strings.TrimSpace(gitOutput(t, workTree, "branch", "--show-current")); branch != "claude/x" {
+		t.Fatalf("got branch %q in the new work tree, want claude/x", branch)
+	}
+	if _, err := takeAgentCommits(t, workTree, agent); err != nil {
+		t.Fatal(err)
+	}
+	assertFileHolds(t, filepath.Join(workTree, "agent.txt"), "agent\n")
+}
+
+func refusesADetachedHead(t *testing.T) {
+	owner, agent := ownerAndAgentClonesOfOrigin(t)
+	runSteps(t, agent, [][]string{{"switch", "--detach", "HEAD"}})
+	workTree := filepath.Join(t.TempDir(), "detached")
+
+	_, err := Repository{Dir: owner}.AddWorkTreeFromAgent(context.Background(), agent, readAgentHead(t, agent),
+		workTree)
+
+	if err == nil || !strings.Contains(err.Error(), "detached HEAD") {
+		t.Fatalf("got error %v, want the detached HEAD refused", err)
+	}
+	if _, statErr := os.Stat(workTree); !errors.Is(statErr, os.ErrNotExist) {
+		t.Fatalf("got %v for %s, want no work tree", statErr, workTree)
+	}
+}
+
+// Both are clones of a bare origin, as the laptop's and the VM's are clones from GitHub.
+func ownerAndAgentClonesOfOrigin(t *testing.T) (string, string) {
+	t.Helper()
+	origin, _ := ownerAndAgentCopies(t)
+	bare := filepath.Join(t.TempDir(), "origin.git")
+	owner := filepath.Join(t.TempDir(), "owner")
+	agent := filepath.Join(t.TempDir(), "agent")
+	runSteps(t, origin, [][]string{
+		{"clone", "--bare", origin, bare},
+		{"clone", bare, owner},
+		{"clone", bare, agent},
+	})
+	return owner, agent
 }
 
 func TestReadAgentHeads(t *testing.T) {

@@ -8,6 +8,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"strconv"
 	"strings"
 
 	"github.com/CLBRITTON2/perusal/internal/agenthost"
@@ -15,6 +16,13 @@ import (
 
 // A SHA-1 or SHA-256 object name, as git prints it in full.
 var objectName = regexp.MustCompile(`^[0-9a-f]{40}([0-9a-f]{24})?$`)
+
+// maximumTakenBytes caps the file content one take writes into the owner's work tree. A fetch of a few megabytes can
+// hold gigabytes of repeated bytes, since git compresses them.
+const maximumTakenBytes = 100 << 20
+
+// ErrTakenCommitsTooLarge is a take refused because the files it writes hold over maximumTakenBytes.
+var ErrTakenCommitsTooLarge = errors.New("the agent's commits write too much into the work tree")
 
 // AgentHead is the commit the agent's copy has checked out and the ref HEAD points to there (empty when detached), or
 // the error that stopped reading them.
@@ -124,17 +132,7 @@ func (r Repository) TakeAgentCommits(ctx context.Context, remote string, head Ag
 		return false, err
 	}
 	if !hasCommit {
-		source := head.Branch
-		if source == "" {
-			source = "HEAD"
-		}
-		// fsck rejects a tree naming .git or another path git would refuse to check out.
-		if err := r.run(ctx, "-c", "transfer.fsckObjects=true", "fetch", "--no-tags", "--no-write-fetch-head",
-			"--no-recurse-submodules", remote, "+"+source+":refs/perusal/agent-head"); err != nil {
-			return false, err
-		}
-		// The agent may have committed again since its HEAD was read.
-		if commit, err = r.revParse(ctx, "refs/perusal/agent-head"); err != nil {
+		if commit, err = r.fetchAgentHead(ctx, remote, head.Branch); err != nil {
 			return false, err
 		}
 	}
@@ -146,6 +144,43 @@ func (r Repository) TakeAgentCommits(ctx context.Context, remote string, head Ag
 		}
 		from = strings.TrimSpace(string(output))
 	}
+	diffOutput, err := r.git(ctx, "diff-tree", "-r", "-z", "--no-renames", from, commit)
+	if err != nil {
+		return false, err
+	}
+	// Without renames each change is two fields: ":<old mode> <new mode> <old object> <new object> <status>", then
+	// its path.
+	diffFields := strings.Split(strings.TrimSuffix(string(diffOutput), "\x00"), "\x00")
+	var writtenBlobs strings.Builder
+	for index := 0; index+1 < len(diffFields); index += 2 {
+		change := strings.Fields(diffFields[index])
+		if len(change) != 5 {
+			return false, fmt.Errorf("size the agent's commit %s in %s: read diff-tree change %q", commit[:7], r.Dir,
+				diffFields[index])
+		}
+		// A deletion writes nothing, and a submodule's object is a commit in another repository.
+		if change[4] != "D" && change[1] != "160000" {
+			writtenBlobs.WriteString(change[3] + "\n")
+		}
+	}
+	sizesOutput, err := runGit(ctx, r, []string{"cat-file", "--batch-check=%(objectsize)"}, writtenBlobs.String(),
+		[]string{})
+	if err != nil {
+		return false, err
+	}
+	var writtenBytes int64
+	for _, sizeText := range strings.Fields(string(sizesOutput)) {
+		size, err := strconv.ParseInt(sizeText, 10, 64)
+		if err != nil {
+			return false, fmt.Errorf("size the agent's commit %s in %s: read cat-file size %q: %w", commit[:7], r.Dir,
+				sizesOutput, err)
+		}
+		writtenBytes += size
+	}
+	if writtenBytes > maximumTakenBytes {
+		return false, fmt.Errorf("take the agent's commit %s on %s into %s: %w: %d bytes, over %d", commit[:7],
+			headName(head.Branch), r.Dir, ErrTakenCommitsTooLarge, writtenBytes, maximumTakenBytes)
+	}
 	if err := r.moveWorkTree(ctx, from, commit); err != nil {
 		return false, fmt.Errorf("take the agent's commit %s on %s into %s: %w", commit[:7], headName(head.Branch),
 			r.Dir, err)
@@ -154,6 +189,65 @@ func (r Repository) TakeAgentCommits(ctx context.Context, remote string, head Ag
 		return false, err
 	}
 	return from != commit, nil
+}
+
+// fetchAgentHead fetches branch, or HEAD when it is empty, from remote, a git URL of the agent's copy, and returns the
+// fetched commit. branch must have passed check-ref-format.
+func (r Repository) fetchAgentHead(ctx context.Context, remote string, branch string) (string, error) {
+	source := branch
+	if source == "" {
+		source = "HEAD"
+	}
+	// fsck rejects a tree naming .git or another path git would refuse to check out.
+	if err := r.run(ctx, "-c", "transfer.fsckObjects=true", "fetch", "--no-tags", "--no-write-fetch-head",
+		"--no-recurse-submodules", remote, "+"+source+":refs/perusal/agent-head"); err != nil {
+		return "", err
+	}
+	// The agent may have committed again since its HEAD was read.
+	return r.revParse(ctx, "refs/perusal/agent-head")
+}
+
+// AddWorkTreeFromAgent adds a work tree of r at dir on a new branch named as head's, the agent's copy on remote, a git
+// URL. The branch starts where the agent's branched from origin's default branch, a commit the owner already has from
+// origin, and TakeAgentCommits then brings in the agent's commits. It returns that commit.
+func (r Repository) AddWorkTreeFromAgent(ctx context.Context, remote string, head AgentHead, dir string) (string,
+	error) {
+	if head.Err != nil {
+		return "", head.Err
+	}
+	if head.Branch == "" {
+		return "", fmt.Errorf("add a work tree at %s: the agent's copy %s has a detached HEAD, so there is no branch "+
+			"to name", dir, remote)
+	}
+	if err := r.run(ctx, "check-ref-format", head.Branch); err != nil {
+		return "", fmt.Errorf("add a work tree at %s: the agent's branch %q: %w", dir, head.Branch, err)
+	}
+	if err := r.run(ctx, "fetch", "--prune", "origin"); err != nil {
+		return "", err
+	}
+	defaultBranch, err := r.DefaultBranch(ctx)
+	if err != nil {
+		return "", err
+	}
+	if defaultBranch.Ref == "" {
+		return "", fmt.Errorf("add a work tree at %s: origin's default branch is unset in %s, git remote set-head "+
+			"origin --auto sets it", dir, r.Dir)
+	}
+	commit, err := r.fetchAgentHead(ctx, remote, head.Branch)
+	if err != nil {
+		return "", err
+	}
+	output, err := r.git(ctx, "merge-base", commit, defaultBranch.Ref)
+	if err != nil {
+		return "", fmt.Errorf("find where the agent's %s branched from %s in %s: %w", headName(head.Branch),
+			defaultBranch.Ref, r.Dir, err)
+	}
+	base := strings.TrimSpace(string(output))
+	if err := r.run(ctx, "worktree", "add", "-b", strings.TrimPrefix(head.Branch, "refs/heads/"), dir,
+		base); err != nil {
+		return "", err
+	}
+	return base, nil
 }
 
 func headName(branch string) string {

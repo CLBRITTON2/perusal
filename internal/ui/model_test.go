@@ -138,7 +138,7 @@ func aFocusWithADifferentFirstRepositoryPicksAgain(t *testing.T) {
 func focusOnSeveral(t *testing.T, uncommitted map[string]bool) Model {
 	t.Helper()
 	focused := []gitrepo.Repository{{Dir: "C:/dev/cwd"}, {Dir: "C:/dev/first"}, {Dir: "C:/dev/second"}}
-	m := update(t, New(findNothing, openAnything), tea.WindowSizeMsg{Width: 120, Height: 30})
+	m := update(t, New(findNothing, openAnything, nil), tea.WindowSizeMsg{Width: 120, Height: 30})
 	m = update(t, m, focus.Focus{Repositories: focused, Refusals: []error{}})
 	return update(t, m, uncommittedMsg{focused: focused, uncommitted: uncommitted})
 }
@@ -171,7 +171,7 @@ func TestARefusedRepositoryIsAMutedRowWithItsSummaryAndEnterShowsTheReason(t *te
 			{RelativePath: "agents", Err: fmt.Errorf("%w: C:/dev/agents/.git has no deny", focus.ErrGitDirUnprotected)},
 		}}, nil
 	}
-	m := update(t, New(list, openAnything), tea.WindowSizeMsg{Width: 120, Height: 30})
+	m := update(t, New(list, openAnything, nil), tea.WindowSizeMsg{Width: 120, Height: 30})
 	m = update(t, m, tea.KeyPressMsg{Code: 'o', Text: "o"})
 	m = update(t, m, overviewRequest{findRepositories: list}.load())
 	screen := ansi.Strip(m.renderScreen())
@@ -665,7 +665,7 @@ func TestHeaderCountsBranchesAndWorkTrees(t *testing.T) {
 		"inALinkedWorkTree": {dir: "C:/dev/repo-side", want: "3 branches · 2 work trees · work tree of repo"},
 	} {
 		t.Run(name, func(t *testing.T) {
-			m := update(t, New(findNothing, openAnything), tea.WindowSizeMsg{Width: 120, Height: 30})
+			m := update(t, New(findNothing, openAnything, nil), tea.WindowSizeMsg{Width: 120, Height: 30})
 			m = update(t, m, focusOnOne(test.dir))
 			m = update(t, m, statusMsg{dir: test.dir, status: gitrepo.Status{Branch: "main"}, branchCount: 3,
 				remoteBranchCount: test.remoteBranchCount, workTrees: workTrees})
@@ -685,7 +685,7 @@ func focusOnOne(dir string) focus.Focus {
 
 func reviewingRepository(t *testing.T, status gitrepo.Status) Model {
 	t.Helper()
-	m := update(t, New(findNothing, openAnything), tea.WindowSizeMsg{Width: 120, Height: 30})
+	m := update(t, New(findNothing, openAnything, nil), tea.WindowSizeMsg{Width: 120, Height: 30})
 	m = update(t, m, focusOnOne("C:/dev/repo"))
 	return update(t, m, statusMsg{dir: "C:/dev/repo", status: status})
 }
@@ -896,7 +896,7 @@ func searchLooksAtTheHashAuthorAndRefs(t *testing.T) {
 
 func logOf(t *testing.T, commits []gitrepo.Commit) Model {
 	t.Helper()
-	m := update(t, New(findNothing, openAnything), focusOnOne("C:/dev/repo"))
+	m := update(t, New(findNothing, openAnything, nil), focusOnOne("C:/dev/repo"))
 	m = update(t, m, logMsg{dir: "C:/dev/repo", limit: logPageSize, commits: commits})
 	return update(t, m, tea.KeyPressMsg{Code: tea.KeyTab})
 }
@@ -924,7 +924,7 @@ func selectionFollowsTheCommitWhenNewOnesArriveAbove(t *testing.T) {
 }
 
 func dropsFilesLoadedForThePreviousRepository(t *testing.T) {
-	m := update(t, New(findNothing, openAnything), focusOnOne("C:/dev/old"))
+	m := update(t, New(findNothing, openAnything, nil), focusOnOne("C:/dev/old"))
 	m = update(t, m, focusOnOne("C:/dev/new"))
 
 	m = update(t, m, statusMsg{dir: "C:/dev/old", status: gitrepo.Status{Branch: "master", Files: twoFiles()}})
@@ -935,7 +935,7 @@ func dropsFilesLoadedForThePreviousRepository(t *testing.T) {
 }
 
 func rejectionClearsTheReviewAndThePopup(t *testing.T) {
-	m := update(t, New(findNothing, openAnything), focusOnOne("C:/dev/repo"))
+	m := update(t, New(findNothing, openAnything, nil), focusOnOne("C:/dev/repo"))
 	m = update(t, m, statusMsg{dir: "C:/dev/repo", status: gitrepo.Status{Branch: "master", Files: twoFiles()}})
 	m = update(t, m, tea.KeyPressMsg{Code: 'c', Text: "c"})
 
@@ -948,7 +948,7 @@ func rejectionClearsTheReviewAndThePopup(t *testing.T) {
 }
 
 func refocusingTheSameRepositoryKeepsTheSelection(t *testing.T) {
-	m := update(t, New(findNothing, openAnything), focusOnOne("C:/dev/repo"))
+	m := update(t, New(findNothing, openAnything, nil), focusOnOne("C:/dev/repo"))
 	m = update(t, m, statusMsg{dir: "C:/dev/repo", status: gitrepo.Status{Branch: "master", Files: twoFiles()}})
 	m = update(t, m, tea.KeyPressMsg{Code: 'j', Text: "j"})
 

@@ -66,7 +66,7 @@ func review(repositoryPath string) error {
 			"so it needs perusal follow")
 	}, func(ctx context.Context, dir string) (gitrepo.Repository, error) {
 		return gitrepo.Open(ctx, gitrepo.Repository{Dir: dir})
-	}, statePath)
+	}, nil, statePath)
 	if err != nil {
 		return err
 	}

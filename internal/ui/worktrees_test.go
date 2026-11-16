@@ -2,6 +2,7 @@ package ui
 
 import (
 	"context"
+	"errors"
 	"strings"
 	"testing"
 
@@ -90,6 +91,83 @@ func TestEnterOnABranchInAnotherWorkTreeReviewsThatWorkTree(t *testing.T) {
 		t.Fatalf("got reload %v, mode %d, repository %q, want side's work tree under review", reloading, m.mode,
 			m.repository.Dir)
 	}
+}
+
+func TestMissingWorkTreeOffer(t *testing.T) {
+	t.Run("cCreatesTheOfferedWorkTreeAndClosesThePopupWithItsBase", cCreatesTheOfferedWorkTreeAndClosesThePopupWithItsBase)
+	t.Run("enterLeavesTheOfferOpenWithoutCreating", enterLeavesTheOfferOpenWithoutCreating)
+	t.Run("escClosesTheOfferAndItIsNotMadeAgainThisRun", escClosesTheOfferAndItIsNotMadeAgainThisRun)
+}
+
+func cCreatesTheOfferedWorkTreeAndClosesThePopupWithItsBase(t *testing.T) {
+	created := []string{}
+	m := offeringMissingWorkTree(t, func(_ context.Context, missing focus.MissingWorkTree) (string, error) {
+		created = append(created, missing.Dir)
+		return "0123456789abcdef0123456789abcdef01234567", nil
+	})
+	popup := ansi.Strip(m.renderConfirmPopup())
+
+	next, creating := m.Update(tea.KeyPressMsg{Code: 'c', Text: "c"})
+	m = update(t, asModel(t, next), creating())
+
+	if !strings.Contains(popup, "create worktree worktrees/repo/claude-x") {
+		t.Fatalf("got popup:\n%s\nwant it to name worktrees/repo/claude-x", popup)
+	}
+	if len(created) != 1 || created[0] != "C:/dev/worktrees/repo/claude-x" || m.popup.kind != noPopup ||
+		m.footer.text != "created worktree worktrees/repo/claude-x at 0123456" {
+		t.Fatalf("got created %q, popup %d, footer %q, want one creation and the popup closed", created,
+			m.popup.kind, m.footer.text)
+	}
+}
+
+func enterLeavesTheOfferOpenWithoutCreating(t *testing.T) {
+	m := offeringMissingWorkTree(t, refuseToCreate)
+
+	next, cmd := m.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
+	m = asModel(t, next)
+
+	if cmd != nil || m.popup.kind != confirmPopup || m.popup.running {
+		t.Fatalf("got command %v, popup %d, running %v, want the offer still open and idle", cmd, m.popup.kind,
+			m.popup.running)
+	}
+}
+
+func escClosesTheOfferAndItIsNotMadeAgainThisRun(t *testing.T) {
+	m := offeringMissingWorkTree(t, refuseToCreate)
+
+	m = update(t, m, tea.KeyPressMsg{Code: tea.KeyEscape})
+	m = update(t, m, focus.Focus{Repositories: []gitrepo.Repository{}, Refusals: []error{},
+		MissingWorkTrees: []focus.MissingWorkTree{missingClaudeX()}})
+	m = update(t, m, pollTickMsg{})
+
+	if m.popup.kind != noPopup {
+		t.Fatalf("got popup %d, want the declined worktree not offered again", m.popup.kind)
+	}
+}
+
+func offeringMissingWorkTree(t *testing.T, createWorkTree WorkTreeCreator) Model {
+	t.Helper()
+	m := update(t, New(findNothing, openAnything, createWorkTree), tea.WindowSizeMsg{Width: 120, Height: 30})
+	m = update(t, m, focus.Focus{Repositories: []gitrepo.Repository{}, Refusals: []error{},
+		MissingWorkTrees: []focus.MissingWorkTree{missingClaudeX()}})
+	m = update(t, m, pollTickMsg{})
+	if m.popup.kind != confirmPopup {
+		t.Fatalf("got popup %d, want the offer open", m.popup.kind)
+	}
+	return m
+}
+
+func missingClaudeX() focus.MissingWorkTree {
+	return focus.MissingWorkTree{
+		AgentDir:     "C:/agent/dev/worktrees/repo/claude-x",
+		Dir:          "C:/dev/worktrees/repo/claude-x",
+		RelativePath: "worktrees/repo/claude-x",
+		Clone:        gitrepo.Repository{Dir: "C:/dev/repo"},
+	}
+}
+
+func refuseToCreate(context.Context, focus.MissingWorkTree) (string, error) {
+	return "", errors.New("refuseToCreate creates nothing")
 }
 
 func workTreesOf(t *testing.T) Model {

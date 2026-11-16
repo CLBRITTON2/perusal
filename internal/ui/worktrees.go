@@ -3,6 +3,7 @@ package ui
 import (
 	"context"
 	"errors"
+	"maps"
 	"path"
 	"strings"
 	"sync"
@@ -16,6 +17,48 @@ import (
 
 // RepositoryOpener opens the work tree at dir, applying the same checks as the repositories perusal was given.
 type RepositoryOpener func(ctx context.Context, dir string) (gitrepo.Repository, error)
+
+// WorkTreeCreator adds the owner's copy of an agent's worktree and returns the commit its branch starts at.
+type WorkTreeCreator func(ctx context.Context, missing focus.MissingWorkTree) (string, error)
+
+type workTreeCreateRequest struct {
+	createWorkTree WorkTreeCreator
+	missing        focus.MissingWorkTree
+}
+
+func (r workTreeCreateRequest) create() tea.Msg {
+	base, err := r.createWorkTree(context.Background(), r.missing)
+	if err != nil {
+		return popupResult(r.missing.Dir, err, "")
+	}
+	return popupResult(r.missing.Dir, nil, "created worktree "+r.missing.RelativePath+" at "+base[:7])
+}
+
+// withWorkTreeOffer asks about the first missing worktree not asked about yet, once per run, so an agent naming
+// worktrees cannot keep the popup up. It waits while another popup or the search is open.
+func (m Model) withWorkTreeOffer() Model {
+	if m.createWorkTree == nil || m.popup.kind != noPopup || m.mode == modeSearching {
+		return m
+	}
+	for _, missing := range m.missingWorkTrees {
+		if m.askedWorkTrees[missing.AgentDir] {
+			continue
+		}
+		m.askedWorkTrees = maps.Clone(m.askedWorkTrees)
+		m.askedWorkTrees[missing.AgentDir] = true
+		return m.withConfirmation(missing.Dir, confirmation{
+			lines: []string{
+				titleStyle.Render("create worktree " + sanitizeText(missing.RelativePath)),
+				textStyle.Render("the agent added it, and this machine has no copy"),
+				textStyle.Render("its branch starts where the agent's left origin's default branch"),
+			},
+			confirmKey:  confirmCreateKey,
+			run:         workTreeCreateRequest{createWorkTree: m.createWorkTree, missing: missing}.create,
+			runningText: "creating...",
+		})
+	}
+	return m
+}
 
 // refusal is the error the opener gave, and repository and changedCount are set only when it is nil.
 type workTreeRow struct {

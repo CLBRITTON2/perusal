@@ -17,9 +17,21 @@ var (
 )
 
 // Repositories are in focus file order, each once. Refusals hold an error for each path that failed a check.
+// MissingWorkTrees are the agent's worktrees the owner has no copy of yet, each once.
 type Focus struct {
-	Repositories []gitrepo.Repository
-	Refusals     []error
+	Repositories     []gitrepo.Repository
+	Refusals         []error
+	MissingWorkTrees []MissingWorkTree
+}
+
+// MissingWorkTree is a worktree the agent added under its worktrees folder, at AgentDir, whose owner copy at Dir does
+// not exist yet. Clone is the owner's clone of its repository, checked as a focused one is. RelativePath has forward
+// slashes.
+type MissingWorkTree struct {
+	AgentDir     string
+	Dir          string
+	RelativePath string
+	Clone        gitrepo.Repository
 }
 
 // RelativePath has forward slashes.

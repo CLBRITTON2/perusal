@@ -133,6 +133,12 @@ working in, and switches as the agent moves between them. It reads
   your index and `HEAD` untouched. So the agent's commits show up in your copy as unstaged changes, and committing
   them yourself changes nothing for the next one. The agent's uncommitted edits stay on the agent host. git refuses a
   commit that would overwrite a file you edited since the last take, shown in the footer until a take succeeds.
+  A take refuses commits that write over 100 MiB of file content.
+- When the focus file names a worktree the agent added at `worktrees\<repository path>\<folder>` under `agentDir`, and
+  you have the clone at `<repository path>` but no copy of that worktree, perusal offers to create it. `c` adds it with
+  `git worktree add` on a branch named as the agent's, starting where the agent's branch left `origin`'s default
+  branch after a fetch of `origin`, and the next take brings in the agent's commits. `esc` declines it until perusal
+  restarts. `enter` does not confirm it, since the popup opens on its own.
 
 The overview (`o`) lists every repository under `ownerDir` with its branch, its uncommitted file count, how far it is
 ahead of and behind its upstream, and how far it is behind `origin`'s default branch. The repositories the focus file

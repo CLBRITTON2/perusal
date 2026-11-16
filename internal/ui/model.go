@@ -133,9 +133,11 @@ type Model struct {
 	display
 	findRepositories RepositoryFinder
 	openRepository   RepositoryOpener
-	mode             screenMode
-	popup            popupState
-	footer           footer
+	// createWorkTree is nil where the agent shares the owner's files, so no worktree of its can be missing.
+	createWorkTree WorkTreeCreator
+	mode           screenMode
+	popup          popupState
+	footer         footer
 	// The poll sends a take failure only when it changes, so the footer shows it until the next one.
 	takeFailure string
 
@@ -149,6 +151,9 @@ type Model struct {
 	// focused lists the repositories the focus named.
 	focused   []gitrepo.Repository
 	rejection string
+	// missingWorkTrees are the ones the focus named. askedWorkTrees holds the AgentDir of each one offered this run.
+	missingWorkTrees []focus.MissingWorkTree
+	askedWorkTrees   map[string]bool
 
 	status            gitrepo.Status
 	stagedLineCounts  diff.LineCounts
@@ -189,7 +194,7 @@ type Model struct {
 	branchNameInput    textinput.Model
 }
 
-func New(findRepositories RepositoryFinder, openRepository RepositoryOpener) Model {
+func New(findRepositories RepositoryFinder, openRepository RepositoryOpener, createWorkTree WorkTreeCreator) Model {
 	summaryInput := textinput.New()
 	summaryInput.Placeholder = "Summary (required)"
 	summaryInput.Prompt = ""
@@ -214,11 +219,14 @@ func New(findRepositories RepositoryFinder, openRepository RepositoryOpener) Mod
 	return Model{
 		findRepositories:   findRepositories,
 		openRepository:     openRepository,
+		createWorkTree:     createWorkTree,
 		overview:           selectableList[overviewRow]{rows: []overviewRow{}},
 		syncing:            map[string]string{},
 		branches:           branchList{selectableList: selectableList[branchRow]{rows: []branchRow{}}},
 		workTreeList:       selectableList[workTreeRow]{rows: []workTreeRow{}},
 		focused:            []gitrepo.Repository{},
+		missingWorkTrees:   []focus.MissingWorkTree{},
+		askedWorkTrees:     map[string]bool{},
 		status:             gitrepo.Status{Files: []gitrepo.FileStatus{}},
 		workTrees:          []gitrepo.WorkTree{},
 		commits:            []gitrepo.Commit{},
@@ -278,6 +286,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.takeFailure = sanitizeSingleLine(msg.Reason)
 		return m, nil
 	case pollTickMsg:
+		m = m.withWorkTreeOffer()
 		if m.repository.Dir == "" {
 			return m, tea.Sequence(m.loadUncommitted(), nextPoll())
 		}
@@ -625,7 +634,7 @@ func (m Model) openView(view viewKind) (tea.Model, tea.Cmd) {
 }
 
 func (m Model) withRepository(repository gitrepo.Repository, rejection string) Model {
-	next := New(m.findRepositories, m.openRepository)
+	next := New(m.findRepositories, m.openRepository, m.createWorkTree)
 	next.display = m.display
 	// Only the overview spans repositories, so it alone stays open across a switch.
 	if m.mode == modeOverview {
@@ -634,6 +643,8 @@ func (m Model) withRepository(repository gitrepo.Repository, rejection string) M
 	next.overview = m.overview
 	next.syncing = m.syncing
 	next.takeFailure = m.takeFailure
+	next.missingWorkTrees = m.missingWorkTrees
+	next.askedWorkTrees = m.askedWorkTrees
 	next.repository = repository
 	next.rejection = rejection
 	return next.withLayout()
@@ -642,6 +653,7 @@ func (m Model) withRepository(repository gitrepo.Repository, rejection string) M
 // A focus that still names the repository under review keeps it, so a new edit elsewhere never pulls the review away.
 // The focus file starts with the focused pane's directory, so a different first repository means a different pane.
 func (m Model) withFocus(msg focus.Focus) (tea.Model, tea.Cmd) {
+	m.missingWorkTrees = msg.MissingWorkTrees
 	if m.rejection == "" && len(m.focused) > 0 && len(msg.Repositories) > 0 && m.focused[0] == msg.Repositories[0] &&
 		slices.Contains(msg.Repositories, m.repository) {
 		m.focused = msg.Repositories

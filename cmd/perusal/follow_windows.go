@@ -58,6 +58,7 @@ func follow(rules focus.Rules) (followErr error) {
 	defer cancel()
 	var results <-chan focus.Result
 	var takeFailures <-chan string
+	var createWorkTree ui.WorkTreeCreator
 	if rules.AgentHost == "" {
 		watched, err := focus.Follow(ctx, rules)
 		if err != nil {
@@ -72,6 +73,9 @@ func follow(rules focus.Rules) (followErr error) {
 			followErr = errors.Join(followErr, session.Close())
 		}()
 		results, takeFailures = focus.FollowAgentHost(ctx, rules, session, agentHostWaitTimeout)
+		createWorkTree = func(ctx context.Context, missing focus.MissingWorkTree) (string, error) {
+			return focus.CreateWorkTree(ctx, rules, session, missing)
+		}
 	}
 	statePath, err := viewStatePath()
 	if err != nil {
@@ -81,7 +85,7 @@ func follow(rules focus.Rules) (followErr error) {
 		return focus.FindRepositories(ctx, rules)
 	}, func(ctx context.Context, dir string) (gitrepo.Repository, error) {
 		return focus.OpenWorkTree(ctx, rules, dir)
-	}, statePath)
+	}, createWorkTree, statePath)
 	if err != nil {
 		return err
 	}

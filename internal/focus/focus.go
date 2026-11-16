@@ -130,19 +130,72 @@ func resolveContent(ctx context.Context, rules Rules, content string) (Focus, er
 	}
 	repositories := []gitrepo.Repository{}
 	refusals := []error{}
+	missingWorkTrees := []MissingWorkTree{}
 	for _, agentPath := range agentPaths {
 		repository, err := resolvePath(ctx, rules, agentPath)
 		switch {
+		// Only an agent host keeps its own copies, so only there can the owner lack one.
+		case errors.Is(err, ErrNotWorkTree) && rules.AgentHost != "":
+			missing, isMissing, missingErr := missingWorkTree(ctx, rules, agentPath)
+			switch {
+			case missingErr != nil:
+				refusals = append(refusals, missingErr)
+			case !isMissing:
+				refusals = append(refusals, err)
+			case !slices.Contains(missingWorkTrees, missing):
+				missingWorkTrees = append(missingWorkTrees, missing)
+			}
 		case err != nil:
 			refusals = append(refusals, err)
 		case !slices.Contains(repositories, repository):
 			repositories = append(repositories, repository)
 		}
 	}
-	if len(repositories) == 0 {
+	if len(repositories) == 0 && len(missingWorkTrees) == 0 {
 		return Focus{}, errors.Join(refusals...)
 	}
-	return Focus{Repositories: repositories, Refusals: refusals}, nil
+	return Focus{Repositories: repositories, Refusals: refusals, MissingWorkTrees: missingWorkTrees}, nil
+}
+
+// missingWorkTree is the agent's worktree that agentPath is in, when agentPath is under the worktrees folder of
+// rules.AgentDir at <repository path>\<folder> and the owner has a clone at <repository path>. It is false for any
+// other path.
+func missingWorkTree(ctx context.Context, rules Rules, agentPath string) (MissingWorkTree, bool, error) {
+	ownerPath, err := mapPath(agentPath, rules.AgentDir, rules.OwnerDir)
+	if err != nil {
+		return MissingWorkTree{}, false, err
+	}
+	relativePath, err := filepath.Rel(rules.OwnerDir, ownerPath)
+	if err != nil {
+		return MissingWorkTree{}, false, fmt.Errorf("map %s under %s: %w", ownerPath, rules.OwnerDir, err)
+	}
+	parts := strings.Split(relativePath, string(filepath.Separator))
+	if len(parts) < 3 || !strings.EqualFold(parts[0], "worktrees") {
+		return MissingWorkTree{}, false, nil
+	}
+	// The shortest repository path with a clone wins, so a folder inside the worktree is never taken for its name.
+	for end := 2; end < len(parts); end++ {
+		cloneDir := filepath.Join(rules.OwnerDir, filepath.Join(parts[1:end]...))
+		isClone, err := hasDotGit(cloneDir)
+		if err != nil {
+			return MissingWorkTree{}, false, err
+		}
+		if !isClone {
+			continue
+		}
+		clone, err := openWorkTree(ctx, rules, cloneDir)
+		if err != nil {
+			return MissingWorkTree{}, false, err
+		}
+		workTreePath := filepath.Join(parts[:end+1]...)
+		return MissingWorkTree{
+			AgentDir:     filepath.Join(rules.AgentDir, workTreePath),
+			Dir:          filepath.Join(rules.OwnerDir, workTreePath),
+			RelativePath: filepath.ToSlash(workTreePath),
+			Clone:        clone,
+		}, true, nil
+	}
+	return MissingWorkTree{}, false, nil
 }
 
 func resolvePath(ctx context.Context, rules Rules, agentPath string) (gitrepo.Repository, error) {
