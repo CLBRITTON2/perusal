@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"io/fs"
+	"path/filepath"
 	"reflect"
 	"strings"
 	"testing"
@@ -335,6 +336,58 @@ func aBranchWithNoUpstreamIsPublished(t *testing.T) {
 	popup := ansi.Strip(m.renderConfirmPopup())
 	if !strings.Contains(screen, "↑2 unpublished") || !strings.Contains(popup, "publish feature to origin") {
 		t.Fatalf("got screen:\n%s\npopup:\n%s\nwant the unpushed commits shown and offered", screen, popup)
+	}
+}
+
+func TestCherryPickInTheOverview(t *testing.T) {
+	t.Run("cherryPickOffersTheWorkTreesBranchOntoItsMainClonesDefaultBranch",
+		cherryPickOffersTheWorkTreesBranchOntoItsMainClonesDefaultBranch)
+	t.Run("cherryPickRefusesAMainClone", cherryPickRefusesAMainClone)
+}
+
+func cherryPickOffersTheWorkTreesBranchOntoItsMainClonesDefaultBranch(t *testing.T) {
+	m := update(t, overviewWithTwoRepositories(t), overviewMsg{rows: []overviewRow{
+		repositoryRow{
+			FoundRepository: focus.FoundRepository{RelativePath: "repo", Repository: gitrepo.Repository{
+				Dir: "C:/dev/repo", GitDir: filepath.FromSlash("C:/dev/repo/.git"),
+			}},
+			status:        gitrepo.Status{Branch: "main", HasCommits: true},
+			defaultBranch: originMain(),
+		},
+		repositoryRow{
+			FoundRepository: focus.FoundRepository{RelativePath: "worktrees/repo/fix", Repository: gitrepo.Repository{
+				Dir: "C:/dev/worktrees/repo/fix", GitDir: filepath.FromSlash("C:/dev/repo/.git/worktrees/fix"),
+			}},
+			status: gitrepo.Status{Branch: "fix", HasCommits: true},
+		},
+	}})
+	m = update(t, m, tea.KeyPressMsg{Code: 'j', Text: "j"})
+
+	next, cmd := m.Update(tea.KeyPressMsg{Code: 'C', Text: "C"})
+	m = asModel(t, next)
+
+	popup := ansi.Strip(m.renderConfirmPopup())
+	if cmd != nil || !strings.Contains(popup, "cherry-pick fix onto main") || m.popup.dir != "C:/dev/repo" {
+		t.Fatalf("got command %v, footer %q, popup:\n%s\nfor %q, want a cherry-pick of fix onto main in repo", cmd,
+			m.footer.text, popup, m.popup.dir)
+	}
+}
+
+func cherryPickRefusesAMainClone(t *testing.T) {
+	m := update(t, overviewWithTwoRepositories(t), overviewMsg{rows: []overviewRow{repositoryRow{
+		FoundRepository: focus.FoundRepository{RelativePath: "repo", Repository: gitrepo.Repository{
+			Dir: "C:/dev/repo", GitDir: "C:/dev/repo/.git",
+		}},
+		status:        gitrepo.Status{Branch: "fix", HasCommits: true},
+		defaultBranch: originMain(),
+	}}})
+
+	next, cmd := m.Update(tea.KeyPressMsg{Code: 'C', Text: "C"})
+	m = asModel(t, next)
+
+	if cmd != nil || m.popup.kind != noPopup || !strings.Contains(m.footer.text, "repo is a main clone") {
+		t.Fatalf("got command %v, popup %d, footer %q, want the main clone refused", cmd, m.popup.kind,
+			m.footer.text)
 	}
 }
 

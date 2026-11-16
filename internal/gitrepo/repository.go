@@ -320,6 +320,70 @@ func (r Repository) Pull(ctx context.Context) error {
 	return r.run(ctx, "pull", "--ff-only", "--no-rebase")
 }
 
+// CherryPickBranch cherry-picks the commits on branch that HEAD lacks, skipping those already cherry-picked, onto HEAD,
+// which must be origin's default branch with no uncommitted changes to tracked files, and returns how many it picked.
+// It refuses a merge commit, and a cherry-pick that stops on a conflict is aborted, so HEAD stays as it was.
+func (r Repository) CherryPickBranch(ctx context.Context, branch string) (int, error) {
+	defaultBranch, err := r.DefaultBranch(ctx)
+	if err != nil {
+		return 0, err
+	}
+	if defaultBranch == (RemoteBranch{}) {
+		return 0, fmt.Errorf("cherry-pick %s in %s: refs/remotes/origin/HEAD is unset, so origin's default branch is "+
+			"unknown, git remote set-head origin --auto sets it", branch, r.Dir)
+	}
+	headOutput, err := r.git(ctx, "symbolic-ref", "--quiet", "--short", "HEAD")
+	if err != nil && !isExitCodeOne(err) {
+		return 0, err
+	}
+	head := strings.TrimSpace(string(headOutput))
+	if head != defaultBranch.Name {
+		return 0, fmt.Errorf("cherry-pick %s in %s: it has %q checked out, switch it to %s first", branch, r.Dir,
+			head, defaultBranch.Name)
+	}
+	trackedChanges, err := r.git(ctx, "status", "--porcelain", "--untracked-files=no")
+	if err != nil {
+		return 0, err
+	}
+	if len(trackedChanges) > 0 {
+		return 0, fmt.Errorf("cherry-pick %s in %s: %s has uncommitted changes, commit or stash them first", branch,
+			r.Dir, defaultBranch.Name)
+	}
+	merges, err := r.countCommits(ctx, []string{"--merges", "HEAD.." + branch})
+	if err != nil {
+		return 0, err
+	}
+	if merges > 0 {
+		return 0, fmt.Errorf("cherry-pick %s in %s: it has %d merge commits %s lacks, merge it instead", branch, r.Dir,
+			merges, defaultBranch.Name)
+	}
+	commitsOutput, err := r.git(ctx, "rev-list", "--reverse", "--right-only", "--cherry-pick", "HEAD..."+branch)
+	if err != nil {
+		return 0, err
+	}
+	commits := strings.Fields(string(commitsOutput))
+	if len(commits) == 0 {
+		return 0, fmt.Errorf("cherry-pick %s in %s: %s already has every commit on it", branch, r.Dir,
+			defaultBranch.Name)
+	}
+	pickErr := r.run(ctx, slices.Concat([]string{"cherry-pick"}, commits)...)
+	if pickErr == nil {
+		return len(commits), nil
+	}
+	isStopped, err := r.gitSucceeds(ctx, "rev-parse", "--verify", "--quiet", "CHERRY_PICK_HEAD")
+	if err != nil {
+		return 0, errors.Join(pickErr, err)
+	}
+	if !isStopped {
+		return 0, pickErr
+	}
+	if err := r.run(ctx, "cherry-pick", "--abort"); err != nil {
+		return 0, errors.Join(pickErr, err)
+	}
+	return 0, fmt.Errorf("aborted the cherry-pick of %s onto %s, so %s is as it was: %w", branch, defaultBranch.Name,
+		defaultBranch.Name, pickErr)
+}
+
 // Switch creates branch from the remote branch of that name when it exists only there.
 func (r Repository) Switch(ctx context.Context, branch string) error {
 	return r.run(ctx, "switch", branch)

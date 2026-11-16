@@ -607,6 +607,89 @@ func mergedAndDeletedOnTheRemote(t *testing.T) (string, string) {
 	return clone, otherClone
 }
 
+func TestCherryPickBranch(t *testing.T) {
+	t.Run("cherryPickBranchPutsTheWorkTreesCommitsOnMain", cherryPickBranchPutsTheWorkTreesCommitsOnMain)
+	t.Run("cherryPickBranchSkipsCommitsAlreadyPicked", cherryPickBranchSkipsCommitsAlreadyPicked)
+	t.Run("cherryPickBranchAbortsAndKeepsMainOnConflict", cherryPickBranchAbortsAndKeepsMainOnConflict)
+	t.Run("cherryPickBranchRefusesAnotherBranchCheckedOut", cherryPickBranchRefusesAnotherBranchCheckedOut)
+}
+
+func cherryPickBranchPutsTheWorkTreesCommitsOnMain(t *testing.T) {
+	clone, workTree := cloneWithFeatureWorkTree(t)
+	mainBefore := revParse(t, clone, "main")
+	featureBefore := revParse(t, workTree, "HEAD")
+
+	picked, err := Repository{Dir: clone}.CherryPickBranch(context.Background(), "feature")
+
+	if err != nil || picked != 2 || revParse(t, clone, "main~2") != mainBefore ||
+		messageAt(t, clone, "main") != "Feature two" || revParse(t, workTree, "HEAD") != featureBefore {
+		t.Fatalf("got %d, %v, main %s, want both feature commits on %s and feature unchanged", picked, err,
+			gitOutput(t, clone, "log", "--format=%s", "main"), mainBefore)
+	}
+}
+
+func cherryPickBranchSkipsCommitsAlreadyPicked(t *testing.T) {
+	clone, workTree := cloneWithFeatureWorkTree(t)
+	repository := Repository{Dir: clone}
+	if _, err := repository.CherryPickBranch(context.Background(), "feature"); err != nil {
+		t.Fatal(err)
+	}
+	writeFile(t, filepath.Join(workTree, "feature.txt"), "three\n")
+	runSteps(t, workTree, [][]string{{"commit", "--all", "--message", "Feature three"}})
+
+	picked, err := repository.CherryPickBranch(context.Background(), "feature")
+	_, againErr := repository.CherryPickBranch(context.Background(), "feature")
+
+	if err != nil || picked != 1 || messageAt(t, clone, "main") != "Feature three" || againErr == nil ||
+		!strings.Contains(againErr.Error(), "already has every commit") {
+		t.Fatalf("got %d, %v, then %v, want only Feature three picked, then nothing left", picked, err, againErr)
+	}
+}
+
+func cherryPickBranchAbortsAndKeepsMainOnConflict(t *testing.T) {
+	clone, _ := cloneWithFeatureWorkTree(t)
+	writeFile(t, filepath.Join(clone, "feature.txt"), "main's own\n")
+	runSteps(t, clone, [][]string{{"add", "feature.txt"}, {"commit", "--message", "Main's own"}})
+	mainBefore := revParse(t, clone, "main")
+
+	_, err := Repository{Dir: clone}.CherryPickBranch(context.Background(), "feature")
+
+	porcelainStatus := gitOutput(t, clone, "status", "--porcelain")
+	if err == nil || !strings.Contains(err.Error(), "aborted the cherry-pick of feature onto main") ||
+		revParse(t, clone, "main") != mainBefore || porcelainStatus != "" {
+		t.Fatalf("got %v, main %s, status %q, want an abort leaving main at %s", err, revParse(t, clone, "main"),
+			porcelainStatus, mainBefore)
+	}
+}
+
+func cherryPickBranchRefusesAnotherBranchCheckedOut(t *testing.T) {
+	clone, _ := cloneWithFeatureWorkTree(t)
+	runSteps(t, clone, [][]string{{"switch", "--create", "other"}})
+
+	_, err := Repository{Dir: clone}.CherryPickBranch(context.Background(), "feature")
+
+	if err == nil || !strings.Contains(err.Error(), `has "other" checked out, switch it to main first`) {
+		t.Fatalf("got %v, want a refusal naming other and main", err)
+	}
+}
+
+// cloneWithFeatureWorkTree returns a clone on main, with origin/HEAD set, and its linked work tree on feature with two
+// commits main lacks.
+func cloneWithFeatureWorkTree(t *testing.T) (string, string) {
+	t.Helper()
+	_, clone := pushedClone(t)
+	workTree := filepath.Join(t.TempDir(), "feature")
+	runSteps(t, clone, [][]string{
+		{"remote", "set-head", "origin", "main"},
+		{"worktree", "add", "-b", "feature", workTree},
+	})
+	writeFile(t, filepath.Join(workTree, "feature.txt"), "one\n")
+	runSteps(t, workTree, [][]string{{"add", "feature.txt"}, {"commit", "--message", "Feature one"}})
+	writeFile(t, filepath.Join(workTree, "feature.txt"), "two\n")
+	runSteps(t, workTree, [][]string{{"commit", "--all", "--message", "Feature two"}})
+	return clone, workTree
+}
+
 func TestMergedIntoCountsASquashMergeWhoseContextChangedFirst(t *testing.T) {
 	remote, clone := pushedClone(t)
 	otherClone := filepath.Join(t.TempDir(), "other")

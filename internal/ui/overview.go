@@ -4,6 +4,7 @@ import (
 	"cmp"
 	"context"
 	"maps"
+	"path/filepath"
 	"slices"
 	"strconv"
 	"strings"
@@ -374,8 +375,63 @@ func (m Model) updateOverview(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		return m.withSelectedRepository(m.pullRepositoryRow)
 	case key.Matches(msg, pushKey):
 		return m.withSelectedRepository(m.pushRepositoryRow)
+	case key.Matches(msg, cherryPickKey):
+		return m.withSelectedRepository(m.cherryPickRepositoryRow)
 	}
 	return m, nil
+}
+
+type cherryPickRequest struct {
+	mainClone repositoryRow
+	branch    string
+}
+
+func (r cherryPickRequest) cherryPick() tea.Msg {
+	picked, err := r.mainClone.Repository.CherryPickBranch(context.Background(), r.branch)
+	return popupResult(r.mainClone.Repository.Dir, err, "cherry-picked "+pluralize(picked, "commit")+" from "+
+		r.branch+" onto "+r.mainClone.defaultBranch.Name+" in "+r.mainClone.RelativePath)
+}
+
+// cherryPickRepositoryRow finds a linked work tree's main clone by its git directory, which holds the work tree's
+// under worktrees, so no git runs before the confirm.
+func (m Model) cherryPickRepositoryRow(row repositoryRow) (tea.Model, tea.Cmd) {
+	adminDir := row.Repository.GitDir
+	commonDir := filepath.Dir(filepath.Dir(adminDir))
+	switch {
+	case m.syncing[row.Repository.Dir] != "":
+		return m, nil
+	case row.status.Branch == "":
+		return m.withFooterError(row.RelativePath + " has a detached HEAD, so there is no branch to cherry-pick"), nil
+	case len(row.status.Files) > 0:
+		return m.withFooterError(row.RelativePath + " has uncommitted changes, and a cherry-pick takes only commits, " +
+			"so commit them first"), nil
+	case adminDir == "" || filepath.Base(filepath.Dir(adminDir)) != "worktrees":
+		return m.withFooterError(row.RelativePath + " is a main clone, cherry-pick from a work tree made by " +
+			"git worktree add"), nil
+	}
+	mainIndex := slices.IndexFunc(m.overview.rows, func(candidate overviewRow) bool {
+		mainClone, isLoaded := candidate.(repositoryRow)
+		return isLoaded && mainClone.Repository.GitDir == commonDir
+	})
+	if mainIndex < 0 {
+		return m.withFooterError(row.RelativePath + "'s main clone is not loaded in the overview"), nil
+	}
+	mainClone := m.overview.rows[mainIndex].(repositoryRow)
+	if mainClone.defaultBranch.Name == "" {
+		return m.withFooterError(mainClone.RelativePath + " has no origin/HEAD, so its default branch is unknown, " +
+			"git remote set-head origin --auto sets it"), nil
+	}
+	defaultName := sanitizeText(mainClone.defaultBranch.Name)
+	return m.withConfirmation(mainClone.Repository.Dir, confirmation{
+		lines: []string{
+			titleStyle.Render("cherry-pick " + headName(row.status.Branch) + " onto " + defaultName),
+			textStyle.Render("its commits " + defaultName + " lacks go onto " + defaultName + " in " +
+				sanitizeText(mainClone.RelativePath) + ", ready to push from there"),
+		},
+		confirmKey:  confirmPickKey,
+		run:         cherryPickRequest{mainClone: mainClone, branch: row.status.Branch}.cherryPick,
+		runningText: "cherry-picking...",
+	}), nil
 }
 
 // withSelectedRepository acts on the selected row when it is a repository and explains the refusal when it is not.

@@ -51,6 +51,7 @@ perusal -repo <dir>  # review the repository <dir> is in
 | `f` `F` | overview | fetch the selected repository or every one, dropping the remote branches that were deleted |
 | `p` | overview | fast-forward the selected repository to its upstream, or a finished branch to the default one |
 | `P` | overview | push or publish the selected repository's branch |
+| `C` | overview | cherry-pick the selected work tree's commits onto the default branch in its main clone, to push from there |
 | `enter` | log | expand the commit into its files |
 | `/` | log | search, `enter` keeps it, `esc` clears it |
 | `?` | anywhere | list every key, `?` or `esc` closes it |
