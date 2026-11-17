@@ -1130,3 +1130,20 @@ func TestGitDirKeepsGitOffARewrittenDotGitFile(t *testing.T) {
 		t.Fatalf("got branch %q, %v, want side", status.Branch, err)
 	}
 }
+
+func TestFilesDiffParsesAsAModifiedFileForTwoFilesInDifferentDirsOutsideARepository(t *testing.T) {
+	oldPath := filepath.Join(t.TempDir(), "current.cs")
+	newPath := filepath.Join(t.TempDir(), "current.cs")
+	writeFile(t, oldPath, "a\nb\nc\n")
+	writeFile(t, newPath, "a\nB\nc\n")
+
+	text, err := FilesDiff(context.Background(), oldPath, newPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	fileDiff, err := diff.ParseFile(text)
+
+	if err != nil || fileDiff.Change != diff.FileModified || diff.CountLines(fileDiff) != (diff.LineCounts{Added: 1, Removed: 1}) {
+		t.Fatalf("got %+v, %v, want one modified line\n%s", fileDiff, err, text)
+	}
+}

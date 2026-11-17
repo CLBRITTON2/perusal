@@ -207,15 +207,6 @@ func New(findRepositories RepositoryFinder, openRepository RepositoryOpener, cre
 	branchNameInput := textinput.New()
 	branchNameInput.Placeholder = "Name"
 	branchNameInput.Prompt = ""
-	helpView := help.New()
-	helpView.ShortSeparator = "  "
-	helpView.Styles.ShortKey = helpKeyStyle
-	helpView.Styles.ShortDesc = helpDescStyle
-	helpView.Styles.ShortSeparator = helpSepStyle
-	helpView.Styles.Ellipsis = helpSepStyle
-	helpView.Styles.FullKey = helpKeyStyle
-	helpView.Styles.FullDesc = helpDescStyle
-	helpView.Styles.FullSeparator = helpSepStyle
 	return Model{
 		findRepositories:   findRepositories,
 		openRepository:     openRepository,
@@ -239,11 +230,24 @@ func New(findRepositories RepositoryFinder, openRepository RepositoryOpener, cre
 		selectedStashFile:  commitRow,
 		searchInput:        searchInput,
 		diffView:           viewport.New(),
-		help:               helpView,
+		help:               newHelpView(),
 		summaryInput:       summaryInput,
 		descriptionBox:     descriptionBox,
 		branchNameInput:    branchNameInput,
 	}
+}
+
+func newHelpView() help.Model {
+	helpView := help.New()
+	helpView.ShortSeparator = "  "
+	helpView.Styles.ShortKey = helpKeyStyle
+	helpView.Styles.ShortDesc = helpDescStyle
+	helpView.Styles.ShortSeparator = helpSepStyle
+	helpView.Styles.Ellipsis = helpSepStyle
+	helpView.Styles.FullKey = helpKeyStyle
+	helpView.Styles.FullDesc = helpDescStyle
+	helpView.Styles.FullSeparator = helpSepStyle
+	return helpView
 }
 
 func (m Model) WithViewState(viewState ViewState) Model {
@@ -542,10 +546,10 @@ func (m Model) updateBrowsing(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		m.popup = popupState{kind: keyListPopup}
 		return m, nil
 	case key.Matches(msg, nextChangeKey):
-		m.diffView.SetYOffset(nextChangeOffset(m.diffLines(), m.diffView.YOffset(), m.maxDiffOffset()))
+		m.diffView.SetYOffset(nextChangeOffset(m.diffLines(), m.diffView.YOffset(), maxOffset(m.diffView)))
 		return m, nil
 	case key.Matches(msg, previousChangeKey):
-		m.diffView.SetYOffset(previousChangeOffset(m.diffLines(), m.diffView.YOffset(), m.maxDiffOffset()))
+		m.diffView.SetYOffset(previousChangeOffset(m.diffLines(), m.diffView.YOffset(), maxOffset(m.diffView)))
 		return m, nil
 	case key.Matches(msg, switchViewKey):
 		return m.openView(listViews[(slices.Index(listViews, m.view)+1)%len(listViews)])
@@ -1203,8 +1207,8 @@ func (m Model) withDiffKeptInPlace(previous []renderedLine) Model {
 }
 
 // viewport keeps its maximum offset unexported, so this reads it off a copy scrolled to the bottom.
-func (m Model) maxDiffOffset() int {
-	bottom := m.diffView
+func maxOffset(diffView viewport.Model) int {
+	bottom := diffView
 	bottom.GotoBottom()
 	return bottom.YOffset()
 }
@@ -1570,14 +1574,14 @@ func (m Model) renderDiffPane() string {
 			}
 			lineCounts = renderLineCounts(total)
 		}
-		return renderPane(m.commitPaneTitle(), lineCounts, m.scrollLabel(), strings.Split(m.diffView.View(), "\n"),
+		return renderPane(m.commitPaneTitle(), lineCounts, scrollLabel(m.diffView), strings.Split(m.diffView.View(), "\n"),
 			width, height)
 	case m.view == viewChanges && len(m.status.Files) > 0:
 		var lineCounts string
 		if m.diffPath != "" {
 			lineCounts = renderLineCounts(diff.CountLines(m.fileDiff))
 		}
-		return renderPane(sanitizeText(m.diffPath), lineCounts, m.scrollLabel(), strings.Split(m.diffView.View(), "\n"),
+		return renderPane(sanitizeText(m.diffPath), lineCounts, scrollLabel(m.diffView), strings.Split(m.diffView.View(), "\n"),
 			width, height)
 	default:
 		return renderPane("diff", "", "", []string{}, width, height)
@@ -1592,11 +1596,11 @@ func (m Model) commitPaneTitle() string {
 	return sanitizeText(tree.commit.ShortHash + " " + tree.commit.Summary)
 }
 
-func (m Model) scrollLabel() string {
-	if m.diffView.TotalLineCount() <= m.diffView.Height() {
+func scrollLabel(diffView viewport.Model) string {
+	if diffView.TotalLineCount() <= diffView.Height() {
 		return ""
 	}
-	return strconv.Itoa(int(m.diffView.ScrollPercent()*100)) + "%"
+	return strconv.Itoa(int(diffView.ScrollPercent()*100)) + "%"
 }
 
 func (m Model) renderFooter() string {

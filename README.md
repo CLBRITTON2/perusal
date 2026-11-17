@@ -100,6 +100,18 @@ list is only as fresh as the last fetch, so `f` fetches with `--prune` and reloa
 The work tree list shows each work tree's folder, its branch and its uncommitted file count, and marks the one under
 review with `*`. In follow mode, one that fails a check below is listed muted, and `enter` on it shows why.
 
+## Show
+
+```
+perusal show -old <file> -new <file> -label <path> -note <file>
+```
+
+Shows the diff of two files anywhere on disk under the text of the note file, read only, in the same diff view. The
+label titles the diff and picks the syntax highlighting. A note line shaped `CHANGE <kind> : <text>`, `SUMMARY : ...`
+or `QUESTION : ...` is drawn with its label in bold gold. `j` `k` scroll a line, `ctrl+d` `ctrl+u` half a page, `n`
+`N` jump between changes, `u` switches between unified (the default) and side by side, and `q` or `esc` closes it.
+It suits a popup that shows a proposed change, such as a herdr plugin pane.
+
 ## Follow mode (Windows)
 
 `perusal follow` is for an agent that runs as its own Windows account. It reviews the repositories the agent is

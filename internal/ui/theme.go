@@ -81,4 +81,6 @@ var (
 	helpKeyStyle        = lipgloss.NewStyle().Foreground(colorRose).Bold(true)
 	helpDescStyle       = lipgloss.NewStyle().Foreground(colorSubtle)
 	helpSepStyle        = lipgloss.NewStyle().Foreground(colorHighlightMed)
+	noteLabelStyle      = lipgloss.NewStyle().Foreground(colorGold).Bold(true)
+	noteValueStyle      = lipgloss.NewStyle().Foreground(colorText).Bold(true)
 )

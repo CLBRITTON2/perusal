@@ -28,11 +28,14 @@ func run(args []string) error {
 	if len(args) > 0 && args[0] == "follow" {
 		return runFollow(args[1:])
 	}
+	if len(args) > 0 && args[0] == "show" {
+		return runShow(args[1:])
+	}
 	flags := flag.NewFlagSet("perusal", flag.ContinueOnError)
 	flags.Usage = func() {
 		fmt.Fprint(flags.Output(), "usage:\n"+
 			"  perusal [-repo <dir>]           review the working tree of the current directory, or of <dir>\n"+
-			followUsage+"\n")
+			followUsage+showUsage+"\n")
 		flags.PrintDefaults()
 	}
 	repositoryPath := flags.String("repo", "", "any directory inside the git working tree to review")

@@ -174,6 +174,16 @@ func (r Repository) FileDiff(ctx context.Context, file FileStatus, contextLines 
 	return string(output), nil
 }
 
+// FilesDiff diffs two files anywhere on disk, inside a repository or not.
+func FilesDiff(ctx context.Context, oldPath string, newPath string) (string, error) {
+	args := slices.Concat([]string{"diff", "--no-index"}, diffFlags, []string{"--", oldPath, newPath})
+	output, err := runGit(ctx, Repository{}, args, "", []string{})
+	if err != nil && !isExitCodeOne(err) {
+		return "", err
+	}
+	return string(output), nil
+}
+
 func (r Repository) StagedLineCounts(ctx context.Context) (diff.LineCounts, error) {
 	args := slices.Concat([]string{"diff", "--cached", "--numstat"}, diffFlags, []string{"--find-renames"})
 	output, err := r.git(ctx, args...)
