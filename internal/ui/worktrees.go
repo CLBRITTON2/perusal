@@ -49,8 +49,8 @@ func (m Model) withWorkTreeOffer() Model {
 		return m.withConfirmation(missing.Dir, confirmation{
 			lines: []string{
 				titleStyle.Render("create worktree " + sanitizeText(missing.RelativePath)),
-				textStyle.Render("the agent added it, and this machine has no copy"),
-				textStyle.Render("its branch starts where the agent's left origin's default branch"),
+				textStyle.Render("the agent's VM has this worktree and this machine doesn't"),
+				textStyle.Render("the new branch starts where the agent's branch split off origin's default branch"),
 			},
 			confirmKey:  confirmCreateKey,
 			run:         workTreeCreateRequest{createWorkTree: m.createWorkTree, missing: missing}.create,
