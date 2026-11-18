@@ -6,6 +6,7 @@ import (
 	"flag"
 	"fmt"
 	"os"
+	"runtime/debug"
 
 	tea "charm.land/bubbletea/v2"
 
@@ -35,12 +36,22 @@ func run(args []string) error {
 	flags.Usage = func() {
 		fmt.Fprint(flags.Output(), "usage:\n"+
 			"  perusal [-repo <dir>]           review the working tree of the current directory, or of <dir>\n"+
+			"  perusal -version                print the build version\n"+
 			followUsage+showUsage+"\n")
 		flags.PrintDefaults()
 	}
 	repositoryPath := flags.String("repo", "", "any directory inside the git working tree to review")
+	printVersion := flags.Bool("version", false, "print the build version and exit")
 	if err := flags.Parse(args); err != nil {
 		return fmt.Errorf("parse flags: %w", err)
+	}
+	if *printVersion {
+		buildInfo, ok := debug.ReadBuildInfo()
+		if !ok {
+			return errors.New("read the build version: the binary has no build info")
+		}
+		fmt.Println(buildInfo.Main.Version)
+		return nil
 	}
 	if flags.NArg() > 0 {
 		return fmt.Errorf("unexpected arguments %q, see perusal -h", flags.Args())
