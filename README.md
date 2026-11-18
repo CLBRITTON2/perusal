@@ -108,8 +108,9 @@ perusal show -old <file> -new <file> -label <path> -note <file>
 
 Shows the diff of two files anywhere on disk under the text of the note file, read only, in the same diff view. The
 label titles the diff and picks the syntax highlighting. A note line shaped `CHANGE <kind> : <text>`, `SUMMARY : ...`
-or `QUESTION : ...` is drawn with its label in bold gold. `j` `k` scroll a line, `ctrl+d` `ctrl+u` half a page, `n`
-`N` jump between changes, `u` switches between unified (the default) and side by side, and `q` or `esc` closes it.
+or `QUESTION : ...` is drawn with its label in bold gold, and only those lines show until `i` shows the full note.
+`j` `k` scroll a line, `ctrl+d` `ctrl+u` half a page, `n` `N` jump between changes, `u` switches between unified (the
+default) and side by side, and `q` or `esc` closes it.
 It suits a popup that shows a proposed change, such as a herdr plugin pane.
 
 ## Follow mode (Windows)

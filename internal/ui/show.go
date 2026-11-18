@@ -22,6 +22,7 @@ type ShowModel struct {
 	note     string
 	fileDiff diff.FileDiff
 	unified  bool
+	fullNote bool
 	diffView viewport.Model
 	help     help.Model
 	width    int
@@ -87,6 +88,11 @@ func (m ShowModel) updateKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		previous := m.diffLines()
 		m.unified = !m.unified
 		return m.withDiffKeptInPlace(previous), nil
+	case key.Matches(msg, fullNoteKey):
+		previous := m.diffLines()
+		m.fullNote = !m.fullNote
+		m.diffView.SetHeight(m.diffInnerHeight())
+		return m.withDiffKeptInPlace(previous), nil
 	}
 	return m, nil
 }
@@ -118,7 +124,8 @@ func (m ShowModel) diffInnerHeight() int {
 	return max(m.height-len(m.noteRows())-2-footerHeight, 0)
 }
 
-// noteRows wraps the note to the screen, followed by a blank row when there is a note.
+// noteRows wraps the note to the screen, followed by a blank row when there is a note. Until fullNote is on, only the
+// CHANGE, SUMMARY and QUESTION lines show, so the diff keeps the screen.
 func (m ShowModel) noteRows() []string {
 	note := sanitizeLines(m.note)
 	if note == "" {
@@ -129,8 +136,10 @@ func (m ShowModel) noteRows() []string {
 		var styled string
 		if field := noteFieldPattern.FindStringSubmatch(line); field != nil {
 			styled = noteLabelStyle.Render(field[1]+field[2]) + mutedStyle.Render(field[3]) + noteValueStyle.Render(field[4])
-		} else {
+		} else if m.fullNote {
 			styled = textStyle.Render(line)
+		} else {
+			continue
 		}
 		for _, wrapped := range strings.Split(ansi.Wrap(styled, max(m.width-2, 1), ""), "\n") {
 			rows = append(rows, " "+wrapped)

@@ -71,6 +71,7 @@ var (
 	lineDownKey       = key.NewBinding(key.WithKeys("j", "down"), key.WithHelp("j/k", "line"))
 	lineUpKey         = key.NewBinding(key.WithKeys("k", "up"))
 	closeShowKey      = key.NewBinding(key.WithKeys("q", "esc"), key.WithHelp("q", "close"))
+	fullNoteKey       = key.NewBinding(key.WithKeys("i"), key.WithHelp("i", "full note"))
 	// Not enter: this popup opens on its own, so a key already on its way must not confirm it.
 	confirmCreateKey = key.NewBinding(key.WithKeys("c"), key.WithHelp("c", "create"))
 )
@@ -96,5 +97,5 @@ var (
 	commitHelp    = []key.Binding{nextFieldKey, submitKey, cancelKey}
 	rewordHelp    = []key.Binding{nextFieldKey, submitRewordKey, cancelKey}
 	keyListHelp   = []key.Binding{closeKeyListKey}
-	showHelp      = []key.Binding{lineDownKey, scrollDownKey, nextChangeKey, unifiedKey, closeShowKey}
+	showHelp      = []key.Binding{lineDownKey, scrollDownKey, nextChangeKey, unifiedKey, fullNoteKey, closeShowKey}
 )
