@@ -6,6 +6,9 @@ release go under `## [Unreleased]`, renamed to the version when it is tagged.
 
 ## [Unreleased]
 
+- The commit summary wraps onto up to three rows instead of scrolling sideways. `ctrl+a` selects all of the summary
+  or description, so `backspace` clears it and typing replaces it.
+
 ## [0.2.0] - 2026-11-21
 
 - A stash pane under the log: `s` stashes the changes, `S` opens the pane, `enter` pops a stash and `D` drops one.

@@ -1092,10 +1092,10 @@ func appliesOnBlurAndClosesTheCommitPopupAndItsDraft(t *testing.T) {
 			waiting.repository.Dir)
 	}
 	header := ansi.Strip(m.renderHeader())
-	if m.repository.Dir != "C:/dev/other" || m.popup.kind != noPopup || m.summaryInput.Value() != "" ||
+	if m.repository.Dir != "C:/dev/other" || m.popup.kind != noPopup || m.summaryBox.Value() != "" ||
 		strings.Contains(header, "next focus") {
 		t.Fatalf("got %s, popup %d, draft %q, header %q, want C:/dev/other with no popup, draft or next focus",
-			m.repository.Dir, m.popup.kind, m.summaryInput.Value(), header)
+			m.repository.Dir, m.popup.kind, m.summaryBox.Value(), header)
 	}
 }
 
@@ -1286,16 +1286,68 @@ func TestRewordFillsInTheSelectedMessageAndEscBringsBackTheCommitDraft(t *testin
 
 	m = update(t, m, tea.KeyPressMsg{Code: 'r', Text: "r"})
 	popup := ansi.Strip(m.renderRewordPopup())
-	summary, description := m.summaryInput.Value(), m.descriptionBox.Value()
+	summary, description := m.summaryBox.Value(), m.descriptionBox.Value()
 	m = update(t, m, tea.KeyPressMsg{Code: tea.KeyEscape})
 
 	if summary != "Fix wrap" || description != "Keep words whole" || !strings.Contains(popup, "reword 2222222") ||
 		!strings.Contains(popup, "rewrites every commit above it") {
 		t.Fatalf("got summary %q, description %q, popup:\n%s", summary, description, popup)
 	}
-	if m.popup.kind != noPopup || m.summaryInput.Value() != "WIP" || m.descriptionBox.Value() != "" {
+	if m.popup.kind != noPopup || m.summaryBox.Value() != "WIP" || m.descriptionBox.Value() != "" {
 		t.Fatalf("got popup %d, summary %q, description %q after esc, want the WIP draft back", m.popup.kind,
-			m.summaryInput.Value(), m.descriptionBox.Value())
+			m.summaryBox.Value(), m.descriptionBox.Value())
+	}
+}
+
+func TestCommitMessageFields(t *testing.T) {
+	t.Run("summaryWrapsALongLineInsteadOfScrollingIt", summaryWrapsALongLineInsteadOfScrollingIt)
+	t.Run("summaryJoinsPastedLinesWithSpaces", summaryJoinsPastedLinesWithSpaces)
+	t.Run("ctrlAThenBackspaceClearsOnlyTheFocusedField", ctrlAThenBackspaceClearsOnlyTheFocusedField)
+}
+
+func summaryWrapsALongLineInsteadOfScrollingIt(t *testing.T) {
+	m := reviewingRepository(t, gitrepo.Status{Branch: "fix", HasCommits: true})
+	m = update(t, m, tea.KeyPressMsg{Code: 'c', Text: "c"})
+	summary := strings.Repeat("word ", 20) + "end"
+	m = typeText(t, m, summary)
+
+	popup := ansi.Strip(m.renderCommitPopup())
+	if m.summaryBox.Value() != summary || !strings.Contains(popup, "word word") || !strings.Contains(popup, "end") ||
+		m.summaryBox.Height() != 2 {
+		t.Fatalf("got summary %q in %d rows, popup:\n%s\nwant it wrapped onto 2 rows", m.summaryBox.Value(),
+			m.summaryBox.Height(), popup)
+	}
+}
+
+func summaryJoinsPastedLinesWithSpaces(t *testing.T) {
+	m := reviewingRepository(t, gitrepo.Status{Branch: "fix", HasCommits: true})
+	m = update(t, m, tea.KeyPressMsg{Code: 'c', Text: "c"})
+	m = update(t, m, tea.PasteMsg{Content: "Fix wrap\r\nin the\nsummary"})
+
+	if m.summaryBox.Value() != "Fix wrap in the summary" {
+		t.Fatalf("got summary %q, want the pasted lines joined with spaces", m.summaryBox.Value())
+	}
+}
+
+func ctrlAThenBackspaceClearsOnlyTheFocusedField(t *testing.T) {
+	m := reviewingRepository(t, gitrepo.Status{Branch: "fix", HasCommits: true})
+	m = update(t, m, tea.KeyPressMsg{Code: 'c', Text: "c"})
+	m = typeText(t, m, "Fix wrap")
+	m = update(t, m, tea.KeyPressMsg{Code: tea.KeyTab})
+	m = typeText(t, m, "Keep words whole")
+	m = update(t, m, tea.KeyPressMsg{Code: tea.KeyEnter})
+	m = typeText(t, m, "in the diff")
+
+	m = update(t, m, tea.KeyPressMsg{Code: 'a', Mod: tea.ModCtrl})
+	m = update(t, m, tea.KeyPressMsg{Code: tea.KeyBackspace})
+	description := m.descriptionBox.Value()
+	m = update(t, m, tea.KeyPressMsg{Code: tea.KeyTab})
+	m = update(t, m, tea.KeyPressMsg{Code: 'a', Mod: tea.ModCtrl})
+	m = update(t, m, tea.KeyPressMsg{Code: tea.KeyBackspace})
+
+	if description != "" || m.summaryBox.Value() != "" {
+		t.Fatalf("got description %q after clearing it, summary %q after clearing it, want both empty",
+			description, m.summaryBox.Value())
 	}
 }
 

@@ -24,17 +24,18 @@ import (
 )
 
 const (
-	headerHeight      = 1
-	footerHeight      = 1
-	minimumListWidth  = 20
-	listPercent       = 25
-	wheelScrollLines  = 3
-	maximumPopupWidth = 72
-	descriptionHeight = 5
-	maximumErrorLines = 12
-	branchGlyph       = ""
-	folderGlyph       = ""
-	appName           = "perusal"
+	headerHeight         = 1
+	footerHeight         = 1
+	minimumListWidth     = 20
+	listPercent          = 25
+	wheelScrollLines     = 3
+	maximumPopupWidth    = 72
+	descriptionHeight    = 5
+	summaryMaximumHeight = 3
+	maximumErrorLines    = 12
+	branchGlyph          = ""
+	folderGlyph          = ""
+	appName              = "perusal"
 )
 
 const commitRow = -1
@@ -202,7 +203,7 @@ type Model struct {
 
 	diffView           viewport.Model
 	help               help.Model
-	summaryInput       textinput.Model
+	summaryBox         textarea.Model
 	descriptionBox     textarea.Model
 	editingDescription bool
 	branchNameInput    textinput.Model
@@ -210,13 +211,19 @@ type Model struct {
 
 func New(findRepositories RepositoryFinder, openRepository RepositoryOpener, createWorkTree WorkTreeCreator,
 	agentHost AgentHost) Model {
-	summaryInput := textinput.New()
-	summaryInput.Placeholder = "Summary (required)"
-	summaryInput.Prompt = ""
+	summaryBox := textarea.New()
+	summaryBox.Placeholder = "Summary (required)"
+	summaryBox.ShowLineNumbers = false
+	summaryBox.Prompt = ""
+	summaryBox.DynamicHeight = true
+	summaryBox.MaxHeight = summaryMaximumHeight
+	summaryBox.KeyMap = messageKeyMap()
+	summaryBox.KeyMap.InsertNewline.SetEnabled(false)
 	descriptionBox := textarea.New()
 	descriptionBox.Placeholder = "Description"
 	descriptionBox.ShowLineNumbers = false
 	descriptionBox.Prompt = ""
+	descriptionBox.KeyMap = messageKeyMap()
 	searchInput := textinput.New()
 	searchInput.Prompt = "/"
 	overviewQuery := textinput.New()
@@ -252,7 +259,7 @@ func New(findRepositories RepositoryFinder, openRepository RepositoryOpener, cre
 		searchInput:        searchInput,
 		diffView:           viewport.New(),
 		help:               newHelpView(),
-		summaryInput:       summaryInput,
+		summaryBox:         summaryBox,
 		descriptionBox:     descriptionBox,
 		branchNameInput:    branchNameInput,
 	}
@@ -391,7 +398,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m.withFooterNotice("committed in " + msg.dir + ": " + msg.summary), nil
 		}
 		m = m.withPopupClosed().withFooterNotice(msg.summary)
-		m.summaryInput.Reset()
+		m.summaryBox.Reset()
 		m.descriptionBox.Reset()
 		return m, m.reloadStatus()
 	case popupSuccessMsg:
@@ -662,7 +669,7 @@ func (m Model) updateBrowsing(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		}
 		m.popup = popupState{kind: commitPopup, dir: m.repository.Dir}
 		m.editingDescription = false
-		return m, m.summaryInput.Focus()
+		return m, m.summaryBox.Focus()
 	case key.Matches(msg, pushKey):
 		return m.openPushPopup(m.repository, m.status)
 	case key.Matches(msg, amendKey) && m.view == viewLog:
@@ -798,24 +805,36 @@ func (m Model) updateFocusedField(msg tea.Msg) (tea.Model, tea.Cmd) {
 	var cmd tea.Cmd
 	if m.editingDescription {
 		m.descriptionBox, cmd = m.descriptionBox.Update(msg)
-	} else {
-		m.summaryInput, cmd = m.summaryInput.Update(msg)
+		return m, cmd
 	}
+	if paste, isPaste := msg.(tea.PasteMsg); isPaste {
+		paste.Content = strings.NewReplacer("\r\n", " ", "\n", " ", "\r", " ").Replace(paste.Content)
+		msg = paste
+	}
+	m.summaryBox, cmd = m.summaryBox.Update(msg)
 	return m, cmd
+}
+
+// ctrl+a selects all, as in a GUI text box, rather than moving to the line start.
+func messageKeyMap() textarea.KeyMap {
+	keyMap := textarea.DefaultKeyMap()
+	keyMap.LineStart.SetKeys("home")
+	keyMap.SelectAll.SetKeys("ctrl+a")
+	return keyMap
 }
 
 func (m Model) toggleCommitField() (tea.Model, tea.Cmd) {
 	m.editingDescription = !m.editingDescription
 	if m.editingDescription {
-		m.summaryInput.Blur()
+		m.summaryBox.Blur()
 		return m, m.descriptionBox.Focus()
 	}
 	m.descriptionBox.Blur()
-	return m, m.summaryInput.Focus()
+	return m, m.summaryBox.Focus()
 }
 
 func (m Model) startCommit() (tea.Model, tea.Cmd) {
-	summary := strings.TrimSpace(m.summaryInput.Value())
+	summary := strings.TrimSpace(m.summaryBox.Value())
 	if summary == "" {
 		m.popup.err = "the summary is required"
 		return m, nil
@@ -836,11 +855,11 @@ func (m Model) startCommit() (tea.Model, tea.Cmd) {
 
 func (m Model) withPopupClosed() Model {
 	if m.popup.kind == rewordPopup {
-		m.summaryInput.SetValue(m.popup.rewording.draftSummary)
+		m.summaryBox.SetValue(m.popup.rewording.draftSummary)
 		m.descriptionBox.SetValue(m.popup.rewording.draftDescription)
 	}
 	m.popup = popupState{}
-	m.summaryInput.Blur()
+	m.summaryBox.Blur()
 	m.descriptionBox.Blur()
 	m.branchNameInput.Blur()
 	return m
@@ -932,15 +951,15 @@ func (m Model) openRewordPopup() (tea.Model, tea.Cmd) {
 	m.popup = popupState{kind: rewordPopup, dir: m.repository.Dir, rewording: rewording{
 		commit:           target,
 		lines:            append([]string{title}, m.rewriteWarnings()...),
-		draftSummary:     m.summaryInput.Value(),
+		draftSummary:     m.summaryBox.Value(),
 		draftDescription: m.descriptionBox.Value(),
 	}}
 	summary, description, _ := strings.Cut(target.Message, "\n")
-	m.summaryInput.SetValue(summary)
+	m.summaryBox.SetValue(summary)
 	m.descriptionBox.SetValue(strings.TrimSpace(description))
 	m.editingDescription = false
 	m.descriptionBox.Blur()
-	return m, m.summaryInput.Focus()
+	return m, m.summaryBox.Focus()
 }
 
 func (m Model) rewriteWarnings() []string {
@@ -1270,8 +1289,7 @@ func (m Model) withPaneSizes() Model {
 	m.diffView.SetWidth(m.diffInnerWidth())
 	m.diffView.SetHeight(m.paneInnerHeight())
 	m.help.SetWidth(m.width)
-	// textinput draws its end-of-text cursor one cell past its width
-	m.summaryInput.SetWidth(max(m.fieldInnerWidth()-1, 0))
+	m.summaryBox.SetWidth(m.fieldInnerWidth())
 	m.searchInput.SetWidth(max(m.width/2, 0))
 	m.overviewQuery.SetWidth(max(m.width/2, 0))
 	m.descriptionBox.SetWidth(m.fieldInnerWidth())
@@ -1748,7 +1766,7 @@ func (m Model) renderRewordPopup() string {
 
 func (m Model) messageFields() []string {
 	return []string{
-		renderField(m.summaryInput.View(), !m.editingDescription, m.fieldInnerWidth(), 1),
+		renderField(m.summaryBox.View(), !m.editingDescription, m.fieldInnerWidth(), m.summaryBox.Height()),
 		renderField(m.descriptionBox.View(), m.editingDescription, m.fieldInnerWidth(), descriptionHeight),
 	}
 }
