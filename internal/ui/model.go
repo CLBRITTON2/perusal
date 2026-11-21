@@ -489,6 +489,8 @@ func (m Model) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m.updateBrowsing(msg)
 	case tea.MouseClickMsg:
 		switch {
+		case m.acceptsOverviewMouse() && msg.Button == tea.MouseLeft:
+			return m.clickOverviewRow(msg.Mouse()), nil
 		case !m.acceptsMouse():
 			return m, nil
 		case msg.Button == tea.MouseLeft:
@@ -498,7 +500,10 @@ func (m Model) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		return m, nil
 	case tea.MouseWheelMsg:
-		if !m.acceptsMouse() {
+		switch {
+		case m.acceptsOverviewMouse():
+			return m.scrollOverview(msg.Mouse()), nil
+		case !m.acceptsMouse():
 			return m, nil
 		}
 		return m.scrollWheel(msg.Mouse())
@@ -1044,7 +1049,8 @@ func (m Model) updateSearch(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	switch {
 	case key.Matches(msg, keepSearchKey):
 		return m.withSearchClosed(), nil
-	case key.Matches(msg, clearSearchKey):
+	case key.Matches(msg, clearSearchKey),
+		key.Matches(msg, closeEmptySearchKey) && m.searchInput.Value() == "":
 		return m.withSearchClosed().clearSearch()
 	}
 	var inputCmd tea.Cmd
@@ -1670,7 +1676,7 @@ func (m Model) renderFooter() string {
 	case m.takeFailure != "" && !typing:
 		return fitToWidth(errorStyle.Render("✗ "+m.takeFailure), m.width)
 	case m.typingOverviewQuery():
-		return spaceBetween(" "+m.overviewQuery.View(), m.help.ShortHelpView(searchHelp)+" ", m.width)
+		return spaceBetween(" "+m.overviewQuery.View(), m.help.ShortHelpView(filterHelp)+" ", m.width)
 	case m.mode == modeOverview:
 		return m.renderHelpLine(overviewHelp)
 	case m.mode == modeBranches:

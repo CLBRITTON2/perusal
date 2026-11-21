@@ -486,6 +486,46 @@ func foundAt(relativePath string, dir string) focus.FoundRepository {
 	return focus.FoundRepository{RelativePath: relativePath, Repository: gitrepo.Repository{Dir: dir}}
 }
 
+func TestOverviewMouse(t *testing.T) {
+	t.Run("theWheelMovesTheSelection", theWheelMovesTheOverviewSelection)
+	t.Run("clickingARowSelectsIt", clickingAnOverviewRowSelectsIt)
+	t.Run("clickingBelowTheLastRowKeepsTheSelection", clickingBelowTheLastOverviewRowKeepsTheSelection)
+}
+
+func theWheelMovesTheOverviewSelection(t *testing.T) {
+	m := overviewOfWorkTrees(t)
+	start := m.overview.selected
+
+	m = update(t, m, tea.MouseWheelMsg{X: 10, Y: 25, Button: tea.MouseWheelDown})
+	down := m.overview.selected
+	m = update(t, m, tea.MouseWheelMsg{X: 10, Y: 25, Button: tea.MouseWheelUp})
+
+	if down != start+1 || m.overview.selected != start {
+		t.Fatalf("got %d after wheel down and %d after wheel up, want %d then %d", down, m.overview.selected,
+			start+1, start)
+	}
+}
+
+func clickingAnOverviewRowSelectsIt(t *testing.T) {
+	m := overviewOfWorkTrees(t)
+
+	m = update(t, m, tea.MouseClickMsg{X: 10, Y: headerHeight + 1 + 2, Button: tea.MouseLeft})
+
+	if m.overview.selected != 2 || m.mode != modeOverview {
+		t.Fatalf("got selected %d, mode %d, want the third row selected in the overview", m.overview.selected, m.mode)
+	}
+}
+
+func clickingBelowTheLastOverviewRowKeepsTheSelection(t *testing.T) {
+	m := update(t, overviewOfWorkTrees(t), tea.KeyPressMsg{Code: 'j', Text: "j"})
+
+	m = update(t, m, tea.MouseClickMsg{X: 10, Y: headerHeight + 1 + 4, Button: tea.MouseLeft})
+
+	if m.overview.selected != 1 {
+		t.Fatalf("got selected %d, want 1", m.overview.selected)
+	}
+}
+
 func TestOverviewFilter(t *testing.T) {
 	t.Run("keepsTheRowsHoldingTheQuerysCharactersInOrderAndTitlesIt",
 		keepsTheRowsHoldingTheQuerysCharactersInOrderAndTitlesIt)
@@ -497,7 +537,9 @@ func TestOverviewFilter(t *testing.T) {
 	t.Run("aRowFillingInMatchesOnItsBranch", aRowFillingInMatchesOnItsBranch)
 	t.Run("aHiddenPendingRowThatFailsIsSkipped", aHiddenPendingRowThatFailsIsSkipped)
 	t.Run("theFooterShowsTheQueryWhileTypingThenTheOverviewKeys", theFooterShowsTheQueryWhileTypingThenTheOverviewKeys)
+	t.Run("enterWhileTypingOpensTheSelectedRow", enterWhileTypingOpensTheSelectedRow)
 	t.Run("escWhileTypingShowsEveryRow", escWhileTypingShowsEveryRow)
+	t.Run("backspaceOnAnEmptyQueryStopsTyping", backspaceOnAnEmptyQueryStopsTyping)
 	t.Run("escClearsAKeptFilterThenClosesTheOverview", escClearsAKeptFilterThenClosesTheOverview)
 	t.Run("aQueryMatchingNothingSaysSo", aQueryMatchingNothingSaysSo)
 	t.Run("reopeningTheOverviewShowsEveryRow", reopeningTheOverviewShowsEveryRow)
@@ -574,7 +616,7 @@ func aPasteFiltersTheRows(t *testing.T) {
 func deleteActsOnTheFilteredRowAndTheReloadStaysFiltered(t *testing.T) {
 	m := typeText(t, overviewOfWorkTrees(t), "/fix")
 	m = update(t, m, tea.KeyPressMsg{Code: tea.KeyDown})
-	m = update(t, m, tea.KeyPressMsg{Code: tea.KeyEnter})
+	m = update(t, m, tea.KeyPressMsg{Code: tea.KeyTab})
 
 	next, check := m.Update(tea.KeyPressMsg{Code: 'D', Text: "D"})
 	m = asModel(t, next)
@@ -596,7 +638,7 @@ func deleteActsOnTheFilteredRowAndTheReloadStaysFiltered(t *testing.T) {
 
 func aRowFillingInMatchesOnItsBranch(t *testing.T) {
 	m := typeText(t, overviewOfWorkTrees(t), "/release")
-	m = update(t, m, tea.KeyPressMsg{Code: tea.KeyEnter})
+	m = update(t, m, tea.KeyPressMsg{Code: tea.KeyTab})
 
 	m = update(t, m, overviewRowMsg{row: repositoryRow{
 		FoundRepository: foundAt("ziti", "C:/dev/ziti"), status: gitrepo.Status{Branch: "release", HasCommits: true},
@@ -612,14 +654,25 @@ func theFooterShowsTheQueryWhileTypingThenTheOverviewKeys(t *testing.T) {
 	m := typeText(t, overviewOfWorkTrees(t), "/dns")
 	typing := ansi.Strip(m.renderFooter())
 
-	m = update(t, m, tea.KeyPressMsg{Code: tea.KeyEnter})
+	m = update(t, m, tea.KeyPressMsg{Code: tea.KeyTab})
 	kept := ansi.Strip(m.renderFooter())
 
-	if !strings.Contains(typing, " /dns") || !strings.Contains(typing, "enter keep  esc clear") {
-		t.Fatalf("got footer %q while typing, want the query and enter keep  esc clear", typing)
+	if !strings.Contains(typing, " /dns") || !strings.Contains(typing, "enter open  tab keep  esc clear") {
+		t.Fatalf("got footer %q while typing, want the query and enter open  tab keep  esc clear", typing)
 	}
 	if !strings.Contains(kept, "j/k select  / search  enter open") {
-		t.Fatalf("got footer %q after enter, want the overview keys with / search", kept)
+		t.Fatalf("got footer %q after tab, want the overview keys with / search", kept)
+	}
+}
+
+func enterWhileTypingOpensTheSelectedRow(t *testing.T) {
+	m := typeText(t, overviewOfWorkTrees(t), "/dns")
+
+	next, open := m.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
+	m = asModel(t, next)
+
+	if m.mode != modeBrowsing || m.repository.Dir != "C:/dev/worktrees/desktop-edge-win/fix-dns" || open == nil {
+		t.Fatalf("got mode %d, repository %q, command %v, want fix-dns opened", m.mode, m.repository.Dir, open)
 	}
 }
 
@@ -629,7 +682,7 @@ func aHiddenPendingRowThatFailsIsSkipped(t *testing.T) {
 		pendingRow{FoundRepository: foundAt("second", "C:/dev/second")},
 	}})
 	m = typeText(t, m, "/second")
-	m = update(t, m, tea.KeyPressMsg{Code: tea.KeyEnter})
+	m = update(t, m, tea.KeyPressMsg{Code: tea.KeyTab})
 
 	m = update(t, m, overviewRowFailureMsg{dir: "C:/dev/first", err: errors.New("run git status in C:/dev/first")})
 	footer := m.footer.text
@@ -652,9 +705,22 @@ func escWhileTypingShowsEveryRow(t *testing.T) {
 	}
 }
 
+func backspaceOnAnEmptyQueryStopsTyping(t *testing.T) {
+	m := typeText(t, overviewOfWorkTrees(t), "/d")
+
+	m = update(t, m, tea.KeyPressMsg{Code: tea.KeyBackspace})
+	stillTyping := m.overviewQuery.Focused()
+	m = update(t, m, tea.KeyPressMsg{Code: tea.KeyBackspace})
+
+	if !stillTyping || len(overviewLines(m)) != 4 || m.mode != modeOverview || m.overviewQuery.Focused() {
+		t.Fatalf("got typing %t after deleting d, then %q, mode %d, typing %t, want every row in the overview keys",
+			stillTyping, overviewLines(m), m.mode, m.overviewQuery.Focused())
+	}
+}
+
 func escClearsAKeptFilterThenClosesTheOverview(t *testing.T) {
 	m := typeText(t, overviewOfWorkTrees(t), "/dns")
-	m = update(t, m, tea.KeyPressMsg{Code: tea.KeyEnter})
+	m = update(t, m, tea.KeyPressMsg{Code: tea.KeyTab})
 
 	m = update(t, m, tea.KeyPressMsg{Code: tea.KeyEscape})
 	cleared := overviewLines(m)
@@ -676,7 +742,7 @@ func aQueryMatchingNothingSaysSo(t *testing.T) {
 
 func reopeningTheOverviewShowsEveryRow(t *testing.T) {
 	m := typeText(t, overviewOfWorkTrees(t), "/dns")
-	m = update(t, m, tea.KeyPressMsg{Code: tea.KeyEnter})
+	m = update(t, m, tea.KeyPressMsg{Code: tea.KeyTab})
 	m = update(t, m, tea.KeyPressMsg{Code: 'o', Text: "o"})
 
 	m = update(t, m, tea.KeyPressMsg{Code: 'o', Text: "o"})
@@ -689,7 +755,7 @@ func reopeningTheOverviewShowsEveryRow(t *testing.T) {
 
 func fetchAllFetchesTheRowsTheFilterHides(t *testing.T) {
 	m := typeText(t, overviewOfWorkTrees(t), "/dns")
-	m = update(t, m, tea.KeyPressMsg{Code: tea.KeyEnter})
+	m = update(t, m, tea.KeyPressMsg{Code: tea.KeyTab})
 
 	m = update(t, m, tea.KeyPressMsg{Code: 'F', Text: "F"})
 
@@ -1195,6 +1261,7 @@ func TestLog(t *testing.T) {
 	t.Run("searchLooksAtTheHashAuthorAndRefs", searchLooksAtTheHashAuthorAndRefs)
 	t.Run("clickingTheFoldedLogOpensIt", clickingTheFoldedLogOpensIt)
 	t.Run("clickingTheFoldedChangesDuringASearchClosesIt", clickingTheFoldedChangesDuringASearchClosesIt)
+	t.Run("backspaceOnAnEmptySearchClosesIt", backspaceOnAnEmptySearchClosesIt)
 	t.Run("nearingTheEndOfAFullPageLoadsTheNextOne", nearingTheEndOfAFullPageLoadsTheNextOne)
 	t.Run("aShortLogIsTheWholeHistory", aShortLogIsTheWholeHistory)
 	t.Run("aReloadReadWithTheOldLimitIsDropped", aReloadReadWithTheOldLimitIsDropped)
@@ -1223,6 +1290,20 @@ func clickingTheFoldedChangesDuringASearchClosesIt(t *testing.T) {
 
 	if m.view != viewChanges || m.mode != modeBrowsing {
 		t.Fatalf("got view %d, mode %d, want the changes view browsing", m.view, m.mode)
+	}
+}
+
+func backspaceOnAnEmptySearchClosesIt(t *testing.T) {
+	m := logOf(t, []gitrepo.Commit{{Hash: strings.Repeat("1", 40)}})
+	m = update(t, m, tea.KeyPressMsg{Code: '/', Text: "/"})
+	m = update(t, m, tea.KeyPressMsg{Code: 'a', Text: "a"})
+
+	m = update(t, m, tea.KeyPressMsg{Code: tea.KeyBackspace})
+	afterDeleting := m.mode
+	m = update(t, m, tea.KeyPressMsg{Code: tea.KeyBackspace})
+
+	if afterDeleting != modeSearching || m.mode != modeBrowsing {
+		t.Fatalf("got mode %d after deleting a, then %d, want searching then browsing", afterDeleting, m.mode)
 	}
 }
 

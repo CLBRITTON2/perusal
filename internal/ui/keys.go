@@ -67,14 +67,17 @@ var (
 	searchKey         = key.NewBinding(key.WithKeys("/"), key.WithHelp("/", "search"))
 	keepSearchKey     = key.NewBinding(key.WithKeys("enter"), key.WithHelp("enter", "keep"))
 	clearSearchKey    = key.NewBinding(key.WithKeys("esc"), key.WithHelp("esc", "clear"))
-	filterDownKey     = key.NewBinding(key.WithKeys("down"))
-	filterUpKey       = key.NewBinding(key.WithKeys("up"))
-	keyListKey        = key.NewBinding(key.WithKeys("?"), key.WithHelp("?", "all keys"))
-	closeKeyListKey   = key.NewBinding(key.WithKeys("esc", "?"), key.WithHelp("esc", "close"))
-	lineDownKey       = key.NewBinding(key.WithKeys("j", "down"), key.WithHelp("j/k", "line"))
-	lineUpKey         = key.NewBinding(key.WithKeys("k", "up"))
-	closeShowKey      = key.NewBinding(key.WithKeys("q", "esc"), key.WithHelp("q", "close"))
-	fullNoteKey       = key.NewBinding(key.WithKeys("i"), key.WithHelp("i", "full note"))
+	keepFilterKey     = key.NewBinding(key.WithKeys("tab"), key.WithHelp("tab", "keep"))
+	// Only on an empty query, where it has no character to delete.
+	closeEmptySearchKey = key.NewBinding(key.WithKeys("backspace"))
+	filterDownKey       = key.NewBinding(key.WithKeys("down"))
+	filterUpKey         = key.NewBinding(key.WithKeys("up"))
+	keyListKey          = key.NewBinding(key.WithKeys("?"), key.WithHelp("?", "all keys"))
+	closeKeyListKey     = key.NewBinding(key.WithKeys("esc", "?"), key.WithHelp("esc", "close"))
+	lineDownKey         = key.NewBinding(key.WithKeys("j", "down"), key.WithHelp("j/k", "line"))
+	lineUpKey           = key.NewBinding(key.WithKeys("k", "up"))
+	closeShowKey        = key.NewBinding(key.WithKeys("q", "esc"), key.WithHelp("q", "close"))
+	fullNoteKey         = key.NewBinding(key.WithKeys("i"), key.WithHelp("i", "full note"))
 	// Not enter: this popup opens on its own, so a key already on its way must not confirm it.
 	confirmCreateKey = key.NewBinding(key.WithKeys("c"), key.WithHelp("c", "create"))
 )
@@ -97,6 +100,7 @@ var (
 		closeBranchesKey, quitKey}
 	workTreesHelp = []key.Binding{downKey, openRepositoryKey, deleteWorkTreeKey, closeWorkTreesKey, quitKey}
 	searchHelp    = []key.Binding{keepSearchKey, clearSearchKey}
+	filterHelp    = []key.Binding{openRepositoryKey, keepFilterKey, clearSearchKey}
 	commitHelp    = []key.Binding{nextFieldKey, submitKey, cancelKey}
 	rewordHelp    = []key.Binding{nextFieldKey, submitRewordKey, cancelKey}
 	keyListHelp   = []key.Binding{closeKeyListKey}

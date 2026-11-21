@@ -466,10 +466,14 @@ func (m Model) updateOverview(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 // updateOverviewQuery leaves only the arrows to move the selection, so j and k type letters.
 func (m Model) updateOverviewQuery(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	switch {
-	case key.Matches(msg, keepSearchKey):
+	case key.Matches(msg, openRepositoryKey):
+		m.overviewQuery.Blur()
+		return m.withSelectedRepository(m.openRepositoryRow)
+	case key.Matches(msg, keepFilterKey):
 		m.overviewQuery.Blur()
 		return m, nil
-	case key.Matches(msg, clearSearchKey):
+	case key.Matches(msg, clearSearchKey),
+		key.Matches(msg, closeEmptySearchKey) && m.overviewQuery.Value() == "":
 		m.overviewQuery.Blur()
 		return m.withOverviewQueryCleared(), nil
 	case key.Matches(msg, filterDownKey):
@@ -744,6 +748,32 @@ func (m Model) renderOverview() string {
 
 func (m Model) overviewTableInnerHeight() int {
 	return max(m.columnHeight()-m.columnHeight()/2-2, 0)
+}
+
+func (m Model) acceptsOverviewMouse() bool {
+	return m.mode == modeOverview && m.popup.kind == noPopup
+}
+
+// The table's first row sits under the header and the table's top border.
+func (m Model) clickOverviewRow(mouse tea.Mouse) Model {
+	row := mouse.Y - headerHeight - 1
+	index := m.overview.offset + row
+	if row < 0 || row >= m.overviewTableInnerHeight() || index >= len(m.overview.rows) {
+		return m
+	}
+	m.overview = m.overview.withSelected(index).scrolled(m.overviewTableInnerHeight())
+	return m
+}
+
+// The wheel moves the selection wherever it turns, since the details below follow the selected row.
+func (m Model) scrollOverview(mouse tea.Mouse) Model {
+	switch mouse.Button {
+	case tea.MouseWheelDown:
+		m.overview = m.overview.withSelected(m.overview.selected + 1).scrolled(m.overviewTableInnerHeight())
+	case tea.MouseWheelUp:
+		m.overview = m.overview.withSelected(m.overview.selected - 1).scrolled(m.overviewTableInnerHeight())
+	}
+	return m
 }
 
 func (m Model) renderOverviewDetails() string {
