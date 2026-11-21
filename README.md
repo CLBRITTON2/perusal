@@ -1,104 +1,42 @@
 # perusal
 
 A small terminal git client for reading diffs, a stripped-down [lazygit](https://github.com/jesseduffield/lazygit).
-The diff gets most of the screen and the working tree is reread every 2 seconds. It also stages, commits, amends,
-pushes, browses the log and switches branches, among other things.
+The diff gets most of the screen. It also stages, commits, amends, pushes and switches branches. On Windows, follow
+mode tracks an LLM coding agent and shows the diffs of whichever repository it is working in.
 
-On Windows, follow mode also tracks an LLM coding agent that runs as its own user account: `perusal follow` shows
-the diffs of whichever repository the agent is working in. lazygit, [gitui](https://github.com/gitui-org/gitui) and
-[tig](https://github.com/jonas/tig) cover most of the same ground and more.
-
-perusal runs your local `git` for everything. There is no GitHub API and no login: a push uses whatever credentials
-git already has.
+perusal runs your local `git` for everything, with no GitHub API and no login.
 
 ## Install
 
-Needs Go 1.27 or later and `git` on your `PATH`. A [Nerd Font](https://www.nerdfonts.com) shows the branch and folder
-glyphs.
+Needs Go 1.27 or later and `git`. A [Nerd Font](https://www.nerdfonts.com) shows the glyphs.
 
 ```
 go install github.com/CLBRITTON2/perusal/cmd/perusal@latest
 ```
 
-From a clone, `make` installs it and `make test` vets and tests it for Windows, Linux and macOS.
+From a clone, `make` installs it and `make test` tests it.
 
 ## Use
 
 ```
-perusal              # review the repository the current directory is in
+perusal              # review the repository in the current directory
 perusal -repo <dir>  # review the repository <dir> is in
 ```
 
-| Key | Where | Does |
-|---|---|---|
-| `j` `k`, arrows | lists | select |
-| `tab` | lists | switch between changes and log |
-| `ctrl+d` `ctrl+u`, page keys | anywhere | scroll the diff |
-| `space` | changes | stage or unstage the file |
-| `a` | changes | stage or unstage everything |
-| `x` `X` | changes | discard the file or every change, after a confirm. Untracked files are deleted, ignored ones stay |
-| `d` | anywhere | show the diff fullscreen, `d` again brings the lists back |
-| `f` | anywhere | show the whole file around the changes, `f` again shows only the changed parts |
-| `u` | anywhere | show the diff unified, removed lines above added ones, `u` again shows it side by side |
-| `n` `N` | anywhere | jump the diff to the next or previous change, wrapping around at either end |
-| `c` | anywhere | open the commit popup |
-| `P` | anywhere | push the branch to its own name on `origin`, or publish it there when it tracks anything else |
-| `A` | log | amend the selected commit with the staged changes |
-| `r` | log | reword the selected commit's message in the commit popup |
-| `b` | anywhere | list the branches, `enter` switches to one, `D` deletes one after a confirm, `f` fetches |
-| `w` | anywhere | list the repository's work trees, `enter` reviews one |
-| `o` | anywhere | in follow mode, open the overview of every repository under `ownerDir` |
-| `f` `F` | overview | fetch the selected repository or every one, dropping the remote branches that were deleted |
-| `p` | overview | fast-forward the selected repository to its upstream, or a finished branch to the default one |
-| `R` | overview | fetch `upstream`, or `origin` without one, and rebase the selected branch onto its default branch, aborting on a conflict |
-| `P` | overview | push or publish the selected repository's branch |
-| `C` | overview | cherry-pick the selected work tree's commits onto the default branch in its main clone, to push from there |
-| `r` | overview | list the repositories and work trees under `ownerDir` again, picking up ones added or removed |
-| `enter` | log | expand the commit into its files |
-| `/` | log | search, `enter` keeps it, `esc` clears it |
-| `?` | anywhere | list every key, `?` or `esc` closes it |
-| `q` | anywhere | quit |
+| Key | Does |
+|---|---|
+| `j` `k` | select |
+| `tab` | switch between changes and log |
+| `space` `a` | stage the file, or everything |
+| `c` | commit |
+| `P` | push |
+| `d` `f` `u` | fullscreen, whole file, unified diff |
+| `b` `w` | branches, work trees |
+| `o` | overview of every repository (follow mode) |
+| `?` | every key |
+| `q` | quit |
 
-In the commit popup, `tab` switches between summary and description, `enter` commits from the summary, `ctrl+enter`
-commits from either field, and `esc` cancels. The changes pane shows how many lines the staged changes add and
-remove. The mouse works too: click a row to select it, click the folded pane to open it, right-click a commit to
-amend it. The wheel moves the selection over a list and scrolls the diff anywhere else.
-
-The top line names the repository and its branch, then counts its local branches, the remote branches with no local
-branch of the same name (the ones the branch list shows) and its work trees, as in
-`4 branches (37 remote) · 2 work trees`. In a linked work tree, made by `git worktree add`, it also names
-the repository's main one, as in `work tree of repo`.
-
-On quit, perusal saves which list was showing and the `d`, `f` and `u` toggles to `perusal\state.json` in the user
-config directory (`%APPDATA%` on Windows), and the next launch opens the same way.
-
-Amend folds only the staged changes into the commit and keeps its message. An older commit gets a fixup commit and an
-autosquash rebase, so every commit above it is rewritten, and a rebase that stops is aborted and the fixup undone.
-
-Reword changes only the message. Below `HEAD`, perusal recreates every commit above it with the same files and
-author, signed if `commit.gpgSign` is on, so staged and unstaged changes stay as they are. Below `HEAD`, amend and
-reword refuse a merge commit, the root commit and any commit with a merge above it.
-
-`P` pushes a branch only to its own name on `origin`. A branch that tracks anything else, such as one created from
-`origin/main`, is unpublished, and `P` publishes it to its own name and tracks that instead.
-
-When the branch and its upstream have diverged, as after amending a pushed commit, the push popup offers a force push
-instead. It pushes with `--force-with-lease --force-if-includes`, so git refuses if the upstream moved since your last
-fetch.
-
-The branch list marks a branch merged when merging it into `origin`'s default branch would change nothing, which
-counts a squash merge. That check sees only commits, so the current branch is not marked while the work tree has
-uncommitted changes, and a branch checked out in another work tree shows that work tree's name instead. `D` deletes
-any branch but the default one and those checked out in a work tree, and its confirm warns when the branch is not
-merged. `enter` refuses to switch while the work tree has uncommitted changes, and on a branch checked out in another
-work tree it reviews that work tree instead.
-
-Below the local branches, the list shows muted each remote branch that has no local branch of the same name, such as
-`origin/fix-x`. `enter` on one creates the local branch tracking it with `git switch --track`, and `D` refuses it. The
-list is only as fresh as the last fetch, so `f` fetches with `--prune` and reloads it.
-
-The work tree list shows each work tree's folder, its branch and its uncommitted file count, and marks the one under
-review with `*`. In follow mode, one that fails a check below is listed muted, and `enter` on it shows why.
+The mouse works too.
 
 ## Show
 
@@ -106,19 +44,12 @@ review with `*`. In follow mode, one that fails a check below is listed muted, a
 perusal show -old <file> -new <file> -label <path> -note <file>
 ```
 
-Shows the diff of two files anywhere on disk under the text of the note file, read only, in the same diff view. The
-label titles the diff and picks the syntax highlighting. A note line shaped `CHANGE <kind> : <text>`, `SUMMARY : ...`
-or `QUESTION : ...` is drawn with its label in bold gold, and only those lines show until `i` shows the full note.
-`j` `k` scroll a line, `ctrl+d` `ctrl+u` half a page, `n` `N` jump between changes, `u` switches between unified (the
-default) and side by side, and `q` or `esc` closes it.
-It suits a popup that shows a proposed change, such as a herdr plugin pane.
+Shows the diff of two files under a note, read only. Suits a popup that shows a proposed change.
 
 ## Follow mode (Windows)
 
-`perusal follow` is for an agent that runs as its own Windows account. It reviews the repositories the agent is
-working in, and switches as the agent moves between them. It reads
-`%APPDATA%\perusal\config.json`, where `focusFile`, `agentDir` and `ownerDir` are required, and one of
-`agentAccount` and `agentHost`:
+`perusal follow` reviews the repositories an agent running as its own account is working in, and switches as it moves.
+It reads `%APPDATA%\perusal\config.json`:
 
 ```json
 {
@@ -129,66 +60,14 @@ working in, and switches as the agent moves between them. It reads
 }
 ```
 
-- `agentAccount` is the Windows account the agent runs as on this machine. perusal ignores it when `agentHost` is
-  set.
-- `focusFile` holds one absolute path per line, the directories the agent is working in, and is rewritten whenever
-  they change. Something on the agent side has to write it, such as a [herdr](https://github.com/herdrdev/herdr)
-  plugin, and its first line is where the agent's focused session works, such as its pane's directory. perusal opens
-  the first repository with uncommitted changes, or the first one when all are clean. A new list that starts with the
-  same repository and still names the one under review keeps it open, and a path that fails a check below is shown in
-  the footer.
-- `agentDir` and `ownerDir` are one directory as the agent and you reach it, or with `agentHost` set, the agent's dev
-  directory there and yours here. perusal maps a path under `agentDir` to the same path under `ownerDir`, and refuses
-  anything outside it.
-- `agentHost`, when set, is the ssh host the agent works on, such as a VM, with `focusFile` there and its own clone of
-  each repository at the same path under `agentDir` as yours under `ownerDir`. Its ssh login shell must be PowerShell
-  (5.1 or 7), and ssh must log in without a prompt. perusal reads `focusFile` over ssh, and when the agent commits in
-  a focused repository, fetches the commit and moves your work tree from the agent's commit it last took on that
-  branch (or where the branch left your `HEAD`, the first time) to the new one with `git read-tree -m -u`, leaving
-  your index and `HEAD` untouched. So the agent's commits show up in your copy as unstaged changes, and committing
-  them yourself changes nothing for the next one. The agent's uncommitted edits stay on the agent host. git refuses a
-  commit that would overwrite a file you edited since the last take, shown in the footer until a take succeeds.
-  A take refuses commits that write over 100 MiB of file content.
-- When the focus file names a worktree the agent added at `worktrees\<repository path>\<folder>` under `agentDir`, and
-  you have the clone at `<repository path>` but no copy of that worktree, perusal offers to create it. `c` adds it with
-  `git worktree add` on a branch named as the agent's, starting where the agent's branch left `origin`'s default
-  branch after a fetch of `origin`, and the next take brings in the agent's commits. `esc` declines it until perusal
-  restarts. `enter` does not confirm it, since the popup opens on its own.
+- `focusFile` lists the directories the agent is working in, one per line, written by something on the agent side
+  such as a [herdr](https://github.com/herdrdev/herdr) plugin.
+- `agentDir` and `ownerDir` are the same directory as the agent and you see it. perusal refuses paths outside it.
+- `agentHost` replaces `agentAccount` when the agent works on another machine over ssh. perusal then brings the
+  agent's commits into your work tree as unstaged changes.
 
-The overview (`o`) lists every repository under `ownerDir` with its branch, its uncommitted file count, how far it is
-ahead of and behind its upstream, and how far it is behind `origin`'s default branch. The repositories the focus file
-names come first, marked `●`. One that fails a check below is listed muted, and `enter` on it shows why. `enter`
-reviews the selected one, `f` fetches it and `F` fetches them all (`git fetch --prune`), `p` pulls it (fast-forward
-only, from its upstream rather than the default branch), `P` pushes it, and `esc` goes back. A branch is finished when
-it is clean, `origin`'s default branch holds all its commits, and it has no upstream or the remote deleted it. `p` then
-switches to the default branch and pulls that. An unpublished branch shows `↑N unpublished`, the commits no
-remote-tracking branch holds. Below the table, the selected repository's changed files are listed beside the commits
-`P` would push and the commits `p` would pull. perusal fetches only on `f` and `F`, so those last ones are as of the
-last fetch. A repository opened this way stays open until the focus file starts with a different repository or no
-longer names it.
-
-perusal runs git as you in a repository the agent chose, and git runs whatever that repository's `.git` tells it to:
-hooks, and config such as `core.fsmonitor`, `core.hooksPath` or `core.sshCommand` that names a program. An agent
-that can write `.git` could plant one and have git run it as you. So perusal checks `.git` and everything in it, and
-refuses the repository if the agent account owns any of it, if any of it is a link or junction, if any of it grants
-write access ahead of a deny of `(OI)(CI)(WD,AD,WEA,WA,DE,DC)` for that account, or if any of it lets that account or
-a group other than SYSTEM and Administrators change its permissions or owner. git then runs with that `.git` pinned,
-so it never searches for another one. For the same reason the agent account must not be able to write your
-`%APPDATA%`, where the config lives.
-
-A linked work tree, made by `git worktree add`, has a `.git` file instead, which the agent can rewrite. perusal opens
-it only when that file names a folder in the `worktrees` of a `.git` that passes the checks above, and that folder
-names the work tree back. git then runs with that folder pinned, so a later rewrite of the file changes nothing. The
-overview lists a work tree beside its repository, such as `repo-side` next to `repo`, but not one nested inside it,
-such as one under `repo\.claude\worktrees`. The focus file still opens that one.
-
-The agent can still rename the work tree folder that holds a checked `.git` and plant its own `.git` at the old path.
-So perusal keeps a handle open in each `.git` it checked, or in a linked work tree's folder there, until it exits.
-Windows refuses to rename a folder with a handle open inside it, so while perusal runs neither the agent nor you can
-move such a repository or rename any folder above it.
-
-From an elevated prompt, for each repository under `ownerDir`, take ownership if the agent cloned it, add the deny,
-then reset everything inside `.git` to the inherited ACL, which drops any grant made directly on it:
+Since git runs whatever a repository's `.git` tells it to, perusal refuses a repository whose `.git` the agent account
+can write. From an elevated prompt, for each repository:
 
 ```
 icacls C:\Users\you\dev\repo\.git /setowner you /T
@@ -196,11 +75,7 @@ icacls C:\Users\you\dev\repo\.git /deny "claude:(OI)(CI)(WD,AD,WEA,WA,DE,DC)"
 icacls C:\Users\you\dev\repo\.git\* /reset /T
 ```
 
-The deny lists the write bits one by one because `(W)` includes `SYNCHRONIZE`, which every open requests, so it would
-block reads too and git would no longer see the repository.
-
-With `agentHost` set, perusal skips the account checks and needs no deny, since the agent writes only its own clone on
-that host. Your `.git` gets only what perusal fetches, and the fetch refuses a tree that names `.git`.
+With `agentHost` set, no deny is needed.
 
 ## License
 
