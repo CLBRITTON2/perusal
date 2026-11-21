@@ -99,7 +99,9 @@ type workTreeDeleteCheckMsg struct {
 	agentTaken        bool
 }
 
-// repository is the one under review, whose git deletes the other work tree, and ownerClone the main work tree's path.
+// repository is the main clone or another of its work trees, whose git deletes row, and ownerClone the main work
+// tree's path. screen and reviewedDir are the screen mode and the repository under review when D was pressed, so a
+// check that arrives after either changed is dropped.
 type workTreeDeleteRequest struct {
 	repository    gitrepo.Repository
 	row           workTreeRow
@@ -107,6 +109,13 @@ type workTreeDeleteRequest struct {
 	ownerClone    string
 	agentHost     AgentHost
 	agentWorkTree gitrepo.AgentWorkTree
+	screen        screenMode
+	reviewedDir   string
+}
+
+// workTreeDeletedMsg is a delete's success, which also reloads the overview, since a row of it is gone.
+type workTreeDeletedMsg struct {
+	success popupSuccessMsg
 }
 
 func (r workTreeDeleteRequest) check() tea.Msg {
@@ -196,7 +205,10 @@ func (r workTreeDeleteRequest) delete() tea.Msg {
 			return popupResult(r.repository.Dir, err, "")
 		}
 	}
-	return popupResult(r.repository.Dir, r.repository.RemoveWorkTree(ctx, r.row.workTree), "deleted "+r.folder)
+	if err := r.repository.RemoveWorkTree(ctx, r.row.workTree); err != nil {
+		return popupResult(r.repository.Dir, err, "")
+	}
+	return workTreeDeletedMsg{success: popupSuccessMsg{dir: r.repository.Dir, notice: "deleted " + r.folder}}
 }
 
 func (m Model) openDeleteWorkTreePopup() (tea.Model, tea.Cmd) {
@@ -217,7 +229,7 @@ func (m Model) openDeleteWorkTreePopup() (tea.Model, tea.Cmd) {
 	}
 	return m, workTreeDeleteRequest{repository: m.repository, row: row, folder: folder,
 		ownerClone: m.workTreeList.rows[0].workTree.Path, agentHost: m.agentHost,
-		agentWorkTree: gitrepo.AgentWorkTree{}}.check
+		agentWorkTree: gitrepo.AgentWorkTree{}, screen: modeWorkTrees, reviewedDir: m.repository.Dir}.check
 }
 
 // A work tree the opener refuses gets a row saying why, while a git failure fails the whole list.

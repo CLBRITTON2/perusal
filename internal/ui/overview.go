@@ -405,6 +405,8 @@ func (m Model) updateOverview(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		return m.withSelectedRepository(m.pushRepositoryRow)
 	case key.Matches(msg, cherryPickKey):
 		return m.withSelectedRepository(m.cherryPickRepositoryRow)
+	case key.Matches(msg, deleteWorkTreeKey):
+		return m.withSelectedRepository(m.deleteWorkTreeRow)
 	case key.Matches(msg, refreshKey):
 		return m, overviewRequest{findRepositories: m.findRepositories}.load
 	}
@@ -422,11 +424,7 @@ func (r cherryPickRequest) cherryPick() tea.Msg {
 		r.branch+" onto "+r.mainClone.defaultBranch.Name+" in "+r.mainClone.RelativePath)
 }
 
-// cherryPickRepositoryRow finds a linked work tree's main clone by its git directory, which holds the work tree's
-// under worktrees, so no git runs before the confirm.
 func (m Model) cherryPickRepositoryRow(row repositoryRow) (tea.Model, tea.Cmd) {
-	adminDir := row.Repository.GitDir
-	commonDir := filepath.Dir(filepath.Dir(adminDir))
 	switch {
 	case m.syncing[row.Repository.Dir] != "":
 		return m, nil
@@ -435,18 +433,14 @@ func (m Model) cherryPickRepositoryRow(row repositoryRow) (tea.Model, tea.Cmd) {
 	case len(row.status.Files) > 0:
 		return m.withFooterError(row.RelativePath + " has uncommitted changes, and a cherry-pick takes only commits, " +
 			"so commit them first"), nil
-	case adminDir == "" || filepath.Base(filepath.Dir(adminDir)) != "worktrees":
+	case !isLinkedWorkTree(row):
 		return m.withFooterError(row.RelativePath + " is a main clone, cherry-pick from a work tree made by " +
 			"git worktree add"), nil
 	}
-	mainIndex := slices.IndexFunc(m.overview.rows, func(candidate overviewRow) bool {
-		mainClone, isLoaded := candidate.(repositoryRow)
-		return isLoaded && mainClone.Repository.GitDir == commonDir
-	})
-	if mainIndex < 0 {
+	mainClone, isLoaded := m.mainCloneRow(row)
+	if !isLoaded {
 		return m.withFooterError(row.RelativePath + "'s main clone is not loaded in the overview"), nil
 	}
-	mainClone := m.overview.rows[mainIndex].(repositoryRow)
 	if mainClone.defaultBranch.Name == "" {
 		return m.withFooterError(mainClone.RelativePath + " has no origin/HEAD, so its default branch is unknown, " +
 			"git remote set-head origin --auto sets it"), nil
@@ -462,6 +456,48 @@ func (m Model) cherryPickRepositoryRow(row repositoryRow) (tea.Model, tea.Cmd) {
 		run:         cherryPickRequest{mainClone: mainClone, branch: row.status.Branch}.cherryPick,
 		runningText: "cherry-picking...",
 	}), nil
+}
+
+// isLinkedWorkTree reads a work tree made by git worktree add from its git directory, which sits under its main
+// clone's worktrees folder, so no git runs.
+func isLinkedWorkTree(row repositoryRow) bool {
+	adminDir := row.Repository.GitDir
+	return adminDir != "" && filepath.Base(filepath.Dir(adminDir)) == "worktrees"
+}
+
+func (m Model) mainCloneRow(row repositoryRow) (repositoryRow, bool) {
+	commonDir := filepath.Dir(filepath.Dir(row.Repository.GitDir))
+	mainIndex := slices.IndexFunc(m.overview.rows, func(candidate overviewRow) bool {
+		mainClone, isLoaded := candidate.(repositoryRow)
+		return isLoaded && mainClone.Repository.GitDir == commonDir
+	})
+	if mainIndex < 0 {
+		return repositoryRow{}, false
+	}
+	return m.overview.rows[mainIndex].(repositoryRow), true
+}
+
+// deleteWorkTreeRow runs the work tree list's delete check through the work tree's main clone.
+func (m Model) deleteWorkTreeRow(row repositoryRow) (tea.Model, tea.Cmd) {
+	switch {
+	case m.syncing[row.Repository.Dir] != "":
+		return m, nil
+	case !isLinkedWorkTree(row):
+		return m.withFooterError(row.RelativePath + " is the main work tree, which perusal never deletes"), nil
+	case row.Repository.Dir == m.repository.Dir:
+		return m.withFooterError(row.RelativePath + " is under review, so it cannot be deleted"), nil
+	case row.status.Branch == "":
+		return m.withFooterError(row.RelativePath + " has a detached HEAD, so it cannot be deleted"), nil
+	}
+	mainClone, isLoaded := m.mainCloneRow(row)
+	if !isLoaded {
+		return m.withFooterError(row.RelativePath + "'s main clone is not loaded in the overview"), nil
+	}
+	workTree := workTreeRow{workTree: gitrepo.WorkTree{Path: row.Repository.Dir, Branch: row.status.Branch},
+		repository: row.Repository, changedCount: len(row.status.Files), refusal: nil}
+	return m, workTreeDeleteRequest{repository: mainClone.Repository, row: workTree, folder: row.RelativePath,
+		ownerClone: mainClone.Repository.Dir, agentHost: m.agentHost, agentWorkTree: gitrepo.AgentWorkTree{},
+		screen: modeOverview, reviewedDir: m.repository.Dir}.check
 }
 
 // withSelectedRepository acts on the selected row when it is a repository and explains the refusal when it is not.
@@ -543,6 +579,13 @@ func (m Model) withSyncing(dirs []string, text string) Model {
 
 func (m Model) pushRepositoryRow(row repositoryRow) (tea.Model, tea.Cmd) {
 	return m.openPushPopup(row.Repository, row.status)
+}
+
+func (m Model) reloadOverview() tea.Cmd {
+	if m.mode != modeOverview {
+		return nil
+	}
+	return overviewRequest{findRepositories: m.findRepositories}.load
 }
 
 func (m Model) reloadOverviewRow(dir string) tea.Cmd {

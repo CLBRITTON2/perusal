@@ -90,7 +90,7 @@ var (
 	logHelp      = slices.Concat(logKeys, reviewHelp)
 	stashHelp    = slices.Concat(stashKeys, reviewHelp)
 	overviewHelp = []key.Binding{downKey, openRepositoryKey, fetchKey, pullKey, rebaseKey, pushKey, cherryPickKey,
-		refreshKey, closeOverviewKey, quitKey}
+		deleteWorkTreeKey, refreshKey, closeOverviewKey, quitKey}
 	branchesHelp = []key.Binding{downKey, switchBranchKey, newBranchKey, deleteBranchKey, fetchBranchesKey,
 		closeBranchesKey, quitKey}
 	workTreesHelp = []key.Binding{downKey, openRepositoryKey, deleteWorkTreeKey, closeWorkTreesKey, quitKey}

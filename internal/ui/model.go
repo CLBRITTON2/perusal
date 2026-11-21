@@ -365,11 +365,10 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.descriptionBox.Reset()
 		return m, m.reloadStatus()
 	case popupSuccessMsg:
-		if msg.dir != m.popup.dir {
-			return m.withFooterNotice(msg.notice + " in " + msg.dir), nil
-		}
-		m = m.withPopupClosed().withFooterNotice(msg.notice)
-		return m, tea.Batch(m.reloadStatus(), m.reloadBranches(), m.reloadWorkTrees(), m.reloadOverviewRow(msg.dir))
+		return m.withPopupSucceeded(msg)
+	case workTreeDeletedMsg:
+		succeeded, reloads := m.withPopupSucceeded(msg.success)
+		return succeeded, tea.Batch(reloads, succeeded.reloadOverview())
 	case branchesMsg:
 		if msg.dir != m.repository.Dir || m.mode != modeBranches {
 			return m, nil
@@ -410,7 +409,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case workTreeOpenedMsg:
 		return m.withFocusedRepository(msg.repository)
 	case workTreeDeleteCheckMsg:
-		if msg.request.repository.Dir != m.repository.Dir || m.mode != modeWorkTrees || m.popup.kind != noPopup {
+		if msg.request.reviewedDir != m.repository.Dir || m.mode != msg.request.screen || m.popup.kind != noPopup {
 			return m, nil
 		}
 		return m.withWorkTreeDeleteChecked(msg), nil
@@ -780,6 +779,14 @@ func (m Model) withPopupClosed() Model {
 	m.descriptionBox.Blur()
 	m.branchNameInput.Blur()
 	return m
+}
+
+func (m Model) withPopupSucceeded(msg popupSuccessMsg) (Model, tea.Cmd) {
+	if msg.dir != m.popup.dir {
+		return m.withFooterNotice(msg.notice + " in " + msg.dir), nil
+	}
+	m = m.withPopupClosed().withFooterNotice(msg.notice)
+	return m, tea.Batch(m.reloadStatus(), m.reloadBranches(), m.reloadWorkTrees(), m.reloadOverviewRow(msg.dir))
 }
 
 func (m Model) withConfirmation(dir string, c confirmation) Model {

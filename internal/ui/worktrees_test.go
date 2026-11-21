@@ -3,6 +3,7 @@ package ui
 import (
 	"context"
 	"errors"
+	"path/filepath"
 	"slices"
 	"strings"
 	"testing"
@@ -377,7 +378,9 @@ func aDeleteClosesThePopupAndReloadsTheList(t *testing.T) {
 	m := update(t, selectRow(t, workTreesOf(t), 1), repoSideDeleteCheck(removeNothing))
 	m = update(t, m, tea.KeyPressMsg{Code: tea.KeyEnter})
 
-	next, reloading := m.Update(popupSuccessMsg{dir: "C:/dev/repo", notice: "deleted repo-side"})
+	next, reloading := m.Update(workTreeDeletedMsg{
+		success: popupSuccessMsg{dir: "C:/dev/repo", notice: "deleted repo-side"},
+	})
 	m = asModel(t, next)
 	reloads := []string{}
 	for _, cmd := range reloading().(tea.BatchMsg) {
@@ -390,6 +393,162 @@ func aDeleteClosesThePopupAndReloadsTheList(t *testing.T) {
 		!slices.Equal(reloads, []string{"C:/dev/repo"}) {
 		t.Fatalf("got popup %d, mode %d, footer %q, work tree list reloads %q, want the list reloaded",
 			m.popup.kind, m.mode, m.footer.text, reloads)
+	}
+}
+
+func TestDeleteWorkTreeInTheOverview(t *testing.T) {
+	t.Run("aLinkedWorkTreeRunsTheCheck", aLinkedWorkTreeRunsTheCheck)
+	t.Run("aCheckOpensThePopupOnTheMainClone", aCheckOpensThePopupOnTheMainClone)
+	t.Run("aDeleteReloadsTheOverview", aDeleteReloadsTheOverview)
+	for name, test := range map[string]struct {
+		target overviewRow
+		want   string
+	}{
+		"refusesAMainClone": {
+			target: repositoryRow{
+				FoundRepository: focus.FoundRepository{RelativePath: "other", Repository: gitrepo.Repository{
+					Dir: "C:/dev/other", GitDir: filepath.FromSlash("C:/dev/other/.git"),
+				}},
+				status: gitrepo.Status{Branch: "main", HasCommits: true},
+			},
+			want: "other is the main work tree, which perusal never deletes",
+		},
+		"refusesTheWorkTreeUnderReview": {
+			target: linkedWorkTreeRow("C:/dev/first", "fix"),
+			want:   "worktrees/repo/fix is under review, so it cannot be deleted",
+		},
+		"refusesADetachedHead": {
+			target: linkedWorkTreeRow("C:/dev/worktrees/repo/fix", ""),
+			want:   "worktrees/repo/fix has a detached HEAD, so it cannot be deleted",
+		},
+		"refusesAWorkTreeWhoseMainCloneIsNotLoaded": {
+			target: repositoryRow{
+				FoundRepository: focus.FoundRepository{RelativePath: "worktrees/gone/fix", Repository: gitrepo.Repository{
+					Dir: "C:/dev/worktrees/gone/fix", GitDir: filepath.FromSlash("C:/dev/gone/.git/worktrees/fix"),
+				}},
+				status: gitrepo.Status{Branch: "fix", HasCommits: true},
+			},
+			want: "worktrees/gone/fix's main clone is not loaded in the overview",
+		},
+		"refusesARefusedRow": {
+			target: refusedRow{FoundRefusal: focus.FoundRefusal{RelativePath: "worktrees/repo/fix",
+				Err: focus.ErrGitDirUnprotected}},
+			want: "worktrees/repo/fix is refused: " + focus.ErrGitDirUnprotected.Error(),
+		},
+	} {
+		t.Run(name+"WithoutRunningGit", func(t *testing.T) {
+			m := overviewWithMainClone(t, test.target)
+
+			next, cmd := m.Update(tea.KeyPressMsg{Code: 'D', Text: "D"})
+			m = asModel(t, next)
+
+			if cmd != nil || m.popup.kind != noPopup || !m.footer.isError || m.footer.text != test.want {
+				t.Fatalf("got command %v, popup %d, footer %q, want the refusal %q", cmd, m.popup.kind, m.footer.text,
+					test.want)
+			}
+		})
+	}
+}
+
+// aLinkedWorkTreeRunsTheCheck runs the check's first git call, the work tree's status, which fails on the made up
+// directory and so shows the check runs in the work tree.
+func aLinkedWorkTreeRunsTheCheck(t *testing.T) {
+	m := overviewWithMainClone(t, linkedWorkTreeRow("C:/dev/worktrees/repo/fix", "fix"))
+
+	next, cmd := m.Update(tea.KeyPressMsg{Code: 'D', Text: "D"})
+	m = asModel(t, next)
+
+	if cmd == nil || m.footer.text != "" {
+		t.Fatalf("got command %v, footer %q, want the check to run", cmd, m.footer.text)
+	}
+	failure, isFailure := cmd().(gitFailureMsg)
+	if !isFailure || !strings.Contains(failure.err.Error(), "C:/dev/worktrees/repo/fix") {
+		t.Fatalf("got %#v, want the work tree's status to fail on its made up directory", failure)
+	}
+}
+
+func aCheckOpensThePopupOnTheMainClone(t *testing.T) {
+	m := update(t, overviewWithMainClone(t, linkedWorkTreeRow("C:/dev/worktrees/repo/fix", "fix")), overviewFixCheck())
+
+	want := []string{titleStyle.Render("delete worktrees/repo/fix"), warningStyle.Render("origin/main lacks some of fix")}
+	if m.popup.kind != confirmPopup || m.popup.dir != "C:/dev/repo" || !slices.Equal(m.popup.confirmation.lines, want) {
+		t.Fatalf("got popup %d for %q, lines %q, want %q for C:/dev/repo", m.popup.kind, m.popup.dir,
+			m.popup.confirmation.lines, want)
+	}
+}
+
+func aDeleteReloadsTheOverview(t *testing.T) {
+	m := update(t, overviewWithMainClone(t, linkedWorkTreeRow("C:/dev/worktrees/repo/fix", "fix")), overviewFixCheck())
+	m = update(t, m, tea.KeyPressMsg{Code: tea.KeyEnter})
+
+	next, reloading := m.Update(workTreeDeletedMsg{
+		success: popupSuccessMsg{dir: "C:/dev/repo", notice: "deleted worktrees/repo/fix"},
+	})
+	m = asModel(t, next)
+	overviewReloads := 0
+	for _, cmd := range reloading().(tea.BatchMsg) {
+		if cmd == nil {
+			continue
+		}
+		if _, isOverview := cmd().(overviewMsg); isOverview {
+			overviewReloads++
+		}
+	}
+
+	if m.popup.kind != noPopup || m.mode != modeOverview || m.footer.text != "deleted worktrees/repo/fix" ||
+		overviewReloads != 1 {
+		t.Fatalf("got popup %d, mode %d, footer %q, %d overview reloads, want the overview reloaded once",
+			m.popup.kind, m.mode, m.footer.text, overviewReloads)
+	}
+}
+
+// overviewWithMainClone lists target first, then the main clone of C:/dev/repo, while C:/dev/first is under review.
+func overviewWithMainClone(t *testing.T, target overviewRow) Model {
+	t.Helper()
+	m := focusOnSeveral(t, map[string]bool{"C:/dev/cwd": false, "C:/dev/first": true, "C:/dev/second": false})
+	m = update(t, m, tea.KeyPressMsg{Code: 'o', Text: "o"})
+	return update(t, m, overviewMsg{rows: []overviewRow{
+		target,
+		repositoryRow{
+			FoundRepository: focus.FoundRepository{RelativePath: "repo", Repository: gitrepo.Repository{
+				Dir: "C:/dev/repo", GitDir: filepath.FromSlash("C:/dev/repo/.git"),
+			}},
+			status:        gitrepo.Status{Branch: "main", HasCommits: true},
+			defaultBranch: originMain(),
+		},
+	}})
+}
+
+// linkedWorkTreeRow is the work tree fix of C:/dev/repo at dir, on branch.
+func linkedWorkTreeRow(dir string, branch string) repositoryRow {
+	return repositoryRow{
+		FoundRepository: focus.FoundRepository{RelativePath: "worktrees/repo/fix", Repository: gitrepo.Repository{
+			Dir: dir, GitDir: filepath.FromSlash("C:/dev/repo/.git/worktrees/fix"),
+		}},
+		status: gitrepo.Status{Branch: branch, HasCommits: true},
+	}
+}
+
+// overviewFixCheck passes every check of an overview delete of worktrees/repo/fix, which has no agent copy.
+func overviewFixCheck() workTreeDeleteCheckMsg {
+	return workTreeDeleteCheckMsg{
+		request: workTreeDeleteRequest{
+			repository: gitrepo.Repository{Dir: "C:/dev/repo"},
+			row: workTreeRow{
+				workTree:   gitrepo.WorkTree{Path: "C:/dev/worktrees/repo/fix", Branch: "fix"},
+				repository: gitrepo.Repository{Dir: "C:/dev/worktrees/repo/fix"},
+			},
+			folder:        "worktrees/repo/fix",
+			ownerClone:    "C:/dev/repo",
+			agentHost:     AgentHost{},
+			agentWorkTree: gitrepo.AgentWorkTree{},
+			screen:        modeOverview,
+			reviewedDir:   "C:/dev/first",
+		},
+		uncommitted:       false,
+		defaultBranch:     originMain(),
+		mergedIntoDefault: false,
+		agentTaken:        false,
 	}
 }
 
@@ -408,6 +567,8 @@ func repoSideDeleteCheck(removeAgentWorkTree func(ctx context.Context, ownerClon
 				Exists: true,
 				Head:   gitrepo.AgentHead{Branch: "refs/heads/fix", Commit: "0123456789abcdef0123456789abcdef01234567"},
 			},
+			screen:      modeWorkTrees,
+			reviewedDir: "C:/dev/repo",
 		},
 		uncommitted:       false,
 		defaultBranch:     originMain(),
