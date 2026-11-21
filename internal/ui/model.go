@@ -155,6 +155,8 @@ type Model struct {
 	// focused lists the repositories the focus named.
 	focused   []gitrepo.Repository
 	rejection string
+	// waitingFocus is the newest focus that would switch away while the review is busy.
+	waitingFocus *focus.Focus
 	// missingWorkTrees are the ones the focus named. askedWorkTrees holds the AgentDir of each one offered this run.
 	missingWorkTrees []focus.MissingWorkTree
 	askedWorkTrees   map[string]bool
@@ -285,7 +287,18 @@ func (m Model) Init() tea.Cmd {
 	return nextPoll()
 }
 
+// A waiting focus applies after whichever message ends the busy review.
 func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
+	next, cmd := m.update(msg)
+	updated := next.(Model)
+	if updated.waitingFocus == nil || updated.isBusy() {
+		return updated, cmd
+	}
+	focused, focusCmd := updated.withFocus(*updated.waitingFocus)
+	return focused, tea.Batch(cmd, focusCmd)
+}
+
+func (m Model) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
 	case tea.WindowSizeMsg:
 		previous := m.diffLines()
@@ -677,12 +690,18 @@ func (m Model) withRepository(repository gitrepo.Repository, rejection string) M
 
 // A focus that still names the repository under review keeps it, so a new edit elsewhere never pulls the review away.
 // The focus file starts with the focused pane's directory, so a different first repository means a different pane.
+// A focus that would switch away while the review is busy waits in waitingFocus instead.
 func (m Model) withFocus(msg focus.Focus) (tea.Model, tea.Cmd) {
 	m.missingWorkTrees = msg.MissingWorkTrees
+	m.waitingFocus = nil
 	if m.rejection == "" && len(m.focused) > 0 && len(msg.Repositories) > 0 && m.focused[0] == msg.Repositories[0] &&
 		slices.Contains(msg.Repositories, m.repository) {
 		m.focused = msg.Repositories
 		return m.withRefusals(msg.Refusals), nil
+	}
+	if m.repository.Dir != "" && m.isBusy() {
+		m.waitingFocus = &msg
+		return m, nil
 	}
 	next := m.withRepository(gitrepo.Repository{}, "")
 	next.focused = msg.Repositories
@@ -690,6 +709,11 @@ func (m Model) withFocus(msg focus.Focus) (tea.Model, tea.Cmd) {
 		return next.withRefusals(msg.Refusals).withFocusedRepository(next.focused[0])
 	}
 	return next.withRefusals(msg.Refusals), next.loadUncommitted()
+}
+
+func (m Model) isBusy() bool {
+	draftTyped := m.summaryInput.Value() != "" || m.descriptionBox.Value() != ""
+	return m.popup.kind != noPopup || draftTyped || m.stagedFileCount() > 0 || m.mode != modeBrowsing
 }
 
 func (m Model) withRefusals(refusals []error) Model {
@@ -1415,6 +1439,9 @@ func (m Model) renderHeader() string {
 	left := " " + repositoryStyle.Render(folderGlyph+" "+sanitizeText(filepath.Base(m.repository.Dir))) +
 		"  " + branchStyle.Render(branchGlyph+" "+headName(m.status.Branch)) + " " + renderAheadBehind(m.status.Tracking) +
 		"  " + mutedStyle.Render(strings.Join(shape, " · "))
+	if m.waitingFocus != nil && len(m.waitingFocus.Repositories) > 0 {
+		left += "   " + warningStyle.Render("next focus: "+sanitizeText(filepath.Base(m.waitingFocus.Repositories[0].Dir)))
+	}
 	return fitToWidth(left, m.width)
 }
 

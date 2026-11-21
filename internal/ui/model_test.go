@@ -843,14 +843,19 @@ func TestTheFooterFitsAndQuestionMarkListsEveryKey(t *testing.T) {
 }
 
 func TestATakeFailureStaysInTheFooterAcrossKeysAndFocusSwitchesUntilItClears(t *testing.T) {
-	m := reviewingRepository(t, gitrepo.Status{Files: twoFiles()})
+	m := reviewingRepository(t, gitrepo.Status{Files: unstagedFiles()})
 	m = update(t, m, TakeFailure{Reason: "claude/settings.json would be overwritten"})
 
 	m = update(t, m, tea.KeyPressMsg{Code: 'j', Text: "j"})
 	afterKey := ansi.Strip(m.renderFooter())
 	m = update(t, m, focusOnOne("C:/dev/other"))
 	afterFocusSwitch := ansi.Strip(m.renderFooter())
+	switchedDir := m.repository.Dir
 	m = update(t, m, TakeFailure{Reason: ""})
+
+	if switchedDir != "C:/dev/other" {
+		t.Fatalf("got %s after the focus, want C:/dev/other", switchedDir)
+	}
 
 	for _, footer := range []string{afterKey, afterFocusSwitch} {
 		if !strings.Contains(footer, "claude/settings.json would be overwritten") {
@@ -958,6 +963,139 @@ func reviewingRepository(t *testing.T, status gitrepo.Status) Model {
 	m := update(t, New(findNothing, openAnything, nil, AgentHost{}), tea.WindowSizeMsg{Width: 120, Height: 30})
 	m = update(t, m, focusOnOne("C:/dev/repo"))
 	return update(t, m, statusMsg{dir: "C:/dev/repo", status: status})
+}
+
+func TestAFocusThatWouldSwitchAwayWhileTheReviewIsBusy(t *testing.T) {
+	t.Run("waitsBehindTheCommitDraftAndTheHeaderNamesIt", waitsBehindTheCommitDraftAndTheHeaderNamesIt)
+	t.Run("waitsBehindADraftLeftInTheClosedCommitPopup", waitsBehindADraftLeftInTheClosedCommitPopup)
+	t.Run("appliesOnceTheCommitLandsAndNothingIsStaged", appliesOnceTheCommitLandsAndNothingIsStaged)
+	t.Run("appliesOnceTheLastStagedFileIsUnstaged", appliesOnceTheLastStagedFileIsUnstaged)
+	t.Run("appliesOnceTheOverviewCloses", appliesOnceTheOverviewCloses)
+	t.Run("appliesOnlyTheNewestOne", appliesOnlyTheNewestOne)
+	t.Run("isDroppedByEnterOnAnotherRepositoryInTheOverview", isDroppedByEnterOnAnotherRepositoryInTheOverview)
+}
+
+func waitsBehindTheCommitDraftAndTheHeaderNamesIt(t *testing.T) {
+	m := typingCommitDraft(t, "fix")
+
+	m = update(t, m, focusOnOne("C:/dev/other"))
+
+	header := strings.TrimRight(ansi.Strip(m.renderHeader()), " ")
+	if m.popup.kind != commitPopup || m.summaryInput.Value() != "fix" || m.repository.Dir != "C:/dev/repo" ||
+		!strings.HasSuffix(header, "   next focus: other") {
+		t.Fatalf("got popup %d, draft %q, %s, header %q, want the commit popup, fix, C:/dev/repo and next focus: other",
+			m.popup.kind, m.summaryInput.Value(), m.repository.Dir, header)
+	}
+}
+
+func waitsBehindADraftLeftInTheClosedCommitPopup(t *testing.T) {
+	m := update(t, typingCommitDraft(t, "fix"), tea.KeyPressMsg{Code: tea.KeyEscape})
+	m = update(t, m, statusMsg{dir: "C:/dev/repo", status: gitrepo.Status{Files: unstagedFiles()}})
+
+	m = update(t, m, focusOnOne("C:/dev/other"))
+
+	header := strings.TrimRight(ansi.Strip(m.renderHeader()), " ")
+	if m.popup.kind != noPopup || m.repository.Dir != "C:/dev/repo" || !strings.HasSuffix(header, "next focus: other") {
+		t.Fatalf("got popup %d, %s, header %q, want no popup on C:/dev/repo with next focus: other", m.popup.kind,
+			m.repository.Dir, header)
+	}
+}
+
+func appliesOnceTheCommitLandsAndNothingIsStaged(t *testing.T) {
+	m := update(t, typingCommitDraft(t, "fix"), focusOnOne("C:/dev/other"))
+
+	m = update(t, m, commitMsg{dir: "C:/dev/repo", summary: "fix"})
+	committed := m
+	m = update(t, m, statusMsg{dir: "C:/dev/repo", status: gitrepo.Status{Files: unstagedFiles()}})
+
+	if committed.popup.kind != noPopup || committed.repository.Dir != "C:/dev/repo" {
+		t.Fatalf("got popup %d on %s after the commit, want it closed on C:/dev/repo", committed.popup.kind,
+			committed.repository.Dir)
+	}
+	if m.repository.Dir != "C:/dev/other" || strings.Contains(ansi.Strip(m.renderHeader()), "next focus") {
+		t.Fatalf("got %s, header %q, want C:/dev/other with no next focus", m.repository.Dir, ansi.Strip(m.renderHeader()))
+	}
+}
+
+func appliesOnceTheLastStagedFileIsUnstaged(t *testing.T) {
+	m := update(t, reviewingRepository(t, gitrepo.Status{Files: twoFiles()}), focusOnOne("C:/dev/other"))
+	waiting := m
+
+	m = update(t, m, statusMsg{dir: "C:/dev/repo", status: gitrepo.Status{Files: unstagedFiles()}})
+
+	if waiting.repository.Dir != "C:/dev/repo" || m.repository.Dir != "C:/dev/other" {
+		t.Fatalf("got %s while staged, then %s, want C:/dev/repo then C:/dev/other", waiting.repository.Dir,
+			m.repository.Dir)
+	}
+}
+
+func appliesOnceTheOverviewCloses(t *testing.T) {
+	m := update(t, reviewingRepository(t, gitrepo.Status{Files: unstagedFiles()}), tea.KeyPressMsg{Code: 'o', Text: "o"})
+	m = update(t, m, focusOnOne("C:/dev/other"))
+	waiting := m
+
+	m = update(t, m, tea.KeyPressMsg{Code: tea.KeyEscape})
+
+	if waiting.repository.Dir != "C:/dev/repo" || m.repository.Dir != "C:/dev/other" || m.mode != modeBrowsing {
+		t.Fatalf("got %s in the overview, then %s in mode %d, want C:/dev/repo then C:/dev/other browsing",
+			waiting.repository.Dir, m.repository.Dir, m.mode)
+	}
+}
+
+func appliesOnlyTheNewestOne(t *testing.T) {
+	m := update(t, reviewingRepository(t, gitrepo.Status{Files: twoFiles()}), focusOnOne("C:/dev/first"))
+	m = update(t, m, focusOnOne("C:/dev/second"))
+	header := strings.TrimRight(ansi.Strip(m.renderHeader()), " ")
+
+	m = update(t, m, statusMsg{dir: "C:/dev/repo", status: gitrepo.Status{Files: unstagedFiles()}})
+
+	if !strings.HasSuffix(header, "next focus: second") || m.repository.Dir != "C:/dev/second" {
+		t.Fatalf("got header %q, then %s, want next focus: second, then C:/dev/second", header, m.repository.Dir)
+	}
+}
+
+func isDroppedByEnterOnAnotherRepositoryInTheOverview(t *testing.T) {
+	m := update(t, reviewingRepository(t, gitrepo.Status{Files: unstagedFiles()}), tea.KeyPressMsg{Code: 'o', Text: "o"})
+	m = update(t, m, overviewMsg{rows: []overviewRow{
+		repositoryRow{FoundRepository: foundAt("repo", "C:/dev/repo")},
+		repositoryRow{FoundRepository: foundAt("elsewhere", "C:/dev/elsewhere")},
+	}})
+	m = update(t, m, focusOnOne("C:/dev/other"))
+
+	m = update(t, m, tea.KeyPressMsg{Code: 'j', Text: "j"})
+	m = update(t, m, tea.KeyPressMsg{Code: tea.KeyEnter})
+
+	if m.repository.Dir != "C:/dev/elsewhere" || m.waitingFocus != nil ||
+		strings.Contains(ansi.Strip(m.renderHeader()), "next focus") {
+		t.Fatalf("got %s, waiting %v, header %q, want C:/dev/elsewhere with no next focus", m.repository.Dir,
+			m.waitingFocus, ansi.Strip(m.renderHeader()))
+	}
+}
+
+func TestAFocusThatKeepsTheReviewedRepositoryAppliesAtOnceWhileStaged(t *testing.T) {
+	m := reviewingRepository(t, gitrepo.Status{Files: twoFiles()})
+
+	m = update(t, m, focus.Focus{Repositories: []gitrepo.Repository{{Dir: "C:/dev/repo"}, {Dir: "C:/dev/other"}},
+		Refusals: []error{}})
+
+	if m.repository.Dir != "C:/dev/repo" || len(m.focused) != 2 || m.waitingFocus != nil ||
+		strings.Contains(ansi.Strip(m.renderHeader()), "next focus") {
+		t.Fatalf("got %s, %d focused, waiting %v, header %q, want C:/dev/repo with 2 focused and no next focus",
+			m.repository.Dir, len(m.focused), m.waitingFocus, ansi.Strip(m.renderHeader()))
+	}
+}
+
+func typingCommitDraft(t *testing.T, summary string) Model {
+	t.Helper()
+	m := update(t, reviewingRepository(t, gitrepo.Status{Files: twoFiles()}), tea.KeyPressMsg{Code: 'c', Text: "c"})
+	for _, character := range summary {
+		m = update(t, m, tea.KeyPressMsg{Code: character, Text: string(character)})
+	}
+	return m
+}
+
+func unstagedFiles() []gitrepo.FileStatus {
+	return []gitrepo.FileStatus{{Path: "a.go", IndexStatus: ' ', WorktreeStatus: 'M'}}
 }
 
 func TestFullscreenDiffCoversTheListsSoAClickThereSelectsNothing(t *testing.T) {
