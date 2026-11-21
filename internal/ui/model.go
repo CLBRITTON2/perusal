@@ -527,6 +527,9 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, cmd
 	}
 	if m.mode == modeSearching {
+		if _, isPaste := msg.(tea.PasteMsg); isPaste {
+			return m.editSearchAndFilterLog(msg)
+		}
 		var cmd tea.Cmd
 		m.searchInput, cmd = m.searchInput.Update(msg)
 		return m, cmd
@@ -1072,6 +1075,10 @@ func (m Model) updateSearch(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		key.Matches(msg, closeEmptySearchKey) && m.searchInput.Value() == "":
 		return m.withSearchClosed().clearSearch()
 	}
+	return m.editSearchAndFilterLog(msg)
+}
+
+func (m Model) editSearchAndFilterLog(msg tea.Msg) (tea.Model, tea.Cmd) {
 	var inputCmd tea.Cmd
 	m.searchInput, inputCmd = m.searchInput.Update(msg)
 	filter, err := compileSearch(m.searchInput.Value())

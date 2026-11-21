@@ -614,6 +614,20 @@ func aPasteFiltersTheRows(t *testing.T) {
 	}
 }
 
+func aPasteIntoTheSearchFiltersTheLog(t *testing.T) {
+	m := logOf(t, []gitrepo.Commit{
+		{Hash: strings.Repeat("1", 40), Message: "Add tree"},
+		{Hash: strings.Repeat("2", 40), Message: "Fix wrap"},
+	})
+	m = update(t, m, tea.KeyPressMsg{Code: '/', Text: "/"})
+
+	m = update(t, m, tea.PasteMsg{Content: "wrap"})
+
+	if !reflect.DeepEqual(m.visibleLogRows(), []treeRow{{commit: 1, file: commitRow}}) {
+		t.Fatalf("got rows %v, want only commit 1", m.visibleLogRows())
+	}
+}
+
 func deleteActsOnTheFilteredRowAndTheReloadStaysFiltered(t *testing.T) {
 	m := typeText(t, overviewOfWorkTrees(t), "/fix")
 	m = update(t, m, tea.KeyPressMsg{Code: tea.KeyDown})
@@ -1287,6 +1301,7 @@ func TestLog(t *testing.T) {
 	t.Run("anUppercaseLetterMakesTheSearchCaseSensitive", anUppercaseLetterMakesTheSearchCaseSensitive)
 	t.Run("searchNeedsEveryWordInAnyOrder", searchNeedsEveryWordInAnyOrder)
 	t.Run("searchLooksAtTheHashAuthorAndRefs", searchLooksAtTheHashAuthorAndRefs)
+	t.Run("aPasteIntoTheSearchFiltersTheLog", aPasteIntoTheSearchFiltersTheLog)
 	t.Run("clickingTheFoldedLogOpensIt", clickingTheFoldedLogOpensIt)
 	t.Run("clickingTheFoldedChangesDuringASearchClosesIt", clickingTheFoldedChangesDuringASearchClosesIt)
 	t.Run("backspaceOnAnEmptySearchClosesIt", backspaceOnAnEmptySearchClosesIt)
