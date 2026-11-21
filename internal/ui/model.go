@@ -129,6 +129,12 @@ type commitDiff struct {
 	contextLines int
 }
 
+// focusChange is a focus, or a rejection when every path in the focus file was refused.
+type focusChange struct {
+	focus     focus.Focus
+	rejection *FocusRejection
+}
+
 type Model struct {
 	display
 	findRepositories RepositoryFinder
@@ -155,8 +161,10 @@ type Model struct {
 	// focused lists the repositories the focus named.
 	focused   []gitrepo.Repository
 	rejection string
-	// waitingFocus is the newest focus that would switch away while the review is busy.
-	waitingFocus *focus.Focus
+	// waitingFocus is the newest focus or rejection that would switch away while perusal's terminal has focus.
+	waitingFocus *focusChange
+	// terminalFocused starts true, since the user just started perusal in its terminal.
+	terminalFocused bool
 	// missingWorkTrees are the ones the focus named. askedWorkTrees holds the AgentDir of each one offered this run.
 	missingWorkTrees []focus.MissingWorkTree
 	askedWorkTrees   map[string]bool
@@ -230,6 +238,7 @@ func New(findRepositories RepositoryFinder, openRepository RepositoryOpener, cre
 		focused:            []gitrepo.Repository{},
 		missingWorkTrees:   []focus.MissingWorkTree{},
 		askedWorkTrees:     map[string]bool{},
+		terminalFocused:    true,
 		status:             gitrepo.Status{Files: []gitrepo.FileStatus{}},
 		workTrees:          []gitrepo.WorkTree{},
 		commits:            []gitrepo.Commit{},
@@ -287,28 +296,29 @@ func (m Model) Init() tea.Cmd {
 	return nextPoll()
 }
 
-// A waiting focus applies after whichever message ends the busy review.
 func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
-	next, cmd := m.update(msg)
-	updated := next.(Model)
-	if updated.waitingFocus == nil || updated.isBusy() {
-		return updated, cmd
-	}
-	focused, focusCmd := updated.withFocus(*updated.waitingFocus)
-	return focused, tea.Batch(cmd, focusCmd)
-}
-
-func (m Model) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
 	case tea.WindowSizeMsg:
 		previous := m.diffLines()
 		m.width = msg.Width
 		m.height = msg.Height
 		return m.withPaneSizes().withDiffKeptInPlace(previous).withListScrolled(), nil
+	case tea.FocusMsg:
+		m.terminalFocused = true
+		return m, nil
+	case tea.BlurMsg:
+		m.terminalFocused = false
+		if m.waitingFocus == nil {
+			return m, nil
+		}
+		if m.waitingFocus.rejection != nil {
+			return m.withRejection(*m.waitingFocus.rejection), nil
+		}
+		return m.withFocus(m.waitingFocus.focus)
 	case focus.Focus:
 		return m.withFocus(msg)
 	case FocusRejection:
-		return m.withRepository(gitrepo.Repository{}, sanitizeSingleLine(msg.Reason)), nil
+		return m.withRejection(msg), nil
 	case TakeFailure:
 		m.takeFailure = sanitizeSingleLine(msg.Reason)
 		return m, nil
@@ -688,6 +698,7 @@ func (m Model) withRepository(repository gitrepo.Repository, rejection string) M
 	next.takeFailure = m.takeFailure
 	next.missingWorkTrees = m.missingWorkTrees
 	next.askedWorkTrees = m.askedWorkTrees
+	next.terminalFocused = m.terminalFocused
 	next.repository = repository
 	next.rejection = rejection
 	return next.withLayout()
@@ -695,7 +706,7 @@ func (m Model) withRepository(repository gitrepo.Repository, rejection string) M
 
 // A focus that still names the repository under review keeps it, so a new edit elsewhere never pulls the review away.
 // The focus file starts with the focused pane's directory, so a different first repository means a different pane.
-// A focus that would switch away while the review is busy waits in waitingFocus instead.
+// A focus that would switch away while perusal's terminal has focus waits in waitingFocus instead.
 func (m Model) withFocus(msg focus.Focus) (tea.Model, tea.Cmd) {
 	m.missingWorkTrees = msg.MissingWorkTrees
 	m.waitingFocus = nil
@@ -704,8 +715,8 @@ func (m Model) withFocus(msg focus.Focus) (tea.Model, tea.Cmd) {
 		m.focused = msg.Repositories
 		return m.withRefusals(msg.Refusals), nil
 	}
-	if m.repository.Dir != "" && m.isBusy() {
-		m.waitingFocus = &msg
+	if m.holdsFocusChanges() {
+		m.waitingFocus = &focusChange{focus: msg}
 		return m, nil
 	}
 	next := m.withRepository(gitrepo.Repository{}, "")
@@ -716,9 +727,17 @@ func (m Model) withFocus(msg focus.Focus) (tea.Model, tea.Cmd) {
 	return next.withRefusals(msg.Refusals), next.loadUncommitted()
 }
 
-func (m Model) isBusy() bool {
-	draftTyped := m.summaryInput.Value() != "" || m.descriptionBox.Value() != ""
-	return m.popup.kind != noPopup || draftTyped || m.stagedFileCount() > 0 || m.mode != modeBrowsing
+func (m Model) withRejection(rejection FocusRejection) Model {
+	if m.holdsFocusChanges() {
+		m.waitingFocus = &focusChange{rejection: &rejection}
+		return m
+	}
+	return m.withRepository(gitrepo.Repository{}, sanitizeSingleLine(rejection.Reason))
+}
+
+// The user never leaves the repository under review while in perusal, whatever they are doing there.
+func (m Model) holdsFocusChanges() bool {
+	return m.repository.Dir != "" && m.terminalFocused
 }
 
 func (m Model) withRefusals(refusals []error) Model {
@@ -1385,6 +1404,7 @@ func (m Model) View() tea.View {
 	}
 	view.AltScreen = true
 	view.MouseMode = tea.MouseModeCellMotion
+	view.ReportFocus = true
 	if m.repository.Dir == "" {
 		view.WindowTitle = appName
 	} else {
@@ -1445,8 +1465,11 @@ func (m Model) renderHeader() string {
 	left := " " + repositoryStyle.Render(folderGlyph+" "+sanitizeText(filepath.Base(m.repository.Dir))) +
 		"  " + branchStyle.Render(branchGlyph+" "+headName(m.status.Branch)) + " " + renderAheadBehind(m.status.Tracking) +
 		"  " + mutedStyle.Render(strings.Join(shape, " · "))
-	if m.waitingFocus != nil && len(m.waitingFocus.Repositories) > 0 {
-		left += "   " + warningStyle.Render("next focus: "+sanitizeText(filepath.Base(m.waitingFocus.Repositories[0].Dir)))
+	if m.waitingFocus != nil && m.waitingFocus.rejection != nil {
+		left += "   " + warningStyle.Render("next focus: refused")
+	} else if m.waitingFocus != nil && len(m.waitingFocus.focus.Repositories) > 0 {
+		next := m.waitingFocus.focus.Repositories[0]
+		left += "   " + warningStyle.Render("next focus: "+sanitizeText(filepath.Base(next.Dir)))
 	}
 	return fitToWidth(left, m.width)
 }
