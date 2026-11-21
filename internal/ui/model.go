@@ -1456,6 +1456,7 @@ func (m Model) renderHeader() string {
 	}
 	// Empty until the first status arrives with the work tree list.
 	shape := []string{}
+	location := filepath.Base(m.repository.Dir)
 	if len(m.workTrees) > 0 {
 		var branches string
 		if m.remoteBranchCount > 0 {
@@ -1466,10 +1467,10 @@ func (m Model) renderHeader() string {
 		shape = append(shape, branches, pluralize(len(m.workTrees), "work tree"))
 		mainWorkTree := m.workTrees[0].Path
 		if mainWorkTree != m.repository.Dir {
-			shape = append(shape, "work tree of "+sanitizeText(path.Base(mainWorkTree)))
+			location = path.Base(mainWorkTree) + "/" + location
 		}
 	}
-	left := " " + repositoryStyle.Render(folderGlyph+" "+sanitizeText(filepath.Base(m.repository.Dir))) +
+	left := " " + repositoryStyle.Render(folderGlyph+" "+sanitizeText(location)) +
 		"  " + branchStyle.Render(branchGlyph+" "+headName(m.status.Branch)) + " " + renderAheadBehind(m.status.Tracking) +
 		"  " + mutedStyle.Render(strings.Join(shape, " · "))
 	if m.waitingFocus != nil && m.waitingFocus.rejection != nil {

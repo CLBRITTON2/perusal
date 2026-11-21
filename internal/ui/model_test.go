@@ -1010,15 +1010,17 @@ func findNothing(context.Context) (focus.Found, error) {
 	return focus.Found{Repositories: []focus.FoundRepository{}, Refusals: []focus.FoundRefusal{}}, nil
 }
 
-func TestHeaderCountsBranchesAndWorkTrees(t *testing.T) {
-	workTrees := []gitrepo.WorkTree{{Path: "C:/dev/repo"}, {Path: "C:/dev/repo-side"}}
+func TestHeaderNamesLocationAndCountsBranchesAndWorkTrees(t *testing.T) {
+	workTrees := []gitrepo.WorkTree{{Path: "C:/dev/repo"}, {Path: "C:/dev/worktrees/repo/side"}}
 	for name, test := range map[string]struct {
 		dir               string
 		remoteBranchCount int
+		wantLocation      string
 		want              string
 	}{
-		"inTheMainWorkTree": {dir: "C:/dev/repo", remoteBranchCount: 37, want: "3 branches (37 remote) · 2 work trees"},
-		"inALinkedWorkTree": {dir: "C:/dev/repo-side", want: "3 branches · 2 work trees · work tree of repo"},
+		"inTheMainWorkTree": {dir: "C:/dev/repo", remoteBranchCount: 37, wantLocation: "repo",
+			want: "3 branches (37 remote) · 2 work trees"},
+		"inALinkedWorkTree": {dir: "C:/dev/worktrees/repo/side", wantLocation: "repo/side", want: "3 branches · 2 work trees"},
 	} {
 		t.Run(name, func(t *testing.T) {
 			m := update(t, New(findNothing, openAnything, nil, AgentHost{}), tea.WindowSizeMsg{Width: 120, Height: 30})
@@ -1028,6 +1030,9 @@ func TestHeaderCountsBranchesAndWorkTrees(t *testing.T) {
 
 			header := ansi.Strip(m.renderHeader())
 
+			if !strings.HasPrefix(header, " "+folderGlyph+" "+test.wantLocation+"  ") {
+				t.Errorf("got header %q, want it to start with location %q", header, test.wantLocation)
+			}
 			if !strings.HasSuffix(strings.TrimRight(header, " "), test.want) {
 				t.Fatalf("got header %q, want it to end with %q", header, test.want)
 			}
