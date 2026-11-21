@@ -12,6 +12,7 @@ import (
 
 	"github.com/CLBRITTON2/perusal/internal/focus"
 	"github.com/CLBRITTON2/perusal/internal/gitrepo"
+	"github.com/CLBRITTON2/perusal/internal/ui"
 )
 
 func main() {
@@ -80,7 +81,7 @@ func review(repositoryPath string) error {
 			"so it needs perusal follow")
 	}, func(ctx context.Context, dir string) (gitrepo.Repository, error) {
 		return gitrepo.Open(ctx, gitrepo.Repository{Dir: dir})
-	}, nil, statePath)
+	}, nil, ui.AgentHost{}, statePath)
 	if err != nil {
 		return err
 	}

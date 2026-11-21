@@ -66,6 +66,26 @@ func CreateWorkTree(ctx context.Context, rules Rules, session *agenthost.Session
 	return missing.Clone.AddWorkTreeFromAgent(ctx, rules.AgentHost+":"+missing.AgentDir, heads[0], missing.Dir)
 }
 
+// ReadAgentWorkTree reads the agent's copy of the owner's work tree at ownerWorkTree.
+func ReadAgentWorkTree(ctx context.Context, rules Rules, session *agenthost.Session,
+	ownerWorkTree string) (gitrepo.AgentWorkTree, error) {
+	agentDirs, err := agentCopyDirs(rules, []gitrepo.Repository{{Dir: ownerWorkTree}})
+	if err != nil {
+		return gitrepo.AgentWorkTree{}, err
+	}
+	return gitrepo.ReadAgentWorkTree(ctx, session.Run, agentDirs[0])
+}
+
+// RemoveAgentWorkTree removes agentWorkTree from the agent's copy of the owner's clone at ownerClone.
+func RemoveAgentWorkTree(ctx context.Context, rules Rules, session *agenthost.Session, ownerClone string,
+	agentWorkTree gitrepo.AgentWorkTree) error {
+	agentDirs, err := agentCopyDirs(rules, []gitrepo.Repository{{Dir: ownerClone}})
+	if err != nil {
+		return err
+	}
+	return gitrepo.RemoveAgentWorkTree(ctx, session.Run, agentDirs[0], agentWorkTree)
+}
+
 // existingOnAgentHost keeps the missing worktrees whose agent copy is still on the agent host, since the focus file
 // keeps listing a worktree after it was removed there, and offering to copy it would fail. It runs nothing when
 // missingWorkTrees is empty.

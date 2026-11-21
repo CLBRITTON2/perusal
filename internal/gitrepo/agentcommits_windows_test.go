@@ -300,3 +300,114 @@ func assertFileHolds(t *testing.T, path string, want string) {
 		t.Fatalf("got %q (%v) in %s, want %q", content, err, path, want)
 	}
 }
+
+func TestReadAgentWorkTree(t *testing.T) {
+	_, agent := ownerAndAgentCopies(t)
+	missing := filepath.Join(t.TempDir(), "missing")
+	dirty := filepath.Join(t.TempDir(), "dirty")
+	runSteps(t, agent, [][]string{{"worktree", "add", "-b", "dirty", dirty}})
+	writeFile(t, filepath.Join(dirty, "new.txt"), "new\n")
+	head := revParse(t, agent, "HEAD")
+
+	for name, test := range map[string]struct {
+		dir  string
+		want AgentWorkTree
+	}{
+		"readsAMissingCopyAsNotExisting": {dir: missing, want: AgentWorkTree{Dir: missing}},
+		"readsAnUntrackedFileAsUncommitted": {dir: dirty, want: AgentWorkTree{Dir: dirty, Exists: true, Uncommitted: true,
+			Head: AgentHead{Commit: head, Branch: "refs/heads/dirty"}}},
+		"readsACleanCopyWithItsHead": {dir: agent, want: AgentWorkTree{Dir: agent, Exists: true,
+			Head: AgentHead{Commit: head, Branch: "refs/heads/main"}}},
+	} {
+		t.Run(name, func(t *testing.T) {
+			agentWorkTree, err := ReadAgentWorkTree(context.Background(), runLocalScript, test.dir)
+
+			if err != nil || agentWorkTree != test.want {
+				t.Fatalf("got %+v, %v, want %+v", agentWorkTree, err, test.want)
+			}
+		})
+	}
+}
+
+func TestHasTaken(t *testing.T) {
+	t.Run("isTrueForACommitInTheOwnersBranch", isTrueForACommitInTheOwnersBranch)
+	t.Run("isTrueForTheCommitTheLastTakeTook", isTrueForTheCommitTheLastTakeTook)
+	t.Run("isFalseForACommitTheOwnerLacks", isFalseForACommitTheOwnerLacks)
+	t.Run("isFalseForAFetchedCommitOutsideTheOwnersBranch", isFalseForAFetchedCommitOutsideTheOwnersBranch)
+}
+
+func isTrueForACommitInTheOwnersBranch(t *testing.T) {
+	owner, agent := ownerAndAgentCopies(t)
+
+	assertHasTaken(t, owner, readAgentHead(t, agent), true)
+}
+
+func isTrueForTheCommitTheLastTakeTook(t *testing.T) {
+	owner, agent := ownerAndAgentCopies(t)
+	writeFile(t, filepath.Join(agent, "a.txt"), "agent\n")
+	commitAll(t, agent, "Agent")
+	if _, err := takeAgentCommits(t, owner, agent); err != nil {
+		t.Fatal(err)
+	}
+
+	assertHasTaken(t, owner, readAgentHead(t, agent), true)
+}
+
+func isFalseForACommitTheOwnerLacks(t *testing.T) {
+	owner, agent := ownerAndAgentCopies(t)
+	writeFile(t, filepath.Join(agent, "a.txt"), "agent\n")
+	commitAll(t, agent, "Agent")
+
+	assertHasTaken(t, owner, readAgentHead(t, agent), false)
+}
+
+func isFalseForAFetchedCommitOutsideTheOwnersBranch(t *testing.T) {
+	owner, agent := ownerAndAgentCopies(t)
+	writeFile(t, filepath.Join(agent, "a.txt"), "agent\n")
+	commitAll(t, agent, "Agent")
+	runSteps(t, owner, [][]string{{"fetch", agent, "main:refs/fetched/main"}})
+
+	assertHasTaken(t, owner, readAgentHead(t, agent), false)
+}
+
+func assertHasTaken(t *testing.T, owner string, head AgentHead, want bool) {
+	t.Helper()
+	taken, err := Repository{Dir: owner}.HasTaken(context.Background(), head)
+	if err != nil || taken != want {
+		t.Fatalf("got taken %v, error %v, want %v", taken, err, want)
+	}
+}
+
+func TestRemoveAgentWorkTree(t *testing.T) {
+	t.Run("removesTheCopyAndItsBranch", removesTheCopyAndItsBranch)
+	t.Run("refusesACopyWhoseHeadMovedSinceItWasRead", refusesACopyWhoseHeadMovedSinceItWasRead)
+}
+
+func removesTheCopyAndItsBranch(t *testing.T) {
+	agent, side := cloneWithSideWorkTree(t)
+	agentWorkTree, err := ReadAgentWorkTree(context.Background(), runLocalScript, side)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	err = RemoveAgentWorkTree(context.Background(), runLocalScript, agent, agentWorkTree)
+
+	assertWorkTreeAndRefsGone(t, err, agent, side)
+}
+
+func refusesACopyWhoseHeadMovedSinceItWasRead(t *testing.T) {
+	agent, side := cloneWithSideWorkTree(t)
+	agentWorkTree, err := ReadAgentWorkTree(context.Background(), runLocalScript, side)
+	if err != nil {
+		t.Fatal(err)
+	}
+	writeFile(t, filepath.Join(side, "side.txt"), "side\n")
+	commitAll(t, side, "Side")
+
+	err = RemoveAgentWorkTree(context.Background(), runLocalScript, agent, agentWorkTree)
+
+	if err == nil || !strings.Contains(err.Error(), "HEAD moved to "+revParse(t, side, "HEAD")) {
+		t.Fatalf("got error %v, want the moved HEAD refused", err)
+	}
+	assertFileHolds(t, filepath.Join(side, "side.txt"), "side\n")
+}

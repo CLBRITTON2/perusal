@@ -52,12 +52,12 @@ func saveViewState(path string, viewState ui.ViewState) error {
 }
 
 func startingModel(findRepositories ui.RepositoryFinder, openRepository ui.RepositoryOpener,
-	createWorkTree ui.WorkTreeCreator, statePath string) (ui.Model, error) {
+	createWorkTree ui.WorkTreeCreator, agentHost ui.AgentHost, statePath string) (ui.Model, error) {
 	viewState, err := loadViewState(statePath)
 	if err != nil {
 		return ui.Model{}, err
 	}
-	return ui.New(findRepositories, openRepository, createWorkTree).WithViewState(viewState), nil
+	return ui.New(findRepositories, openRepository, createWorkTree, agentHost).WithViewState(viewState), nil
 }
 
 func runKeepingViewState(program *tea.Program, statePath string) error {

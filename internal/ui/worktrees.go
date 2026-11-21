@@ -21,6 +21,14 @@ type RepositoryOpener func(ctx context.Context, dir string) (gitrepo.Repository,
 // WorkTreeCreator adds the owner's copy of an agent's worktree and returns the commit its branch starts at.
 type WorkTreeCreator func(ctx context.Context, missing focus.MissingWorkTree) (string, error)
 
+// AgentHost reads and removes the agent's copy of an owner work tree on the machine the agent works in. Its zero value
+// is no agent host, where the agent works in the owner's own work trees.
+type AgentHost struct {
+	Name           string
+	ReadWorkTree   func(ctx context.Context, ownerWorkTree string) (gitrepo.AgentWorkTree, error)
+	RemoveWorkTree func(ctx context.Context, ownerClone string, agentWorkTree gitrepo.AgentWorkTree) error
+}
+
 type workTreeCreateRequest struct {
 	createWorkTree WorkTreeCreator
 	missing        focus.MissingWorkTree
@@ -82,6 +90,136 @@ type workTreeOpenedMsg struct {
 	repository gitrepo.Repository
 }
 
+// agentTaken is read only when the agent's copy is on the work tree's branch.
+type workTreeDeleteCheckMsg struct {
+	request           workTreeDeleteRequest
+	uncommitted       bool
+	defaultBranch     gitrepo.RemoteBranch
+	mergedIntoDefault bool
+	agentTaken        bool
+}
+
+// repository is the one under review, whose git deletes the other work tree, and ownerClone the main work tree's path.
+type workTreeDeleteRequest struct {
+	repository    gitrepo.Repository
+	row           workTreeRow
+	folder        string
+	ownerClone    string
+	agentHost     AgentHost
+	agentWorkTree gitrepo.AgentWorkTree
+}
+
+func (r workTreeDeleteRequest) check() tea.Msg {
+	ctx := context.Background()
+	branchRef := "refs/heads/" + r.row.workTree.Branch
+	workTreeStatus, err := r.row.repository.Status(ctx)
+	if err != nil {
+		return gitFailureMsg{err: err}
+	}
+	defaultBranch, err := r.repository.DefaultBranch(ctx)
+	if err != nil {
+		return gitFailureMsg{err: err}
+	}
+	mergedIntoDefault := false
+	if defaultBranch.Ref != "" {
+		mergedIntoDefault, err = r.repository.MergedInto(ctx, branchRef, defaultBranch.Ref)
+		if err != nil {
+			return gitFailureMsg{err: err}
+		}
+	}
+	if r.agentHost.Name != "" {
+		r.agentWorkTree, err = r.agentHost.ReadWorkTree(ctx, r.row.workTree.Path)
+		if err != nil {
+			return gitFailureMsg{err: err}
+		}
+	}
+	agentTaken := false
+	if r.agentWorkTree.Exists && r.agentWorkTree.Head.Branch == branchRef {
+		agentTaken, err = r.repository.HasTaken(ctx, r.agentWorkTree.Head)
+		if err != nil {
+			return gitFailureMsg{err: err}
+		}
+	}
+	return workTreeDeleteCheckMsg{request: r, uncommitted: len(workTreeStatus.Files) > 0, defaultBranch: defaultBranch,
+		mergedIntoDefault: mergedIntoDefault, agentTaken: agentTaken}
+}
+
+// Refuses what would lose work: uncommitted changes on either machine, or agent commits perusal has not taken.
+func (m Model) withWorkTreeDeleteChecked(msg workTreeDeleteCheckMsg) Model {
+	request := msg.request
+	folder := request.folder
+	branch := request.row.workTree.Branch
+	agentHostName := request.agentHost.Name
+	agentWorkTree := request.agentWorkTree
+	switch {
+	case msg.uncommitted:
+		return m.withFooterError(folder + " has uncommitted changes, so it cannot be deleted")
+	case msg.defaultBranch.Ref == "":
+		return m.withFooterError("origin's default branch is unknown, so perusal cannot rule out that " + branch + " is it")
+	case branch == msg.defaultBranch.Name:
+		return m.withFooterError(branch + " is the default branch, which perusal never deletes")
+	}
+	if agentWorkTree.Exists {
+		switch {
+		case agentWorkTree.Uncommitted:
+			return m.withFooterError(folder + " has uncommitted changes in " + agentHostName + ", so it cannot be deleted")
+		case agentWorkTree.Head.Branch != "refs/heads/"+branch:
+			return m.withFooterError(folder + " is on " + headName(strings.TrimPrefix(agentWorkTree.Head.Branch, "refs/heads/")) +
+				" in " + agentHostName + ", so it cannot be deleted")
+		case !msg.agentTaken:
+			return m.withFooterError(agentHostName + " has commits perusal has not taken, so " + folder + " cannot be deleted")
+		}
+	}
+	var mergedLine string
+	if msg.mergedIntoDefault {
+		mergedLine = textStyle.Render(sanitizeText(branch) + " is in " + sanitizeText(msg.defaultBranch.Ref))
+	} else {
+		mergedLine = warningStyle.Render(sanitizeText(msg.defaultBranch.Ref) + " lacks some of " + sanitizeText(branch))
+	}
+	lines := []string{titleStyle.Render("delete " + sanitizeText(folder)), mergedLine}
+	if agentWorkTree.Exists {
+		lines = append(lines, textStyle.Render("also deletes the copy in "+sanitizeText(agentHostName)))
+	}
+	return m.withConfirmation(request.repository.Dir, confirmation{
+		lines:       lines,
+		confirmKey:  confirmDeleteKey,
+		run:         request.delete,
+		runningText: "deleting...",
+	})
+}
+
+// The agent's copy goes first, so a failure there leaves the owner's for a retry.
+func (r workTreeDeleteRequest) delete() tea.Msg {
+	ctx := context.Background()
+	if r.agentWorkTree.Exists {
+		if err := r.agentHost.RemoveWorkTree(ctx, r.ownerClone, r.agentWorkTree); err != nil {
+			return popupResult(r.repository.Dir, err, "")
+		}
+	}
+	return popupResult(r.repository.Dir, r.repository.RemoveWorkTree(ctx, r.row.workTree), "deleted "+r.folder)
+}
+
+func (m Model) openDeleteWorkTreePopup() (tea.Model, tea.Cmd) {
+	row, hasRows := m.workTreeList.selectedRow()
+	if !hasRows {
+		return m, nil
+	}
+	folder := m.workTreeFolder(row)
+	switch {
+	case row.workTree.Path == m.workTreeList.rows[0].workTree.Path:
+		return m.withFooterError(folder + " is the main work tree, which perusal never deletes"), nil
+	case m.isUnderReview(row):
+		return m.withFooterError(folder + " is under review, so it cannot be deleted"), nil
+	case row.refusal != nil:
+		return m.withFooterError(folder + " is refused: " + row.refusal.Error()), nil
+	case row.workTree.Branch == "":
+		return m.withFooterError(folder + " has a detached HEAD, so it cannot be deleted"), nil
+	}
+	return m, workTreeDeleteRequest{repository: m.repository, row: row, folder: folder,
+		ownerClone: m.workTreeList.rows[0].workTree.Path, agentHost: m.agentHost,
+		agentWorkTree: gitrepo.AgentWorkTree{}}.check
+}
+
 // A work tree the opener refuses gets a row saying why, while a git failure fails the whole list.
 func (m Model) openWorkTrees() (tea.Model, tea.Cmd) {
 	if m.repository.Dir == "" {
@@ -89,9 +227,16 @@ func (m Model) openWorkTrees() (tea.Model, tea.Cmd) {
 	}
 	m.mode = modeWorkTrees
 	m.workTreeList = selectableList[workTreeRow]{rows: []workTreeRow{}}
+	return m, m.reloadWorkTrees()
+}
+
+func (m Model) reloadWorkTrees() tea.Cmd {
+	if m.mode != modeWorkTrees {
+		return nil
+	}
 	repository := m.repository
 	openRepository := m.openRepository
-	return m, func() tea.Msg {
+	return func() tea.Msg {
 		ctx := context.Background()
 		workTrees, err := repository.WorkTrees(ctx)
 		if err != nil {
@@ -149,6 +294,8 @@ func (m Model) updateWorkTrees(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 			return m, nil
 		}
 		return m.withFocusedRepository(row.repository)
+	case key.Matches(msg, deleteWorkTreeKey):
+		return m.openDeleteWorkTreePopup()
 	}
 	return m, nil
 }
@@ -158,15 +305,17 @@ func (m Model) isUnderReview(row workTreeRow) bool {
 }
 
 // Names a work tree below the folder holding the main one, so the main one and its siblings read as folder names.
-func (m Model) workTreeCells(row workTreeRow) []string {
+func (m Model) workTreeFolder(row workTreeRow) string {
 	mainParent := path.Dir(m.workTreeList.rows[0].workTree.Path) + "/"
 	relativePath, isBelowMain := strings.CutPrefix(row.workTree.Path, mainParent)
-	var name string
 	if isBelowMain {
-		name = folderGlyph + " " + sanitizeText(relativePath)
-	} else {
-		name = folderGlyph + " " + sanitizeText(row.workTree.Path)
+		return relativePath
 	}
+	return row.workTree.Path
+}
+
+func (m Model) workTreeCells(row workTreeRow) []string {
+	name := folderGlyph + " " + sanitizeText(m.workTreeFolder(row))
 	if row.refusal != nil {
 		return []string{"", mutedStyle.Render(name), "",
 			mutedStyle.Render(sanitizeText(focus.FoundRefusal{Err: row.refusal}.Summary()))}

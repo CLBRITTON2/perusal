@@ -43,3 +43,15 @@ func (r Repository) WorkTrees(ctx context.Context) ([]WorkTree, error) {
 	}
 	return workTrees, nil
 }
+
+// RemoveWorkTree removes workTree, which git refuses while it has uncommitted changes, then deletes its branch whether
+// or not it is merged and the ref of what perusal last took on it.
+func (r Repository) RemoveWorkTree(ctx context.Context, workTree WorkTree) error {
+	if err := r.run(ctx, "worktree", "remove", workTree.Path); err != nil {
+		return err
+	}
+	if err := r.DeleteBranch(ctx, workTree.Branch); err != nil {
+		return err
+	}
+	return r.run(ctx, "update-ref", "-d", agentTakenRef("refs/heads/"+workTree.Branch))
+}

@@ -135,6 +135,7 @@ type Model struct {
 	openRepository   RepositoryOpener
 	// createWorkTree is nil where the agent shares the owner's files, so no worktree of its can be missing.
 	createWorkTree WorkTreeCreator
+	agentHost      AgentHost
 	mode           screenMode
 	popup          popupState
 	footer         footer
@@ -194,7 +195,8 @@ type Model struct {
 	branchNameInput    textinput.Model
 }
 
-func New(findRepositories RepositoryFinder, openRepository RepositoryOpener, createWorkTree WorkTreeCreator) Model {
+func New(findRepositories RepositoryFinder, openRepository RepositoryOpener, createWorkTree WorkTreeCreator,
+	agentHost AgentHost) Model {
 	summaryInput := textinput.New()
 	summaryInput.Placeholder = "Summary (required)"
 	summaryInput.Prompt = ""
@@ -211,6 +213,7 @@ func New(findRepositories RepositoryFinder, openRepository RepositoryOpener, cre
 		findRepositories:   findRepositories,
 		openRepository:     openRepository,
 		createWorkTree:     createWorkTree,
+		agentHost:          agentHost,
 		overview:           selectableList[overviewRow]{rows: []overviewRow{}},
 		syncing:            map[string]string{},
 		branches:           branchList{selectableList: selectableList[branchRow]{rows: []branchRow{}}},
@@ -366,7 +369,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m.withFooterNotice(msg.notice + " in " + msg.dir), nil
 		}
 		m = m.withPopupClosed().withFooterNotice(msg.notice)
-		return m, tea.Batch(m.reloadStatus(), m.reloadBranches(), m.reloadOverviewRow(msg.dir))
+		return m, tea.Batch(m.reloadStatus(), m.reloadBranches(), m.reloadWorkTrees(), m.reloadOverviewRow(msg.dir))
 	case branchesMsg:
 		if msg.dir != m.repository.Dir || m.mode != modeBranches {
 			return m, nil
@@ -406,6 +409,11 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m.withFooterError(msg.err.Error()), nil
 	case workTreeOpenedMsg:
 		return m.withFocusedRepository(msg.repository)
+	case workTreeDeleteCheckMsg:
+		if msg.request.repository.Dir != m.repository.Dir || m.mode != modeWorkTrees || m.popup.kind != noPopup {
+			return m, nil
+		}
+		return m.withWorkTreeDeleteChecked(msg), nil
 	case stashPopMsg:
 		if msg.dir != m.repository.Dir {
 			return m.withFooterNotice("popped " + msg.ref + " in " + msg.dir), nil
@@ -638,7 +646,7 @@ func (m Model) openView(view viewKind) (tea.Model, tea.Cmd) {
 }
 
 func (m Model) withRepository(repository gitrepo.Repository, rejection string) Model {
-	next := New(m.findRepositories, m.openRepository, m.createWorkTree)
+	next := New(m.findRepositories, m.openRepository, m.createWorkTree, m.agentHost)
 	next.display = m.display
 	// Only the overview spans repositories, so it alone stays open across a switch.
 	if m.mode == modeOverview {

@@ -250,6 +250,86 @@ func (r Repository) AddWorkTreeFromAgent(ctx context.Context, remote string, hea
 	return base, nil
 }
 
+// AgentWorkTree is the agent's copy of a work tree at Dir. Uncommitted and Head are read only when it exists.
+type AgentWorkTree struct {
+	Dir         string
+	Exists      bool
+	Uncommitted bool
+	Head        AgentHead
+}
+
+func ReadAgentWorkTree(ctx context.Context, run func(ctx context.Context, script string) ([]byte, error),
+	dir string) (AgentWorkTree, error) {
+	quotedDir := agenthost.QuotedString(dir)
+	output, err := run(ctx, "if (Test-Path -LiteralPath "+quotedDir+" -PathType Container) { "+
+		"$changes = git --no-optional-locks -C "+quotedDir+" status --porcelain; "+
+		"if ($LASTEXITCODE -ne 0) { throw ('git status exited with ' + $LASTEXITCODE) }; "+
+		"if ($changes) { 'uncommitted' } else { 'clean' } } else { 'missing' }")
+	if err != nil {
+		return AgentWorkTree{}, fmt.Errorf("read the agent's work tree %s: %w", dir, err)
+	}
+	agentWorkTree := AgentWorkTree{Dir: dir, Exists: true, Uncommitted: false, Head: AgentHead{}}
+	switch strings.TrimSpace(string(output)) {
+	case "missing":
+		agentWorkTree.Exists = false
+		return agentWorkTree, nil
+	case "uncommitted":
+		agentWorkTree.Uncommitted = true
+	case "clean":
+	default:
+		return AgentWorkTree{}, fmt.Errorf("read the agent's work tree %s: want missing, uncommitted or clean, got %q",
+			dir, output)
+	}
+	heads, err := ReadAgentHeads(ctx, run, []string{dir})
+	if err != nil {
+		return AgentWorkTree{}, err
+	}
+	if heads[0].Err != nil {
+		return AgentWorkTree{}, heads[0].Err
+	}
+	agentWorkTree.Head = heads[0]
+	return agentWorkTree, nil
+}
+
+// HasTaken reports whether r holds head's commit: it is the commit the last take on its branch took, or it is in r's
+// branch of the same name.
+func (r Repository) HasTaken(ctx context.Context, head AgentHead) (bool, error) {
+	lastTaken, err := r.optionalRevParse(ctx, agentTakenRef(head.Branch))
+	if err != nil {
+		return false, err
+	}
+	if lastTaken == head.Commit {
+		return true, nil
+	}
+	hasCommit, err := r.gitSucceeds(ctx, "rev-parse", "--verify", "--quiet", head.Commit+"^{commit}")
+	if err != nil || !hasCommit {
+		return false, err
+	}
+	return r.gitSucceeds(ctx, "merge-base", "--is-ancestor", head.Commit, head.Branch)
+}
+
+// RemoveAgentWorkTree removes agentWorkTree from the agent's clone at clone and deletes its branch there. It refuses
+// when the copy's HEAD moved since agentWorkTree was read, since the agent may have committed what was not taken.
+func RemoveAgentWorkTree(ctx context.Context, run func(ctx context.Context, script string) ([]byte, error),
+	clone string, agentWorkTree AgentWorkTree) error {
+	quotedClone := agenthost.QuotedString(clone)
+	quotedWorkTree := agenthost.QuotedString(agentWorkTree.Dir)
+	quotedBranch := agenthost.QuotedString(strings.TrimPrefix(agentWorkTree.Head.Branch, "refs/heads/"))
+	// Exit codes are checked by hand, as in agentHeadsScript. git's stderr reaches the error through the shell.
+	script := strings.Join([]string{
+		"$head = git -C " + quotedWorkTree + " rev-parse HEAD",
+		"if ($head -ne " + agenthost.QuotedString(agentWorkTree.Head.Commit) + ") { throw ('HEAD moved to ' + $head) }",
+		"git -C " + quotedClone + " worktree remove " + quotedWorkTree,
+		"if ($LASTEXITCODE -ne 0) { throw ('git worktree remove exited with ' + $LASTEXITCODE) }",
+		"git -C " + quotedClone + " branch --delete --force " + quotedBranch,
+		"if ($LASTEXITCODE -ne 0) { throw ('git branch --delete exited with ' + $LASTEXITCODE) }",
+	}, "; ")
+	if _, err := run(ctx, script); err != nil {
+		return fmt.Errorf("remove the agent's work tree %s from %s: %w", agentWorkTree.Dir, clone, err)
+	}
+	return nil
+}
+
 func headName(branch string) string {
 	if branch == "" {
 		return "detached HEAD"

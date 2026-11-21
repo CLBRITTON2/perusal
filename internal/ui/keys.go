@@ -43,6 +43,7 @@ var (
 	branchesKey       = key.NewBinding(key.WithKeys("b"), key.WithHelp("b", "branches"))
 	switchBranchKey   = key.NewBinding(key.WithKeys("enter"), key.WithHelp("enter", "switch"))
 	deleteBranchKey   = key.NewBinding(key.WithKeys("D"), key.WithHelp("D", "delete"))
+	deleteWorkTreeKey = key.NewBinding(key.WithKeys("D"), key.WithHelp("D", "delete"))
 	confirmDeleteKey  = key.NewBinding(key.WithKeys("enter"), key.WithHelp("enter", "delete"))
 	newBranchKey      = key.NewBinding(key.WithKeys("n"), key.WithHelp("n", "new"))
 	createBranchKey   = key.NewBinding(key.WithKeys("enter"), key.WithHelp("enter", "create"))
@@ -92,7 +93,7 @@ var (
 		refreshKey, closeOverviewKey, quitKey}
 	branchesHelp = []key.Binding{downKey, switchBranchKey, newBranchKey, deleteBranchKey, fetchBranchesKey,
 		closeBranchesKey, quitKey}
-	workTreesHelp = []key.Binding{downKey, openRepositoryKey, closeWorkTreesKey, quitKey}
+	workTreesHelp = []key.Binding{downKey, openRepositoryKey, deleteWorkTreeKey, closeWorkTreesKey, quitKey}
 	searchHelp    = []key.Binding{keepSearchKey, clearSearchKey}
 	commitHelp    = []key.Binding{nextFieldKey, submitKey, cancelKey}
 	rewordHelp    = []key.Binding{nextFieldKey, submitRewordKey, cancelKey}
