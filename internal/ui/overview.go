@@ -25,7 +25,7 @@ const overviewCommitLimit = 50
 
 type overviewRow interface {
 	relativePath() string
-	cells() []string
+	cells(query subsequenceWords) []string
 }
 
 // commitsBehindDefault counts the commits HEAD lacks from defaultBranch, and stays 0 when defaultBranch is the
@@ -297,6 +297,9 @@ func (r pendingRow) relativePath() string {
 func (m Model) openOverview() (tea.Model, tea.Cmd) {
 	m.mode = modeOverview
 	m.overview = selectableList[overviewRow]{rows: []overviewRow{}}
+	m.overviewRows = []overviewRow{}
+	m.overviewQuery.Reset()
+	m.overviewQuery.Blur()
 	return m, overviewRequest{findRepositories: m.findRepositories}.load
 }
 
@@ -316,8 +319,10 @@ func (m Model) withOverviewLoaded(msg overviewMsg) (tea.Model, tea.Cmd) {
 	} else {
 		selectedDir = m.repository.Dir
 	}
-	loadedOverview := selectableList[overviewRow]{loaded: true, rows: rows, selected: 0, offset: 0}
-	m.overview = loadedOverview.withSelected(slices.IndexFunc(rows, isRowAt(selectedDir)))
+	m.overviewRows = rows
+	matching := m.matchingOverviewRows()
+	loadedOverview := selectableList[overviewRow]{loaded: true, rows: matching, selected: 0, offset: 0}
+	m.overview = loadedOverview.withSelected(slices.IndexFunc(matching, isRowAt(selectedDir)))
 	loads := []tea.Cmd{}
 	for _, row := range rows {
 		pending, isPending := row.(pendingRow)
@@ -330,22 +335,59 @@ func (m Model) withOverviewLoaded(msg overviewMsg) (tea.Model, tea.Cmd) {
 
 // A row git fails on while pending leaves the table, and a reloaded one keeps its last load.
 func (m Model) withOverviewRowFailed(msg overviewRowFailureMsg) Model {
-	index := slices.IndexFunc(m.overview.rows, isRowAt(msg.dir))
+	index := slices.IndexFunc(m.overviewRows, isRowAt(msg.dir))
 	if index < 0 {
 		return m.withFooterError(msg.err.Error())
 	}
-	if _, isPending := m.overview.rows[index].(pendingRow); !isPending {
+	if _, isPending := m.overviewRows[index].(pendingRow); !isPending {
 		return m.withFooterError(msg.err.Error())
 	}
-	var selected int
-	if index < m.overview.selected {
-		selected = m.overview.selected - 1
-	} else {
+	rows := slices.Delete(slices.Clone(m.overviewRows), index, index+1)
+	return m.withOverviewRows(rows).withFooterError("skipped " + msg.err.Error())
+}
+
+// withOverviewRows lists the rows overviewQuery matches and keeps the selected row, or else the selected index.
+func (m Model) withOverviewRows(rows []overviewRow) Model {
+	selectedRow, hasRows := m.overview.selectedRow()
+	m.overviewRows = rows
+	m.overview.rows = m.matchingOverviewRows()
+	selected := slices.IndexFunc(m.overview.rows, func(row overviewRow) bool {
+		return hasRows && row.relativePath() == selectedRow.relativePath()
+	})
+	if selected < 0 {
 		selected = m.overview.selected
 	}
-	m.overview.rows = slices.Delete(slices.Clone(m.overview.rows), index, index+1)
 	m.overview = m.overview.withSelected(selected).scrolled(m.overviewTableInnerHeight())
-	return m.withFooterError("skipped " + msg.err.Error())
+	return m
+}
+
+// matchingOverviewRows matches the query on the relative path, and on a loaded row's branch too.
+func (m Model) matchingOverviewRows() []overviewRow {
+	query := m.overviewQueryWords()
+	matching := []overviewRow{}
+	for _, row := range m.overviewRows {
+		fields := []string{row.relativePath()}
+		if loaded, isLoaded := row.(repositoryRow); isLoaded {
+			fields = append(fields, loaded.status.Branch)
+		}
+		if query.matchEvery(fields) {
+			matching = append(matching, row)
+		}
+	}
+	return matching
+}
+
+func (m Model) overviewQueryWords() subsequenceWords {
+	return strings.Fields(m.overviewQuery.Value())
+}
+
+func (m Model) typingOverviewQuery() bool {
+	return m.mode == modeOverview && m.overviewQuery.Focused()
+}
+
+func (m Model) withOverviewQueryCleared() Model {
+	m.overviewQuery.Reset()
+	return m.withOverviewRows(m.overviewRows)
 }
 
 func rowRepository(row overviewRow) (gitrepo.Repository, bool) {
@@ -379,12 +421,20 @@ func (m Model) focusRank(row overviewRow) int {
 
 func (m Model) updateOverview(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	m.footer = footer{}
+	if m.overviewQuery.Focused() {
+		return m.updateOverviewQuery(msg)
+	}
 	switch {
 	case key.Matches(msg, quitKey):
 		return m, tea.Quit
+	case key.Matches(msg, clearSearchKey) && len(m.overviewQueryWords()) > 0:
+		return m.withOverviewQueryCleared(), nil
 	case key.Matches(msg, closeOverviewKey):
 		m.mode = modeBrowsing
 		return m, nil
+	case key.Matches(msg, searchKey):
+		m.overviewQuery.CursorEnd()
+		return m, m.overviewQuery.Focus()
 	case key.Matches(msg, downKey):
 		m.overview = m.overview.withSelected(m.overview.selected + 1).scrolled(m.overviewTableInnerHeight())
 		return m, nil
@@ -411,6 +461,27 @@ func (m Model) updateOverview(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		return m, overviewRequest{findRepositories: m.findRepositories}.load
 	}
 	return m, nil
+}
+
+// updateOverviewQuery leaves only the arrows to move the selection, so j and k type letters.
+func (m Model) updateOverviewQuery(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
+	switch {
+	case key.Matches(msg, keepSearchKey):
+		m.overviewQuery.Blur()
+		return m, nil
+	case key.Matches(msg, clearSearchKey):
+		m.overviewQuery.Blur()
+		return m.withOverviewQueryCleared(), nil
+	case key.Matches(msg, filterDownKey):
+		m.overview = m.overview.withSelected(m.overview.selected + 1).scrolled(m.overviewTableInnerHeight())
+		return m, nil
+	case key.Matches(msg, filterUpKey):
+		m.overview = m.overview.withSelected(m.overview.selected - 1).scrolled(m.overviewTableInnerHeight())
+		return m, nil
+	}
+	var inputCmd tea.Cmd
+	m.overviewQuery, inputCmd = m.overviewQuery.Update(msg)
+	return m.withOverviewRows(m.overviewRows), inputCmd
 }
 
 type cherryPickRequest struct {
@@ -467,14 +538,14 @@ func isLinkedWorkTree(row repositoryRow) bool {
 
 func (m Model) mainCloneRow(row repositoryRow) (repositoryRow, bool) {
 	commonDir := filepath.Dir(filepath.Dir(row.Repository.GitDir))
-	mainIndex := slices.IndexFunc(m.overview.rows, func(candidate overviewRow) bool {
+	mainIndex := slices.IndexFunc(m.overviewRows, func(candidate overviewRow) bool {
 		mainClone, isLoaded := candidate.(repositoryRow)
 		return isLoaded && mainClone.Repository.GitDir == commonDir
 	})
 	if mainIndex < 0 {
 		return repositoryRow{}, false
 	}
-	return m.overview.rows[mainIndex].(repositoryRow), true
+	return m.overviewRows[mainIndex].(repositoryRow), true
 }
 
 // deleteWorkTreeRow runs the work tree list's delete check through the work tree's main clone.
@@ -556,7 +627,7 @@ func (m Model) fetchRepositoryRow(row repositoryRow) (tea.Model, tea.Cmd) {
 // Skips the repositories a pull or fetch is already running in.
 func (m Model) fetchAll() (tea.Model, tea.Cmd) {
 	found := []focus.FoundRepository{}
-	for _, row := range m.overview.rows {
+	for _, row := range m.overviewRows {
 		foundRow, isRepository := row.(repositoryRow)
 		if isRepository && m.syncing[foundRow.Repository.Dir] == "" {
 			found = append(found, foundRow.FoundRepository)
@@ -589,11 +660,11 @@ func (m Model) reloadOverview() tea.Cmd {
 }
 
 func (m Model) reloadOverviewRow(dir string) tea.Cmd {
-	index := slices.IndexFunc(m.overview.rows, isRowAt(dir))
+	index := slices.IndexFunc(m.overviewRows, isRowAt(dir))
 	if m.mode != modeOverview || index < 0 {
 		return nil
 	}
-	row, isRepository := m.overview.rows[index].(repositoryRow)
+	row, isRepository := m.overviewRows[index].(repositoryRow)
 	if !isRepository {
 		return nil
 	}
@@ -633,13 +704,12 @@ func (m Model) withOverviewFetchedAll(msg fetchedAllMsg) (tea.Model, tea.Cmd) {
 }
 
 func (m Model) withOverviewRow(row repositoryRow) Model {
-	rows := slices.Clone(m.overview.rows)
+	rows := slices.Clone(m.overviewRows)
 	index := slices.IndexFunc(rows, isRowAt(row.Repository.Dir))
 	if index >= 0 {
 		rows[index] = row
 	}
-	m.overview.rows = rows
-	return m
+	return m.withOverviewRows(rows)
 }
 
 func withoutDirs(set map[string]string, dirs []string) map[string]string {
@@ -660,8 +730,15 @@ func (m Model) openRepositoryRow(row repositoryRow) (tea.Model, tea.Cmd) {
 
 // The table takes the top half and the selected repository's changes, outgoing and incoming commits the rest.
 func (m Model) renderOverview() string {
-	table := renderListPane("repositories", m.overview, m.overviewCells, "no repositories found", m.width-2,
-		m.overviewTableInnerHeight())
+	var title, emptyText string
+	if len(m.overviewQueryWords()) > 0 {
+		title = "repositories /" + sanitizeText(m.overviewQuery.Value())
+		emptyText = "no repositories match"
+	} else {
+		title = "repositories"
+		emptyText = "no repositories found"
+	}
+	table := renderListPane(title, m.overview, m.overviewCells, emptyText, m.width-2, m.overviewTableInnerHeight())
 	return lipgloss.JoinVertical(lipgloss.Left, table, m.renderOverviewDetails())
 }
 
@@ -711,7 +788,7 @@ func (m Model) overviewCells(row overviewRow) []string {
 	if m.isFocused(row) {
 		focusMark = markStyle.Render("●")
 	}
-	cells := append([]string{focusMark}, row.cells()...)
+	cells := append([]string{focusMark}, row.cells(m.overviewQueryWords())...)
 	foundRow, isRepository := row.(repositoryRow)
 	if isRepository && m.syncing[foundRow.Repository.Dir] != "" {
 		cells = append(cells, mutedStyle.Render(m.syncing[foundRow.Repository.Dir]))
@@ -719,7 +796,13 @@ func (m Model) overviewCells(row overviewRow) []string {
 	return cells
 }
 
-func (r repositoryRow) cells() []string {
+func (r repositoryRow) cells(query subsequenceWords) []string {
+	var branch string
+	if r.status.Branch == "" {
+		branch = branchStyle.Render(branchGlyph + " " + headName(r.status.Branch))
+	} else {
+		branch = branchStyle.Render(branchGlyph+" ") + query.highlight(r.status.Branch, branchStyle)
+	}
 	var unpushed string
 	if r.commitsOnNoRemote == 0 {
 		unpushed = renderAheadBehind(r.status.Tracking)
@@ -732,24 +815,24 @@ func (r repositoryRow) cells() []string {
 			mutedStyle.Render(" "+sanitizeText(r.defaultBranch.Ref))
 	}
 	return []string{
-		repositoryStyle.Render(folderGlyph + " " + sanitizeText(r.RelativePath)),
-		branchStyle.Render(branchGlyph + " " + headName(r.status.Branch)),
+		repositoryStyle.Render(folderGlyph+" ") + query.highlight(r.RelativePath, repositoryStyle),
+		branch,
 		renderChangedCount(len(r.status.Files)),
 		unpushed,
 		behindDefault,
 	}
 }
 
-func (r refusedRow) cells() []string {
+func (r refusedRow) cells(query subsequenceWords) []string {
 	return []string{
-		mutedStyle.Render(folderGlyph + " " + sanitizeText(r.RelativePath)),
+		mutedStyle.Render(folderGlyph+" ") + query.highlight(r.RelativePath, mutedStyle),
 		mutedStyle.Render(sanitizeText(r.Summary())),
 	}
 }
 
-func (r pendingRow) cells() []string {
+func (r pendingRow) cells(query subsequenceWords) []string {
 	return []string{
-		repositoryStyle.Render(folderGlyph + " " + sanitizeText(r.RelativePath)),
+		repositoryStyle.Render(folderGlyph+" ") + query.highlight(r.RelativePath, repositoryStyle),
 		mutedStyle.Render("loading..."),
 	}
 }

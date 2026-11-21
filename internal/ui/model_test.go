@@ -7,6 +7,7 @@ import (
 	"io/fs"
 	"path/filepath"
 	"reflect"
+	"slices"
 	"strings"
 	"testing"
 
@@ -483,6 +484,257 @@ func overviewWithTwoRepositories(t *testing.T) Model {
 
 func foundAt(relativePath string, dir string) focus.FoundRepository {
 	return focus.FoundRepository{RelativePath: relativePath, Repository: gitrepo.Repository{Dir: dir}}
+}
+
+func TestOverviewFilter(t *testing.T) {
+	t.Run("keepsTheRowsHoldingTheQuerysCharactersInOrderAndTitlesIt",
+		keepsTheRowsHoldingTheQuerysCharactersInOrderAndTitlesIt)
+	t.Run("everyWordMustMatchThePathOrTheBranch", everyWordMustMatchThePathOrTheBranch)
+	t.Run("anUppercaseLetterMakesTheWordCaseSensitive", anUppercaseLetterMakesTheWordCaseSensitive)
+	t.Run("arrowsMoveTheSelectionWhileTypingAndJTypesALetter", arrowsMoveTheSelectionWhileTypingAndJTypesALetter)
+	t.Run("aPasteFiltersTheRows", aPasteFiltersTheRows)
+	t.Run("deleteActsOnTheFilteredRowAndTheReloadStaysFiltered", deleteActsOnTheFilteredRowAndTheReloadStaysFiltered)
+	t.Run("aRowFillingInMatchesOnItsBranch", aRowFillingInMatchesOnItsBranch)
+	t.Run("aHiddenPendingRowThatFailsIsSkipped", aHiddenPendingRowThatFailsIsSkipped)
+	t.Run("theFooterShowsTheQueryWhileTypingThenTheOverviewKeys", theFooterShowsTheQueryWhileTypingThenTheOverviewKeys)
+	t.Run("escWhileTypingShowsEveryRow", escWhileTypingShowsEveryRow)
+	t.Run("escClearsAKeptFilterThenClosesTheOverview", escClearsAKeptFilterThenClosesTheOverview)
+	t.Run("aQueryMatchingNothingSaysSo", aQueryMatchingNothingSaysSo)
+	t.Run("reopeningTheOverviewShowsEveryRow", reopeningTheOverviewShowsEveryRow)
+	t.Run("fetchAllFetchesTheRowsTheFilterHides", fetchAllFetchesTheRowsTheFilterHides)
+}
+
+func keepsTheRowsHoldingTheQuerysCharactersInOrderAndTitlesIt(t *testing.T) {
+	m := typeText(t, overviewOfWorkTrees(t), "/dwfix")
+
+	want := []string{"▌ " + folderGlyph + " worktrees/desktop-edge-win/fix-proxy " + branchGlyph + " fix-proxy clean",
+		folderGlyph + " worktrees/desktop-edge-win/fix-dns " + branchGlyph + " fix-dns clean"}
+	screen := ansi.Strip(m.renderScreen())
+	if !reflect.DeepEqual(overviewLines(m), want) || !strings.Contains(screen, "repositories /dwfix") {
+		t.Fatalf("got %q and screen:\n%s\nwant %q titled repositories /dwfix", overviewLines(m), screen, want)
+	}
+	unselected := listLines(m.overview, m.overviewCells, "", 118, m.paneInnerHeight())[1]
+	if !strings.Contains(unselected, searchMatchStyle.Render("fix")) {
+		t.Fatalf("got row %q, want fix highlighted", unselected)
+	}
+}
+
+func everyWordMustMatchThePathOrTheBranch(t *testing.T) {
+	m := typeText(t, overviewOfWorkTrees(t), "/edge dns")
+
+	want := []string{"▌ " + folderGlyph + " worktrees/desktop-edge-win/fix-dns " + branchGlyph + " fix-dns clean"}
+	if !reflect.DeepEqual(overviewLines(m), want) {
+		t.Fatalf("got %q, want %q", overviewLines(m), want)
+	}
+}
+
+func anUppercaseLetterMakesTheWordCaseSensitive(t *testing.T) {
+	m := update(t, overviewOfWorkTrees(t), overviewRowMsg{row: repositoryRow{
+		FoundRepository: foundAt("ziti", "C:/dev/ziti"), status: gitrepo.Status{Branch: "Fix-docs", HasCommits: true},
+	}})
+
+	m = typeText(t, m, "/Fix")
+
+	want := []string{"▌ " + folderGlyph + " ziti " + branchGlyph + " Fix-docs clean"}
+	if !reflect.DeepEqual(overviewLines(m), want) {
+		t.Fatalf("got %q, want %q", overviewLines(m), want)
+	}
+}
+
+func arrowsMoveTheSelectionWhileTypingAndJTypesALetter(t *testing.T) {
+	m := typeText(t, overviewOfWorkTrees(t), "/fix")
+
+	m = update(t, m, tea.KeyPressMsg{Code: tea.KeyDown})
+	down, _ := m.overview.selectedRow()
+	m = update(t, m, tea.KeyPressMsg{Code: tea.KeyUp})
+	up, _ := m.overview.selectedRow()
+	m = typeText(t, m, "j")
+
+	if down.relativePath() != "worktrees/desktop-edge-win/fix-dns" ||
+		up.relativePath() != "worktrees/desktop-edge-win/fix-proxy" {
+		t.Fatalf("got %q after down and %q after up, want fix-dns then fix-proxy", down.relativePath(),
+			up.relativePath())
+	}
+	if m.overviewQuery.Value() != "fixj" || len(m.overview.rows) != 0 {
+		t.Fatalf("got query %q and %d rows, want fixj matching nothing", m.overviewQuery.Value(), len(m.overview.rows))
+	}
+}
+
+func aPasteFiltersTheRows(t *testing.T) {
+	m := typeText(t, overviewOfWorkTrees(t), "/")
+
+	m = update(t, m, tea.PasteMsg{Content: "dns"})
+
+	want := []string{"▌ " + folderGlyph + " worktrees/desktop-edge-win/fix-dns " + branchGlyph + " fix-dns clean"}
+	if !reflect.DeepEqual(overviewLines(m), want) {
+		t.Fatalf("got %q, want %q", overviewLines(m), want)
+	}
+}
+
+func deleteActsOnTheFilteredRowAndTheReloadStaysFiltered(t *testing.T) {
+	m := typeText(t, overviewOfWorkTrees(t), "/fix")
+	m = update(t, m, tea.KeyPressMsg{Code: tea.KeyDown})
+	m = update(t, m, tea.KeyPressMsg{Code: tea.KeyEnter})
+
+	next, check := m.Update(tea.KeyPressMsg{Code: 'D', Text: "D"})
+	m = asModel(t, next)
+	if check == nil || m.footer.text != "" {
+		t.Fatalf("got command %v, footer %q, want the delete check to run", check, m.footer.text)
+	}
+	failure, isFailure := check().(gitFailureMsg)
+	if !isFailure || !strings.Contains(failure.err.Error(), "C:/dev/worktrees/desktop-edge-win/fix-dns") {
+		t.Fatalf("got %#v, want the check to run in fix-dns, whose made up directory fails", failure)
+	}
+
+	m = update(t, m, overviewMsg{rows: slices.Delete(workTreeRows(), 2, 3)})
+
+	want := []string{"▌ " + folderGlyph + " worktrees/desktop-edge-win/fix-proxy " + branchGlyph + " fix-proxy clean"}
+	if !reflect.DeepEqual(overviewLines(m), want) {
+		t.Fatalf("got %q after the reload, want %q", overviewLines(m), want)
+	}
+}
+
+func aRowFillingInMatchesOnItsBranch(t *testing.T) {
+	m := typeText(t, overviewOfWorkTrees(t), "/release")
+	m = update(t, m, tea.KeyPressMsg{Code: tea.KeyEnter})
+
+	m = update(t, m, overviewRowMsg{row: repositoryRow{
+		FoundRepository: foundAt("ziti", "C:/dev/ziti"), status: gitrepo.Status{Branch: "release", HasCommits: true},
+	}})
+
+	want := []string{"▌ " + folderGlyph + " ziti " + branchGlyph + " release clean"}
+	if !reflect.DeepEqual(overviewLines(m), want) {
+		t.Fatalf("got %q, want %q", overviewLines(m), want)
+	}
+}
+
+func theFooterShowsTheQueryWhileTypingThenTheOverviewKeys(t *testing.T) {
+	m := typeText(t, overviewOfWorkTrees(t), "/dns")
+	typing := ansi.Strip(m.renderFooter())
+
+	m = update(t, m, tea.KeyPressMsg{Code: tea.KeyEnter})
+	kept := ansi.Strip(m.renderFooter())
+
+	if !strings.Contains(typing, " /dns") || !strings.Contains(typing, "enter keep  esc clear") {
+		t.Fatalf("got footer %q while typing, want the query and enter keep  esc clear", typing)
+	}
+	if !strings.Contains(kept, "j/k select  / search  enter open") {
+		t.Fatalf("got footer %q after enter, want the overview keys with / search", kept)
+	}
+}
+
+func aHiddenPendingRowThatFailsIsSkipped(t *testing.T) {
+	m := update(t, overviewOfWorkTrees(t), overviewMsg{rows: []overviewRow{
+		pendingRow{FoundRepository: foundAt("first", "C:/dev/first")},
+		pendingRow{FoundRepository: foundAt("second", "C:/dev/second")},
+	}})
+	m = typeText(t, m, "/second")
+	m = update(t, m, tea.KeyPressMsg{Code: tea.KeyEnter})
+
+	m = update(t, m, overviewRowFailureMsg{dir: "C:/dev/first", err: errors.New("run git status in C:/dev/first")})
+	footer := m.footer.text
+	m = update(t, m, tea.KeyPressMsg{Code: tea.KeyEscape})
+
+	want := []string{"▌● " + folderGlyph + " second loading..."}
+	if !reflect.DeepEqual(overviewLines(m), want) || footer != "skipped run git status in C:/dev/first" {
+		t.Fatalf("got %q after clearing the filter, footer %q, want %q and the error", overviewLines(m), footer, want)
+	}
+}
+
+func escWhileTypingShowsEveryRow(t *testing.T) {
+	m := typeText(t, overviewOfWorkTrees(t), "/dns")
+
+	m = update(t, m, tea.KeyPressMsg{Code: tea.KeyEscape})
+
+	if len(overviewLines(m)) != 4 || m.mode != modeOverview || m.overviewQuery.Focused() {
+		t.Fatalf("got %q, mode %d, typing %t, want every row in the overview keys", overviewLines(m), m.mode,
+			m.overviewQuery.Focused())
+	}
+}
+
+func escClearsAKeptFilterThenClosesTheOverview(t *testing.T) {
+	m := typeText(t, overviewOfWorkTrees(t), "/dns")
+	m = update(t, m, tea.KeyPressMsg{Code: tea.KeyEnter})
+
+	m = update(t, m, tea.KeyPressMsg{Code: tea.KeyEscape})
+	cleared := overviewLines(m)
+	m = update(t, m, tea.KeyPressMsg{Code: tea.KeyEscape})
+
+	if len(cleared) != 4 || m.mode != modeBrowsing {
+		t.Fatalf("got %q after the first esc and mode %d after the second, want every row then the overview closed",
+			cleared, m.mode)
+	}
+}
+
+func aQueryMatchingNothingSaysSo(t *testing.T) {
+	m := typeText(t, overviewOfWorkTrees(t), "/qq")
+
+	if screen := ansi.Strip(m.renderScreen()); !strings.Contains(screen, "no repositories match") {
+		t.Fatalf("got screen:\n%s\nwant no repositories match", screen)
+	}
+}
+
+func reopeningTheOverviewShowsEveryRow(t *testing.T) {
+	m := typeText(t, overviewOfWorkTrees(t), "/dns")
+	m = update(t, m, tea.KeyPressMsg{Code: tea.KeyEnter})
+	m = update(t, m, tea.KeyPressMsg{Code: 'o', Text: "o"})
+
+	m = update(t, m, tea.KeyPressMsg{Code: 'o', Text: "o"})
+	m = update(t, m, overviewMsg{rows: workTreeRows()})
+
+	if len(overviewLines(m)) != 4 || m.overviewQuery.Value() != "" {
+		t.Fatalf("got %q, query %q, want every row and no query", overviewLines(m), m.overviewQuery.Value())
+	}
+}
+
+func fetchAllFetchesTheRowsTheFilterHides(t *testing.T) {
+	m := typeText(t, overviewOfWorkTrees(t), "/dns")
+	m = update(t, m, tea.KeyPressMsg{Code: tea.KeyEnter})
+
+	m = update(t, m, tea.KeyPressMsg{Code: 'F', Text: "F"})
+
+	if len(m.syncing) != 4 {
+		t.Fatalf("got syncing %v, want all 4 repositories fetching", m.syncing)
+	}
+}
+
+// overviewOfWorkTrees lists the main clone desktop-edge-win, its work trees fix-proxy and fix-dns, and ziti.
+func overviewOfWorkTrees(t *testing.T) Model {
+	t.Helper()
+	m := focusOnSeveral(t, map[string]bool{"C:/dev/cwd": false, "C:/dev/first": true, "C:/dev/second": false})
+	m = update(t, m, tea.KeyPressMsg{Code: 'o', Text: "o"})
+	return update(t, m, overviewMsg{rows: workTreeRows()})
+}
+
+func workTreeRows() []overviewRow {
+	workTree := func(name string) repositoryRow {
+		return repositoryRow{
+			FoundRepository: focus.FoundRepository{RelativePath: "worktrees/desktop-edge-win/" + name,
+				Repository: gitrepo.Repository{Dir: "C:/dev/worktrees/desktop-edge-win/" + name,
+					GitDir: filepath.FromSlash("C:/dev/desktop-edge-win/.git/worktrees/" + name)}},
+			status: gitrepo.Status{Branch: name, HasCommits: true},
+		}
+	}
+	return []overviewRow{
+		repositoryRow{
+			FoundRepository: focus.FoundRepository{RelativePath: "desktop-edge-win", Repository: gitrepo.Repository{
+				Dir: "C:/dev/desktop-edge-win", GitDir: filepath.FromSlash("C:/dev/desktop-edge-win/.git"),
+			}},
+			status:        gitrepo.Status{Branch: "main", HasCommits: true},
+			defaultBranch: originMain(),
+		},
+		workTree("fix-proxy"),
+		workTree("fix-dns"),
+		repositoryRow{FoundRepository: foundAt("ziti", "C:/dev/ziti"), status: gitrepo.Status{Branch: "main"}},
+	}
+}
+
+func typeText(t *testing.T, m Model, text string) Model {
+	t.Helper()
+	for _, character := range text {
+		m = update(t, m, tea.KeyPressMsg{Code: character, Text: string(character)})
+	}
+	return m
 }
 
 func TestWholeFile(t *testing.T) {

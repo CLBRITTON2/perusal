@@ -67,6 +67,8 @@ var (
 	searchKey         = key.NewBinding(key.WithKeys("/"), key.WithHelp("/", "search"))
 	keepSearchKey     = key.NewBinding(key.WithKeys("enter"), key.WithHelp("enter", "keep"))
 	clearSearchKey    = key.NewBinding(key.WithKeys("esc"), key.WithHelp("esc", "clear"))
+	filterDownKey     = key.NewBinding(key.WithKeys("down"))
+	filterUpKey       = key.NewBinding(key.WithKeys("up"))
 	keyListKey        = key.NewBinding(key.WithKeys("?"), key.WithHelp("?", "all keys"))
 	closeKeyListKey   = key.NewBinding(key.WithKeys("esc", "?"), key.WithHelp("esc", "close"))
 	lineDownKey       = key.NewBinding(key.WithKeys("j", "down"), key.WithHelp("j/k", "line"))
@@ -89,7 +91,7 @@ var (
 	changesHelp  = slices.Concat(changesKeys, reviewHelp)
 	logHelp      = slices.Concat(logKeys, reviewHelp)
 	stashHelp    = slices.Concat(stashKeys, reviewHelp)
-	overviewHelp = []key.Binding{downKey, openRepositoryKey, fetchKey, pullKey, rebaseKey, pushKey, cherryPickKey,
+	overviewHelp = []key.Binding{downKey, searchKey, openRepositoryKey, fetchKey, pullKey, rebaseKey, pushKey, cherryPickKey,
 		deleteWorkTreeKey, refreshKey, closeOverviewKey, quitKey}
 	branchesHelp = []key.Binding{downKey, switchBranchKey, newBranchKey, deleteBranchKey, fetchBranchesKey,
 		closeBranchesKey, quitKey}

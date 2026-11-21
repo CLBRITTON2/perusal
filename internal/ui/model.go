@@ -142,7 +142,10 @@ type Model struct {
 	// The poll sends a take failure only when it changes, so the footer shows it until the next one.
 	takeFailure string
 
-	overview selectableList[overviewRow]
+	// overview lists the overviewRows that overviewQuery matches.
+	overview      selectableList[overviewRow]
+	overviewRows  []overviewRow
+	overviewQuery textinput.Model
 	// syncing maps the Dir of each repository an overview pull, fetch or rebase is running in to what its row shows.
 	syncing      map[string]string
 	branches     branchList
@@ -206,6 +209,8 @@ func New(findRepositories RepositoryFinder, openRepository RepositoryOpener, cre
 	descriptionBox.Prompt = ""
 	searchInput := textinput.New()
 	searchInput.Prompt = "/"
+	overviewQuery := textinput.New()
+	overviewQuery.Prompt = "/"
 	branchNameInput := textinput.New()
 	branchNameInput.Placeholder = "Name"
 	branchNameInput.Prompt = ""
@@ -215,6 +220,8 @@ func New(findRepositories RepositoryFinder, openRepository RepositoryOpener, cre
 		createWorkTree:     createWorkTree,
 		agentHost:          agentHost,
 		overview:           selectableList[overviewRow]{rows: []overviewRow{}},
+		overviewRows:       []overviewRow{},
+		overviewQuery:      overviewQuery,
 		syncing:            map[string]string{},
 		branches:           branchList{selectableList: selectableList[branchRow]{rows: []branchRow{}}},
 		workTreeList:       selectableList[workTreeRow]{rows: []workTreeRow{}},
@@ -496,6 +503,11 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.searchInput, cmd = m.searchInput.Update(msg)
 		return m, cmd
 	}
+	if m.typingOverviewQuery() {
+		var cmd tea.Cmd
+		m.overviewQuery, cmd = m.overviewQuery.Update(msg)
+		return m.withOverviewRows(m.overviewRows), cmd
+	}
 	return m, nil
 }
 
@@ -652,6 +664,8 @@ func (m Model) withRepository(repository gitrepo.Repository, rejection string) M
 		next.mode = modeOverview
 	}
 	next.overview = m.overview
+	next.overviewRows = m.overviewRows
+	next.overviewQuery = m.overviewQuery
 	next.syncing = m.syncing
 	next.takeFailure = m.takeFailure
 	next.missingWorkTrees = m.missingWorkTrees
@@ -1203,6 +1217,7 @@ func (m Model) withPaneSizes() Model {
 	// textinput draws its end-of-text cursor one cell past its width
 	m.summaryInput.SetWidth(max(m.fieldInnerWidth()-1, 0))
 	m.searchInput.SetWidth(max(m.width/2, 0))
+	m.overviewQuery.SetWidth(max(m.width/2, 0))
 	m.descriptionBox.SetWidth(m.fieldInnerWidth())
 	m.descriptionBox.SetHeight(descriptionHeight)
 	return m
@@ -1619,13 +1634,16 @@ func scrollLabel(diffView viewport.Model) string {
 }
 
 func (m Model) renderFooter() string {
+	typing := m.mode == modeSearching || m.typingOverviewQuery()
 	switch {
 	case m.footer.text != "" && m.footer.isError:
 		return fitToWidth(errorStyle.Render("✗ "+m.footer.text), m.width)
 	case m.footer.text != "":
 		return fitToWidth(successStyle.Render("✓ "+m.footer.text), m.width)
-	case m.takeFailure != "" && m.mode != modeSearching:
+	case m.takeFailure != "" && !typing:
 		return fitToWidth(errorStyle.Render("✗ "+m.takeFailure), m.width)
+	case m.typingOverviewQuery():
+		return spaceBetween(" "+m.overviewQuery.View(), m.help.ShortHelpView(searchHelp)+" ", m.width)
 	case m.mode == modeOverview:
 		return m.renderHelpLine(overviewHelp)
 	case m.mode == modeBranches:
