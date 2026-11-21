@@ -8,13 +8,15 @@ perusal runs your local `git` for everything, with no GitHub API and no login.
 
 ## Install
 
-Needs Go 1.27 or later and `git`. A [Nerd Font](https://www.nerdfonts.com) shows the glyphs.
+Download a build from [Releases](https://github.com/CLBRITTON2/perusal/releases), or with Go 1.27 or later:
 
 ```
 go install github.com/CLBRITTON2/perusal/cmd/perusal@latest
 ```
 
-From a clone, `make` installs it and `make test` tests it.
+It needs `git` on `PATH`, and a [Nerd Font](https://www.nerdfonts.com) shows the glyphs. From a clone, `make`
+installs it and `make test` tests it. A pushed `v*` tag publishes a release with that version's section of
+`RELEASENOTES.md` as its notes (`scripts/release.ps1`).
 
 ## Use
 
