@@ -93,11 +93,6 @@ func TestExistingOnAgentHostDropsAWorkTreeRemovedOnTheAgentHost(t *testing.T) {
 	agentDir := t.TempDir()
 	kept := MissingWorkTree{AgentDir: agentDir, RelativePath: "worktrees/repo/kept"}
 	removed := MissingWorkTree{AgentDir: filepath.Join(agentDir, "removed"), RelativePath: "worktrees/repo/removed"}
-	// powershell.exe stands in for the agent host's ssh login shell.
-	runLocalScript := func(ctx context.Context, script string) ([]byte, error) {
-		return exec.CommandContext(ctx, "powershell.exe", "-NoProfile", "-NonInteractive", "-Command", script).Output()
-	}
-
 	existing, err := existingOnAgentHost(context.Background(), runLocalScript, []MissingWorkTree{kept, removed})
 
 	if err != nil || !slices.Equal(existing, []MissingWorkTree{kept}) {
@@ -493,12 +488,13 @@ func gitInit(t *testing.T, dir string) {
 	mustGit(t, "init", dir)
 }
 
-func mustGit(t *testing.T, args ...string) {
+func mustGit(t *testing.T, args ...string) string {
 	t.Helper()
 	output, err := exec.Command("git", args...).CombinedOutput()
 	if err != nil {
 		t.Fatalf("git %s: %v\n%s", strings.Join(args, " "), err, output)
 	}
+	return string(output)
 }
 
 func guestRules(t *testing.T, devDir string, focusFile string) Rules {

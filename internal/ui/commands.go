@@ -34,6 +34,10 @@ type TakeFailure struct {
 	Reason string
 }
 
+type OwnerStateFailure struct {
+	Reason string
+}
+
 type pollTickMsg struct{}
 
 func nextPoll() tea.Cmd {

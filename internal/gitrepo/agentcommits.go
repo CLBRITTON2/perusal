@@ -305,7 +305,7 @@ func (r Repository) HasTaken(ctx context.Context, head AgentHead) (bool, error) 
 	if err != nil || !hasCommit {
 		return false, err
 	}
-	return r.gitSucceeds(ctx, "merge-base", "--is-ancestor", head.Commit, head.Branch)
+	return r.IsAncestor(ctx, head.Commit, head.Branch)
 }
 
 // RemoveAgentWorkTree removes agentWorkTree from the agent's clone at clone and deletes its branch there. It refuses
@@ -361,6 +361,10 @@ func (r Repository) moveWorkTree(ctx context.Context, from string, to string) (m
 		}
 	}
 	return nil
+}
+
+func (r Repository) TakenCommit(ctx context.Context, branch string) (string, error) {
+	return r.optionalRevParse(ctx, agentTakenRef("refs/heads/"+branch))
 }
 
 // optionalRevParse is the commit ref names, or empty when ref does not exist.

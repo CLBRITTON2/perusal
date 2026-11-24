@@ -40,6 +40,7 @@ func (f FileStatus) HasUnstagedChanges() bool {
 type Status struct {
 	// Branch is empty when HEAD is detached.
 	Branch string
+	Head   string
 	Tracking
 	HasCommits bool
 	Files      []FileStatus
@@ -76,6 +77,9 @@ func parseStatus(output []byte) (Status, error) {
 			switch name {
 			case "branch.oid":
 				status.HasCommits = value != "(initial)"
+				if status.HasCommits {
+					status.Head = value
+				}
 			case "branch.head":
 				if value != "(detached)" {
 					status.Branch = value

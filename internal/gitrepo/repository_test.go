@@ -192,6 +192,16 @@ func hunkHeaders(text string) string {
 	return strings.Join(headers, " ")
 }
 
+func TestHeadSubjectIsTheFirstLineOfHeadsMessage(t *testing.T) {
+	clone := repositoryWithHistory(t, []string{"1", "2"})
+
+	subject, err := Repository{Dir: clone}.HeadSubject(context.Background())
+
+	if err != nil || subject != "Write 2" {
+		t.Fatalf("got %q, %v, want Write 2", subject, err)
+	}
+}
+
 func TestDefaultBranch(t *testing.T) {
 	t.Run("countsTheCommitsHeadLacksFromOriginsDefaultBranch", countsTheCommitsHeadLacksFromOriginsDefaultBranch)
 	t.Run("isEmptyWithoutOriginHead", isEmptyWithoutOriginHead)

@@ -22,14 +22,15 @@ import (
 // changed. When the agent's side changed, it takes the agent's new commits in every focused repository into the owner's
 // work tree. When the failed takes change, it sends their errors joined on the second channel, and an empty string once
 // every take succeeds again. While a focused path has no owner copy, it resolves the focus file every poll, so a
-// worktree the owner adds, by hand or with CreateWorkTree, is picked up with no change to the focus file. Both channels
-// close when ctx ends.
-func FollowAgentHost(ctx context.Context, rules Rules, session *agenthost.Session,
-	waitTimeout time.Duration) (<-chan Result, <-chan string) {
+// worktree the owner adds, by hand or with CreateWorkTree, is picked up with no change to the focus file. Every channel
+// closes when ctx ends.
+func FollowAgentHost(ctx context.Context, rules Rules, session *agenthost.Session, waitTimeout time.Duration,
+	readOwnerWorkTree OwnerWorkTreeReader) (<-chan Result, <-chan string, <-chan string) {
 	results := make(chan Result)
 	takeFailures := make(chan string)
-	go pollAgentHost(ctx, rules, session, waitTimeout, results, takeFailures)
-	return results, takeFailures
+	ownerStateFailures := make(chan string)
+	go pollAgentHost(ctx, rules, session, waitTimeout, readOwnerWorkTree, results, takeFailures, ownerStateFailures)
+	return results, takeFailures, ownerStateFailures
 }
 
 // lacksOwnerCopy reports whether a focused path resolved to no owner work tree, which the owner can fix without the
@@ -94,35 +95,59 @@ func existingOnAgentHost(ctx context.Context, run func(ctx context.Context, scri
 	if len(missingWorkTrees) == 0 {
 		return []MissingWorkTree{}, nil
 	}
-	quotedDirs := make([]string, len(missingWorkTrees))
+	agentDirs := make([]string, len(missingWorkTrees))
 	for index, missing := range missingWorkTrees {
-		quotedDirs[index] = agenthost.QuotedString(missing.AgentDir)
+		agentDirs[index] = missing.AgentDir
 	}
-	script := "ConvertTo-Json -Compress -InputObject @(foreach ($dir in @(" + strings.Join(quotedDirs, ", ") +
-		")) { Test-Path -LiteralPath $dir -PathType Container })"
-	output, err := run(ctx, script)
+	existingDirs, err := existingAgentDirs(ctx, run, agentDirs)
 	if err != nil {
-		return []MissingWorkTree{}, fmt.Errorf("check which of the agent's worktrees %s exist: %w",
-			strings.Join(quotedDirs, ", "), err)
-	}
-	var exists []bool
-	if err := json.Unmarshal(output, &exists); err != nil || len(exists) != len(missingWorkTrees) {
-		return []MissingWorkTree{}, fmt.Errorf("check which of the agent's worktrees %s exist: want %d booleans, "+
-			"got %q: %v", strings.Join(quotedDirs, ", "), len(missingWorkTrees), output, err)
+		return []MissingWorkTree{}, err
 	}
 	existing := []MissingWorkTree{}
-	for index, missing := range missingWorkTrees {
-		if exists[index] {
+	for _, missing := range missingWorkTrees {
+		if slices.Contains(existingDirs, missing.AgentDir) {
 			existing = append(existing, missing)
 		}
 	}
 	return existing, nil
 }
 
+func existingAgentDirs(ctx context.Context, run func(ctx context.Context, script string) ([]byte, error),
+	agentDirs []string) ([]string, error) {
+	if len(agentDirs) == 0 {
+		return []string{}, nil
+	}
+	quotedDirs := make([]string, len(agentDirs))
+	for index, dir := range agentDirs {
+		quotedDirs[index] = agenthost.QuotedString(dir)
+	}
+	script := "ConvertTo-Json -Compress -InputObject @(foreach ($dir in @(" + strings.Join(quotedDirs, ", ") +
+		")) { Test-Path -LiteralPath $dir -PathType Container })"
+	output, err := run(ctx, script)
+	if err != nil {
+		return []string{}, fmt.Errorf("check which of the agent host's folders %s exist: %w",
+			strings.Join(quotedDirs, ", "), err)
+	}
+	var exists []bool
+	if err := json.Unmarshal(output, &exists); err != nil || len(exists) != len(agentDirs) {
+		return []string{}, fmt.Errorf("check which of the agent host's folders %s exist: want %d booleans, "+
+			"got %q: %v", strings.Join(quotedDirs, ", "), len(agentDirs), output, err)
+	}
+	existing := []string{}
+	for index, dir := range agentDirs {
+		if exists[index] {
+			existing = append(existing, dir)
+		}
+	}
+	return existing, nil
+}
+
 func pollAgentHost(ctx context.Context, rules Rules, session *agenthost.Session, waitTimeout time.Duration,
-	results chan<- Result, takeFailures chan<- string) {
+	readOwnerWorkTree OwnerWorkTreeReader, results chan<- Result, takeFailures chan<- string,
+	ownerStateFailures chan<- string) {
 	defer close(results)
 	defer close(takeFailures)
+	defer close(ownerStateFailures)
 	readScript := "[IO.File]::ReadAllText(" + agenthost.QuotedString(rules.FocusFile) + ")"
 	lastContent := ""
 	lastReadFailure := ""
@@ -131,6 +156,8 @@ func pollAgentHost(ctx context.Context, rules Rules, session *agenthost.Session,
 	focused := Focus{Repositories: []gitrepo.Repository{}, Refusals: []error{}}
 	focusedAgentDirs := []string{}
 	lastTakeFailure := ""
+	ownerStateWrittenAt := time.Time{}
+	lastOwnerStateFailure := ""
 	for {
 		changed, waitErr := session.WaitForChange(ctx, focusedAgentDirs, rules.FocusFile, waitTimeout)
 		if ctx.Err() != nil {
@@ -179,23 +206,46 @@ func pollAgentHost(ctx context.Context, rules Rules, session *agenthost.Session,
 			}
 			lastResult = resolvedResult
 		}
+		movedWorkTree := false
 		// A failed take is retried every poll, since the owner may fix it without the agent's side changing.
-		if !changed && waitErr == nil && lastTakeFailure == "" {
-			continue
-		}
-		failures := []string{}
-		if waitErr != nil {
-			failures = append(failures, waitErr.Error())
-		}
-		failures = append(failures, takeAgentCommits(ctx, rules, session, focused.Repositories, focusedAgentDirs)...)
-		takeFailure := strings.Join(failures, ", ")
-		if takeFailure != lastTakeFailure {
-			select {
-			case <-ctx.Done():
-				return
-			case takeFailures <- takeFailure:
+		if changed || waitErr != nil || lastTakeFailure != "" {
+			failures := []string{}
+			if waitErr != nil {
+				failures = append(failures, waitErr.Error())
 			}
-			lastTakeFailure = takeFailure
+			repositoryFailures, moved := takeAgentCommits(ctx, rules, session, focused.Repositories, focusedAgentDirs)
+			movedWorkTree = moved
+			failures = append(failures, repositoryFailures...)
+			takeFailure := strings.Join(failures, ", ")
+			if takeFailure != lastTakeFailure {
+				select {
+				case <-ctx.Done():
+					return
+				case takeFailures <- takeFailure:
+				}
+				lastTakeFailure = takeFailure
+			}
+		}
+		ownerStateDue := movedWorkTree || time.Since(ownerStateWrittenAt) >= 15*time.Second
+		if rules.OwnerStateFile != "" && ownerStateDue {
+			ownerStateWrittenAt = time.Now()
+			state, err := readOwnerState(ctx, rules, session.Run, readOwnerWorkTree, focused.Repositories,
+				lastTakeFailure)
+			if err == nil {
+				err = writeOwnerState(ctx, session.Run, rules.OwnerStateFile, state)
+			}
+			ownerStateFailure := ""
+			if err != nil {
+				ownerStateFailure = "owner state not written: " + err.Error()
+			}
+			if ownerStateFailure != lastOwnerStateFailure {
+				select {
+				case <-ctx.Done():
+					return
+				case ownerStateFailures <- ownerStateFailure:
+				}
+				lastOwnerStateFailure = ownerStateFailure
+			}
 		}
 		if waitErr != nil {
 			// The failed wait returned at once.
@@ -211,16 +261,18 @@ func pollAgentHost(ctx context.Context, rules Rules, session *agenthost.Session,
 // takeAgentCommits brings the agent's new commits in each focused repository into the owner's, leaving the agent's
 // copies as they are, and returns what failed.
 func takeAgentCommits(ctx context.Context, rules Rules, session *agenthost.Session, repositories []gitrepo.Repository,
-	agentDirs []string) []string {
+	agentDirs []string) ([]string, bool) {
 	heads, err := gitrepo.ReadAgentHeads(ctx, session.Run, agentDirs)
 	if err != nil {
-		return []string{err.Error()}
+		return []string{err.Error()}, false
 	}
 	takeErrs := make([]error, len(repositories))
+	moved := make([]bool, len(repositories))
 	var group sync.WaitGroup
 	for index, repository := range repositories {
 		group.Go(func() {
-			_, takeErrs[index] = repository.TakeAgentCommits(ctx, rules.AgentHost+":"+agentDirs[index], heads[index])
+			moved[index], takeErrs[index] = repository.TakeAgentCommits(ctx, rules.AgentHost+":"+agentDirs[index],
+				heads[index])
 		})
 	}
 	group.Wait()
@@ -230,7 +282,7 @@ func takeAgentCommits(ctx context.Context, rules Rules, session *agenthost.Sessi
 			failures = append(failures, takeErr.Error())
 		}
 	}
-	return failures
+	return failures, slices.Contains(moved, true)
 }
 
 // agentCopyDirs are the agent's copies of repositories on the agent host, each at the same path under rules.AgentDir as

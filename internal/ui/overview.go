@@ -97,7 +97,7 @@ func (r pullRequest) pull() tea.Msg {
 	if err := r.found.Repository.Pull(context.Background()); err != nil {
 		return syncFailureMsg{dir: dir, err: err}
 	}
-	row, err := loadOverviewRow(r.found)
+	row, err := loadOverviewRow(context.Background(), r.found)
 	if err != nil {
 		return syncFailureMsg{dir: dir, err: err}
 	}
@@ -114,7 +114,7 @@ func (r rebaseRequest) rebase() tea.Msg {
 	if err != nil {
 		return syncFailureMsg{dir: dir, err: err}
 	}
-	row, err := loadOverviewRow(r.found)
+	row, err := loadOverviewRow(context.Background(), r.found)
 	if err != nil {
 		return syncFailureMsg{dir: dir, err: err}
 	}
@@ -163,7 +163,7 @@ func fetchRow(found focus.FoundRepository) (repositoryRow, error) {
 	if err := found.Repository.Fetch(context.Background()); err != nil {
 		return repositoryRow{}, err
 	}
-	return loadOverviewRow(found)
+	return loadOverviewRow(context.Background(), found)
 }
 
 func dirsOf(found []focus.FoundRepository) []string {
@@ -179,7 +179,7 @@ type overviewRowRequest struct {
 }
 
 func (r overviewRowRequest) load() tea.Msg {
-	row, err := loadOverviewRow(r.found)
+	row, err := loadOverviewRow(context.Background(), r.found)
 	if err != nil {
 		return overviewRowFailureMsg{dir: r.found.Repository.Dir, err: err}
 	}
@@ -220,8 +220,58 @@ func (r overviewRequest) load() tea.Msg {
 	return overviewMsg{rows: rows}
 }
 
-func loadOverviewRow(found focus.FoundRepository) (repositoryRow, error) {
-	ctx := context.Background()
+func ReadOwnerWorkTree(ctx context.Context, found focus.FoundRepository) (focus.OwnerWorkTree, error) {
+	row, err := loadOverviewRow(ctx, found)
+	if err != nil {
+		return focus.OwnerWorkTree{}, err
+	}
+	subject := ""
+	mergedInto := ""
+	if row.status.HasCommits {
+		if subject, err = found.Repository.HeadSubject(ctx); err != nil {
+			return focus.OwnerWorkTree{}, err
+		}
+		onOwnBranch := row.status.Branch != "" && row.status.Branch != row.defaultBranch.Name
+		if onOwnBranch && row.defaultBranch.Ref != "" {
+			defaultHoldsHead, err := found.Repository.IsAncestor(ctx, "HEAD", row.defaultBranch.Ref)
+			if err != nil {
+				return focus.OwnerWorkTree{}, err
+			}
+			if !defaultHoldsHead {
+				merged, err := found.Repository.MergedInto(ctx, "HEAD", row.defaultBranch.Ref)
+				if err != nil {
+					return focus.OwnerWorkTree{}, err
+				}
+				if merged {
+					mergedInto = row.defaultBranch.Ref
+				}
+			}
+		}
+	}
+	upstream := ""
+	if !row.status.UpstreamGone {
+		upstream = row.status.Upstream
+	}
+	changedFiles := []string{}
+	// The cap keeps a work tree full of build output short.
+	for _, file := range row.status.Files[:min(len(row.status.Files), 50)] {
+		changedFiles = append(changedFiles, file.Path)
+	}
+	return focus.OwnerWorkTree{
+		Branch:           row.status.Branch,
+		Head:             row.status.Head,
+		HeadSubject:      subject,
+		ChangedFiles:     changedFiles,
+		ChangedFileCount: len(row.status.Files),
+		Upstream:         upstream,
+		Ahead:            row.status.Ahead,
+		Behind:           row.status.Behind,
+		BehindDefault:    row.commitsBehindDefault,
+		MergedInto:       mergedInto,
+	}, nil
+}
+
+func loadOverviewRow(ctx context.Context, found focus.FoundRepository) (repositoryRow, error) {
 	status, err := found.Repository.Status(ctx)
 	if err != nil {
 		return repositoryRow{}, err

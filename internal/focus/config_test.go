@@ -26,6 +26,12 @@ func TestLoadConfig(t *testing.T) {
 			"agentHost": "agent-vm"}`, nil},
 		{"refusesAnAgentHostSshWouldReadAsAnOption", `{"agentAccount": "claude", "focusFile": "C:\\f",
 			"agentDir": "C:\\a", "ownerDir": "C:\\o", "agentHost": "-oProxyCommand=calc"}`, ErrInvalidConfig},
+		{"loadsAnOwnerStateFileOnTheAgentHost", `{"focusFile": "C:\\f", "agentDir": "C:\\a", "ownerDir": "C:\\o",
+			"agentHost": "agent-vm", "ownerStateFile": "C:\\a\\owner-state.json"}`, nil},
+		{"refusesARelativeOwnerStateFile", `{"focusFile": "C:\\f", "agentDir": "C:\\a", "ownerDir": "C:\\o",
+			"agentHost": "agent-vm", "ownerStateFile": "owner-state.json"}`, ErrInvalidConfig},
+		{"refusesAnOwnerStateFileWithoutAgentHost", `{"agentAccount": "claude", "focusFile": "C:\\f",
+			"agentDir": "C:\\a", "ownerDir": "C:\\o", "ownerStateFile": "C:\\a\\owner-state.json"}`, ErrInvalidConfig},
 	}
 	for _, testCase := range testCases {
 		t.Run(testCase.name, func(t *testing.T) {

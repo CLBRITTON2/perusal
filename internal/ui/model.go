@@ -147,7 +147,8 @@ type Model struct {
 	popup          popupState
 	footer         footer
 	// The poll sends a take failure only when it changes, so the footer shows it until the next one.
-	takeFailure string
+	takeFailure       string
+	ownerStateFailure string
 
 	// overview lists the overviewRows that overviewQuery matches.
 	overview      selectableList[overviewRow]
@@ -328,6 +329,9 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m.withRejection(msg), nil
 	case TakeFailure:
 		m.takeFailure = sanitizeSingleLine(msg.Reason)
+		return m, nil
+	case OwnerStateFailure:
+		m.ownerStateFailure = sanitizeSingleLine(msg.Reason)
 		return m, nil
 	case pollTickMsg:
 		m = m.withWorkTreeOffer()
@@ -706,6 +710,7 @@ func (m Model) withRepository(repository gitrepo.Repository, rejection string) M
 	next.overviewQuery = m.overviewQuery
 	next.syncing = m.syncing
 	next.takeFailure = m.takeFailure
+	next.ownerStateFailure = m.ownerStateFailure
 	next.missingWorkTrees = m.missingWorkTrees
 	next.askedWorkTrees = m.askedWorkTrees
 	next.terminalFocused = m.terminalFocused
@@ -1717,13 +1722,15 @@ func scrollLabel(diffView viewport.Model) string {
 
 func (m Model) renderFooter() string {
 	typing := m.mode == modeSearching || m.typingOverviewQuery()
+	standingFailure := strings.Join(slices.DeleteFunc([]string{m.takeFailure, m.ownerStateFailure},
+		func(failure string) bool { return failure == "" }), ", ")
 	switch {
 	case m.footer.text != "" && m.footer.isError:
 		return fitToWidth(errorStyle.Render("✗ "+m.footer.text), m.width)
 	case m.footer.text != "":
 		return fitToWidth(successStyle.Render("✓ "+m.footer.text), m.width)
-	case m.takeFailure != "" && !typing:
-		return fitToWidth(errorStyle.Render("✗ "+m.takeFailure), m.width)
+	case standingFailure != "" && !typing:
+		return fitToWidth(errorStyle.Render("✗ "+standingFailure), m.width)
 	case m.typingOverviewQuery():
 		return spaceBetween(" "+m.overviewQuery.View(), m.help.ShortHelpView(filterHelp)+" ", m.width)
 	case m.mode == modeOverview:

@@ -86,6 +86,14 @@ func (r Repository) LogOnNoRemote(ctx context.Context, limit int) ([]Commit, err
 	return r.logRevisions(ctx, limit, []string{"HEAD", "--not", "--remotes"})
 }
 
+func (r Repository) HeadSubject(ctx context.Context) (string, error) {
+	output, err := r.git(ctx, "log", "--max-count=1", "--format=%s", "HEAD", "--")
+	if err != nil {
+		return "", err
+	}
+	return strings.TrimSpace(string(output)), nil
+}
+
 func (r Repository) logRevisions(ctx context.Context, limit int, revisions []string) ([]Commit, error) {
 	format := strings.Join([]string{"%H", "%h", "%P", "%D", "%an", "%at", "%B"}, "%x1f")
 	output, err := r.git(ctx, slices.Concat([]string{"log", "-z", "--topo-order", "--max-count=" + strconv.Itoa(limit),
@@ -274,6 +282,10 @@ func (r Repository) MergedInto(ctx context.Context, revision string, ref string)
 		return false, err
 	}
 	return strings.TrimSpace(string(mergedTree)) == strings.TrimSpace(string(refTree)), nil
+}
+
+func (r Repository) IsAncestor(ctx context.Context, revision string, ref string) (bool, error) {
+	return r.gitSucceeds(ctx, "merge-base", "--is-ancestor", revision, ref)
 }
 
 func (r Repository) Stage(ctx context.Context, file FileStatus) error {
@@ -641,7 +653,7 @@ func (r Repository) Amend(ctx context.Context, hash string) error {
 
 // A rebase would drop a merge above hash and has no parent to start from below a root.
 func (r Repository) checkRewritable(ctx context.Context, hash string) error {
-	isAncestor, err := r.gitSucceeds(ctx, "merge-base", "--is-ancestor", hash, "HEAD")
+	isAncestor, err := r.IsAncestor(ctx, hash, "HEAD")
 	if err != nil {
 		return err
 	}

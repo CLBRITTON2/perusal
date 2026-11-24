@@ -67,6 +67,10 @@ It reads `%APPDATA%\perusal\config.json`:
 - `agentDir` and `ownerDir` are the same directory as the agent and you see it. perusal refuses paths outside it.
 - `agentHost` replaces `agentAccount` when the agent works on another machine over ssh. perusal then brings the
   agent's commits into your work tree as unstaged changes.
+- `ownerStateFile`, with `agentHost`, is a file on that machine perusal rewrites every 15 seconds and after each take
+  with the branch, uncommitted files and upstream counts of each work tree under `ownerDir` whose clone is also under
+  `agentDir` there, so the agent can read what you have checked out instead of asking. A repository only you have is
+  left out. Its folder must exist.
 
 Since git runs whatever a repository's `.git` tells it to, perusal refuses a repository whose `.git` the agent account
 can write. From an elevated prompt, for each repository:

@@ -26,6 +26,7 @@ func readsBranchHeadersAndEveryEntryKind(t *testing.T) {
 
 	want := Status{
 		Branch:     "master",
+		Head:       "72164ac5a6f1bcbca714a97261c5bf3627aeadd7",
 		Tracking:   Tracking{Upstream: "origin/master", Ahead: 2, Behind: 1},
 		HasCommits: true,
 		Files: []FileStatus{

@@ -18,11 +18,12 @@ var ErrInvalidConfig = errors.New("invalid perusal config")
 // works on, with FocusFile there and its own copy of each repository at the same path under AgentDir as the owner's
 // under OwnerDir, and empty when the agent works on this machine.
 type Config struct {
-	AgentAccount string `json:"agentAccount"`
-	FocusFile    string `json:"focusFile"`
-	AgentDir     string `json:"agentDir"`
-	OwnerDir     string `json:"ownerDir"`
-	AgentHost    string `json:"agentHost"`
+	AgentAccount   string `json:"agentAccount"`
+	FocusFile      string `json:"focusFile"`
+	AgentDir       string `json:"agentDir"`
+	OwnerDir       string `json:"ownerDir"`
+	AgentHost      string `json:"agentHost"`
+	OwnerStateFile string `json:"ownerStateFile"`
 }
 
 func LoadConfig(path string) (Config, error) {
@@ -44,6 +45,14 @@ func LoadConfig(path string) (Config, error) {
 	if strings.HasPrefix(config.AgentHost, "-") || strings.Contains(config.AgentHost, ":") {
 		return Config{}, fmt.Errorf("%w: %s sets agentHost to %q, want an ssh host name or alias", ErrInvalidConfig,
 			path, config.AgentHost)
+	}
+	if config.OwnerStateFile != "" && config.AgentHost == "" {
+		return Config{}, fmt.Errorf("%w: %s sets ownerStateFile %q without agentHost, want the ssh host it is on",
+			ErrInvalidConfig, path, config.OwnerStateFile)
+	}
+	if config.OwnerStateFile != "" && !filepath.IsAbs(config.OwnerStateFile) {
+		return Config{}, fmt.Errorf("%w: %s sets ownerStateFile to %q, want an absolute path", ErrInvalidConfig, path,
+			config.OwnerStateFile)
 	}
 	paths := []struct {
 		key   string

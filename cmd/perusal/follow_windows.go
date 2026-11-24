@@ -58,6 +58,7 @@ func follow(rules focus.Rules) (followErr error) {
 	defer cancel()
 	var results <-chan focus.Result
 	var takeFailures <-chan string
+	var ownerStateFailures <-chan string
 	var createWorkTree ui.WorkTreeCreator
 	var agentHost ui.AgentHost
 	if rules.AgentHost == "" {
@@ -73,7 +74,8 @@ func follow(rules focus.Rules) (followErr error) {
 			cancel()
 			followErr = errors.Join(followErr, session.Close())
 		}()
-		results, takeFailures = focus.FollowAgentHost(ctx, rules, session, agentHostWaitTimeout)
+		results, takeFailures, ownerStateFailures = focus.FollowAgentHost(ctx, rules, session, agentHostWaitTimeout,
+			ui.ReadOwnerWorkTree)
 		createWorkTree = func(ctx context.Context, missing focus.MissingWorkTree) (string, error) {
 			return focus.CreateWorkTree(ctx, rules, session, missing)
 		}
@@ -100,7 +102,7 @@ func follow(rules focus.Rules) (followErr error) {
 		return err
 	}
 	program := tea.NewProgram(model)
-	go forwardResults(program, results, takeFailures, rules.FocusFile)
+	go forwardResults(program, results, takeFailures, ownerStateFailures, rules.FocusFile)
 	if err := runKeepingViewState(program, statePath); err != nil {
 		return fmt.Errorf("run perusal following %s: %w", rules.FocusFile, err)
 	}
@@ -108,7 +110,8 @@ func follow(rules focus.Rules) (followErr error) {
 }
 
 // forwardResults returns when results closes. takeFailures is nil when the agent works locally, which blocks its case.
-func forwardResults(program *tea.Program, results <-chan focus.Result, takeFailures <-chan string, focusFile string) {
+func forwardResults(program *tea.Program, results <-chan focus.Result, takeFailures <-chan string,
+	ownerStateFailures <-chan string, focusFile string) {
 	for {
 		select {
 		case result, open := <-results:
@@ -127,6 +130,12 @@ func forwardResults(program *tea.Program, results <-chan focus.Result, takeFailu
 				continue
 			}
 			program.Send(ui.TakeFailure{Reason: failure})
+		case failure, open := <-ownerStateFailures:
+			if !open {
+				ownerStateFailures = nil
+				continue
+			}
+			program.Send(ui.OwnerStateFailure{Reason: failure})
 		}
 	}
 }

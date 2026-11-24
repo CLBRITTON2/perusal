@@ -948,6 +948,27 @@ func TestATakeFailureStaysInTheFooterAcrossKeysAndFocusSwitchesUntilItClears(t *
 	}
 }
 
+func TestAnOwnerStateFailureShowsBesideATakeFailureUntilAWriteSucceeds(t *testing.T) {
+	m := update(t, reviewingRepository(t, gitrepo.Status{Files: unstagedFiles()}), tea.BlurMsg{})
+	m = update(t, m, TakeFailure{Reason: "a.go would be overwritten"})
+	m = update(t, m, OwnerStateFailure{Reason: "owner state not written: ssh agent-host: the shell exited"})
+	bothFailed := ansi.Strip(m.renderFooter())
+	m = update(t, m, TakeFailure{Reason: ""})
+	writeFailed := ansi.Strip(m.renderFooter())
+	m = update(t, m, OwnerStateFailure{Reason: ""})
+	written := ansi.Strip(m.renderFooter())
+
+	if !strings.Contains(bothFailed, "a.go would be overwritten, owner state not written: ssh agent-host") {
+		t.Fatalf("got footer %q, want both failures", bothFailed)
+	}
+	if !strings.Contains(writeFailed, "✗ owner state not written: ssh agent-host") {
+		t.Fatalf("got footer %q after the take succeeded, want the owner state failure", writeFailed)
+	}
+	if !strings.Contains(written, "? all keys") {
+		t.Fatalf("got footer %q after the write succeeded, want the key help", written)
+	}
+}
+
 func topLineNumber(m Model) int {
 	return m.diffLines()[m.diffView.YOffset()].source.newNumber
 }

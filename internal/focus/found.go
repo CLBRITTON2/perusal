@@ -2,6 +2,7 @@
 package focus
 
 import (
+	"context"
 	"errors"
 	"io/fs"
 
@@ -64,3 +65,29 @@ type Found struct {
 	Repositories []FoundRepository
 	Refusals     []FoundRefusal
 }
+
+type OwnerState struct {
+	ReadAt      string          `json:"readAt"`
+	TakeFailure string          `json:"takeFailure"`
+	Focused     []string        `json:"focused"`
+	WorkTrees   []OwnerWorkTree `json:"workTrees"`
+}
+
+type OwnerWorkTree struct {
+	OwnerPath        string   `json:"ownerPath"`
+	AgentPath        string   `json:"agentPath"`
+	Branch           string   `json:"branch"`
+	Head             string   `json:"head"`
+	HeadSubject      string   `json:"headSubject"`
+	ChangedFiles     []string `json:"changedFiles"`
+	ChangedFileCount int      `json:"changedFileCount"`
+	Upstream         string   `json:"upstream"`
+	Ahead            int      `json:"ahead"`
+	Behind           int      `json:"behind"`
+	BehindDefault    int      `json:"behindDefault,omitempty"`
+	MergedInto       string   `json:"mergedInto"`
+	TakenCommit      string   `json:"takenCommit"`
+	Refusal          string   `json:"refusal"`
+}
+
+type OwnerWorkTreeReader func(ctx context.Context, found FoundRepository) (OwnerWorkTree, error)
