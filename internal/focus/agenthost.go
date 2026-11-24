@@ -158,6 +158,7 @@ func pollAgentHost(ctx context.Context, rules Rules, session *agenthost.Session,
 	lastTakeFailure := ""
 	ownerStateWrittenAt := time.Time{}
 	lastOwnerStateFailure := ""
+	cachedOwnerState := emptyOwnerStateCache()
 	for {
 		changed, waitErr := session.WaitForChange(ctx, focusedAgentDirs, rules.FocusFile, waitTimeout)
 		if ctx.Err() != nil {
@@ -229,9 +230,11 @@ func pollAgentHost(ctx context.Context, rules Rules, session *agenthost.Session,
 		ownerStateDue := movedWorkTree || time.Since(ownerStateWrittenAt) >= 15*time.Second
 		if rules.OwnerStateFile != "" && ownerStateDue {
 			ownerStateWrittenAt = time.Now()
-			state, err := readOwnerState(ctx, rules, session.Run, readOwnerWorkTree, focused.Repositories,
-				lastTakeFailure)
+			state, nextCachedOwnerState, err := readOwnerState(ctx, rules, session.Run, readOwnerWorkTree,
+				focused.Repositories, lastTakeFailure, cachedOwnerState)
+			// A failed read keeps the last cache, so an unreachable agent host does not read every work tree again.
 			if err == nil {
+				cachedOwnerState = nextCachedOwnerState
 				err = writeOwnerState(ctx, session.Run, rules.OwnerStateFile, state)
 			}
 			ownerStateFailure := ""

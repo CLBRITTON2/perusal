@@ -70,7 +70,8 @@ It reads `%APPDATA%\perusal\config.json`:
 - `ownerStateFile`, with `agentHost`, is a file on that machine perusal rewrites every 15 seconds and after each take
   with the branch, uncommitted files and upstream counts of each work tree under `ownerDir` whose clone is also under
   `agentDir` there, so the agent can read what you have checked out instead of asking. A repository only you have is
-  left out. Its folder must exist.
+  left out. Its folder must exist. A work tree's entry is read again only when its HEAD, index, config or refs
+  change, so an edit you have not staged shows up there once one of them does.
 
 Since git runs whatever a repository's `.git` tells it to, perusal refuses a repository whose `.git` the agent account
 can write. From an elevated prompt, for each repository:

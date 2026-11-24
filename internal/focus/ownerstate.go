@@ -18,11 +18,41 @@ import (
 	"github.com/CLBRITTON2/perusal/internal/gitrepo"
 )
 
+// ownerStateCache holds the last owner state read, each work tree by its path relative to the owner directory.
+type ownerStateCache struct {
+	repositories map[string]gitrepo.Repository
+	workTrees    map[string]stampedOwnerWorkTree
+}
+
+func emptyOwnerStateCache() ownerStateCache {
+	return ownerStateCache{repositories: map[string]gitrepo.Repository{}, workTrees: map[string]stampedOwnerWorkTree{}}
+}
+
+// stamps are the work tree's git state files as they were before workTree was read from them.
+type stampedOwnerWorkTree struct {
+	stamps   []gitrepo.FileStamp
+	workTree OwnerWorkTree
+}
+
+// readOwnerState opens and reads again only the work trees whose git state files changed since cache was filled,
+// since reading every one starts about ten git processes each, and returns the cache for the next read.
 func readOwnerState(ctx context.Context, rules Rules, run func(ctx context.Context, script string) ([]byte, error),
-	readOwnerWorkTree OwnerWorkTreeReader, focused []gitrepo.Repository, takeFailure string) (OwnerState, error) {
-	found, err := FindRepositories(ctx, rules)
+	readOwnerWorkTree OwnerWorkTreeReader, focused []gitrepo.Repository, takeFailure string,
+	cache ownerStateCache) (OwnerState, ownerStateCache, error) {
+	found, err := findRepositories(ctx, rules, func(ctx context.Context, relativePath string, dir string) (
+		gitrepo.Repository, error) {
+		gitDir, err := checkedGitDir(rules, dir)
+		if err != nil {
+			return gitrepo.Repository{}, err
+		}
+		opened, isOpened := cache.repositories[relativePath]
+		if isOpened && opened.GitDir == gitDir {
+			return opened, nil
+		}
+		return gitrepo.Open(ctx, gitrepo.Repository{Dir: dir, GitDir: gitDir})
+	})
 	if err != nil {
-		return OwnerState{}, err
+		return OwnerState{}, ownerStateCache{}, err
 	}
 	repositoryAgentClones := make([]string, len(found.Repositories))
 	repositoryAgentPaths := make([]string, len(found.Repositories))
@@ -32,10 +62,10 @@ func readOwnerState(ctx context.Context, rules Rules, run func(ctx context.Conte
 			clone = filepath.Dir(filepath.Dir(filepath.Dir(repository.Repository.GitDir)))
 		}
 		if repositoryAgentClones[index], err = agentCopyDir(rules, clone); err != nil {
-			return OwnerState{}, err
+			return OwnerState{}, ownerStateCache{}, err
 		}
 		if repositoryAgentPaths[index], err = agentCopyDir(rules, repository.Repository.Dir); err != nil {
-			return OwnerState{}, err
+			return OwnerState{}, ownerStateCache{}, err
 		}
 	}
 	refusalOwnerPaths := make([]string, len(found.Refusals))
@@ -43,13 +73,13 @@ func readOwnerState(ctx context.Context, rules Rules, run func(ctx context.Conte
 	for index, refusal := range found.Refusals {
 		refusalOwnerPaths[index] = filepath.Join(rules.OwnerDir, filepath.FromSlash(refusal.RelativePath))
 		if refusalAgentPaths[index], err = agentCopyDir(rules, refusalOwnerPaths[index]); err != nil {
-			return OwnerState{}, err
+			return OwnerState{}, ownerStateCache{}, err
 		}
 	}
 	candidateDirs := slices.Compact(slices.Sorted(slices.Values(slices.Concat(repositoryAgentClones, refusalAgentPaths))))
 	existingDirs, err := existingAgentDirs(ctx, run, candidateDirs)
 	if err != nil {
-		return OwnerState{}, err
+		return OwnerState{}, ownerStateCache{}, err
 	}
 	sharedIndexes := []int{}
 	for index := range found.Repositories {
@@ -59,22 +89,28 @@ func readOwnerState(ctx context.Context, rules Rules, run func(ctx context.Conte
 	}
 	readAt := time.Now()
 	workTrees := make([]OwnerWorkTree, len(sharedIndexes))
+	reads := make([]stampedOwnerWorkTree, len(sharedIndexes))
+	succeeded := make([]bool, len(sharedIndexes))
 	var group sync.WaitGroup
 	for position, index := range sharedIndexes {
 		repository := found.Repositories[index]
 		group.Go(func() {
-			workTree, err := readOwnerWorkTree(ctx, repository)
-			if err == nil && workTree.Branch != "" {
-				workTree.TakenCommit, err = repository.Repository.TakenCommit(ctx, workTree.Branch)
-			}
-			if err != nil {
-				workTree = refusedOwnerWorkTree(err)
-			}
+			reads[position], succeeded[position] = readStampedOwnerWorkTree(ctx, readOwnerWorkTree, repository,
+				cache.workTrees[repository.RelativePath])
 			workTrees[position] = withOwnerPaths(filepath.Clean(repository.Repository.Dir), repositoryAgentPaths[index],
-				workTree)
+				reads[position].workTree)
 		})
 	}
 	group.Wait()
+	nextCache := emptyOwnerStateCache()
+	for _, repository := range found.Repositories {
+		nextCache.repositories[repository.RelativePath] = repository.Repository
+	}
+	for position, index := range sharedIndexes {
+		if succeeded[position] {
+			nextCache.workTrees[found.Repositories[index].RelativePath] = reads[position]
+		}
+	}
 	for index, refusal := range found.Refusals {
 		if !slices.Contains(existingDirs, refusalAgentPaths[index]) {
 			continue
@@ -90,7 +126,27 @@ func readOwnerState(ctx context.Context, rules Rules, run func(ctx context.Conte
 		focusedPaths = append(focusedPaths, filepath.Clean(repository.Dir))
 	}
 	return OwnerState{ReadAt: readAt.Format(time.RFC3339), TakeFailure: takeFailure, Focused: focusedPaths,
-		WorkTrees: workTrees}, nil
+		WorkTrees: workTrees}, nextCache, nil
+}
+
+// It reports false for a failed read, which the caller leaves out of the cache so the next call reads it again.
+func readStampedOwnerWorkTree(ctx context.Context, readOwnerWorkTree OwnerWorkTreeReader, repository FoundRepository,
+	last stampedOwnerWorkTree) (stampedOwnerWorkTree, bool) {
+	stamps, err := repository.Repository.StateFileStamps()
+	if err != nil {
+		return stampedOwnerWorkTree{stamps: []gitrepo.FileStamp{}, workTree: refusedOwnerWorkTree(err)}, false
+	}
+	if slices.Equal(stamps, last.stamps) {
+		return last, true
+	}
+	workTree, err := readOwnerWorkTree(ctx, repository)
+	if err == nil && workTree.Branch != "" {
+		workTree.TakenCommit, err = repository.Repository.TakenCommit(ctx, workTree.Branch)
+	}
+	if err != nil {
+		return stampedOwnerWorkTree{stamps: []gitrepo.FileStamp{}, workTree: refusedOwnerWorkTree(err)}, false
+	}
+	return stampedOwnerWorkTree{stamps: stamps, workTree: workTree}, true
 }
 
 func agentCopyDir(rules Rules, ownerDir string) (string, error) {

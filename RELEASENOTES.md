@@ -8,7 +8,8 @@ release go under `## [Unreleased]`, renamed to the version when it is tagged.
 
 - `perusal follow` with `agentHost` writes the state of each work tree under `ownerDir` whose clone the agent's host
   also has (branch, HEAD, uncommitted files, upstream counts, the last taken commit) as JSON to `ownerStateFile` there
-  every 15 seconds and after each take, and shows a failed write in the footer.
+  every 15 seconds and after each take, and shows a failed write in the footer. It runs git again only in the work
+  trees whose HEAD, index, config or refs changed, so a write while nothing changed starts no git.
 - The commit summary wraps onto up to three rows instead of scrolling sideways. `ctrl+a` selects all of the summary
   or description, so `backspace` clears it and typing replaces it.
 - The overview's repository table takes one line per work tree instead of the top half of the screen, and the

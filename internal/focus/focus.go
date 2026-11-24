@@ -213,6 +213,16 @@ func resolvePath(ctx context.Context, rules Rules, agentPath string) (gitrepo.Re
 // FindRepositories lists every work tree under the owner directory, checked as resolve checks a focused one. It does
 // not look inside a work tree, so a nested one is not listed.
 func FindRepositories(ctx context.Context, rules Rules) (Found, error) {
+	return findRepositories(ctx, rules, func(ctx context.Context, relativePath string, dir string) (gitrepo.Repository,
+		error) {
+		return openWorkTree(ctx, rules, dir)
+	})
+}
+
+// findRepositories is FindRepositories opening each work tree with open, which gets its forward slash path relative to
+// the owner directory and its directory.
+func findRepositories(ctx context.Context, rules Rules, open func(ctx context.Context, relativePath string,
+	dir string) (gitrepo.Repository, error)) (Found, error) {
 	type uncheckedWorkTree struct {
 		relativePath string
 		dir          string
@@ -255,7 +265,7 @@ func FindRepositories(ctx context.Context, rules Rules) (Found, error) {
 	var group sync.WaitGroup
 	for index, workTree := range workTrees {
 		group.Go(func() {
-			opened[index], errs[index] = openWorkTree(ctx, rules, workTree.dir)
+			opened[index], errs[index] = open(ctx, workTree.relativePath, workTree.dir)
 		})
 	}
 	group.Wait()
