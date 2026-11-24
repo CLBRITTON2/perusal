@@ -11,6 +11,8 @@ release go under `## [Unreleased]`, renamed to the version when it is tagged.
   every 15 seconds and after each take, and shows a failed write in the footer.
 - The commit summary wraps onto up to three rows instead of scrolling sideways. `ctrl+a` selects all of the summary
   or description, so `backspace` clears it and typing replaces it.
+- The overview's repository table takes one line per work tree instead of the top half of the screen, and the
+  changes, outgoing and incoming panes below it take the rest, at least 5 rows.
 
 ## [0.2.0] - 2026-11-21
 

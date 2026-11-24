@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"reflect"
 	"slices"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -419,6 +420,43 @@ func TestTheOverviewDetailsTheSelectedRepository(t *testing.T) {
 	if second := ansi.Strip(m.renderScreen()); strings.Contains(second, "edited.go") ||
 		strings.Contains(second, "aaa1111") {
 		t.Fatalf("got screen:\n%s\nwant the details of second only", second)
+	}
+}
+
+func TestOverviewTableHeight(t *testing.T) {
+	t.Run("aShortListTakesOneLinePerRow", aShortOverviewListTakesOneLinePerRow)
+	t.Run("aLongListLeavesTheDetailsFiveRows", aLongOverviewListLeavesTheDetailsFiveRows)
+	t.Run("aFilterKeepsTheHeight", aFilterKeepsTheOverviewTableHeight)
+}
+
+func aShortOverviewListTakesOneLinePerRow(t *testing.T) {
+	assertDetailsTopBorderOnLine(t, overviewWithTwoRepositories(t), headerHeight+1+2+1)
+}
+
+func aLongOverviewListLeavesTheDetailsFiveRows(t *testing.T) {
+	rows := []overviewRow{}
+	for index := range 40 {
+		name := "repo" + strconv.Itoa(index)
+		rows = append(rows, repositoryRow{FoundRepository: foundAt(name, "C:/dev/"+name)})
+	}
+	m := update(t, overviewWithTwoRepositories(t), overviewMsg{rows: rows})
+
+	assertDetailsTopBorderOnLine(t, m, m.height-footerHeight-(5+2))
+}
+
+func aFilterKeepsTheOverviewTableHeight(t *testing.T) {
+	m := typeText(t, overviewWithTwoRepositories(t), "/elsewhere")
+
+	assertDetailsTopBorderOnLine(t, m, headerHeight+1+2+1)
+}
+
+func assertDetailsTopBorderOnLine(t *testing.T, m Model, want int) {
+	t.Helper()
+	lines := strings.Split(ansi.Strip(m.renderScreen()), "\n")
+	detailsTop := slices.IndexFunc(lines, func(line string) bool { return strings.Contains(line, "─ changes ─") })
+	if detailsTop != want {
+		t.Fatalf("got the details' top border on line %d, want %d, screen:\n%s", detailsTop, want,
+			strings.Join(lines, "\n"))
 	}
 }
 

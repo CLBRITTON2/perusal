@@ -782,7 +782,7 @@ func (m Model) openRepositoryRow(row repositoryRow) (tea.Model, tea.Cmd) {
 	return m.withFocusedRepository(row.Repository)
 }
 
-// The table takes the top half and the selected repository's changes, outgoing and incoming commits the rest.
+// The table sits on top and the selected repository's changes, outgoing and incoming commits take the rest.
 func (m Model) renderOverview() string {
 	var title, emptyText string
 	if len(m.overviewQueryWords()) > 0 {
@@ -796,8 +796,11 @@ func (m Model) renderOverview() string {
 	return lipgloss.JoinVertical(lipgloss.Left, table, m.renderOverviewDetails())
 }
 
+// The table fits every row, filtered out ones too so typing a filter keeps the layout, while the details below keep
+// 5 rows.
 func (m Model) overviewTableInnerHeight() int {
-	return max(m.columnHeight()-m.columnHeight()/2-2, 0)
+	available := max(m.columnHeight()-2-(5+2), 0)
+	return min(max(len(m.overviewRows), 1), available)
 }
 
 func (m Model) acceptsOverviewMouse() bool {
@@ -827,7 +830,7 @@ func (m Model) scrollOverview(mouse tea.Mouse) Model {
 }
 
 func (m Model) renderOverviewDetails() string {
-	height := max(m.columnHeight()/2-2, 0)
+	height := max(m.columnHeight()-(m.overviewTableInnerHeight()+2)-2, 0)
 	selected, _ := m.overview.selectedRow()
 	row, isRepository := selected.(repositoryRow)
 	if !isRepository {
