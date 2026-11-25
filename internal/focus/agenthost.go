@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"maps"
 	"path/filepath"
 	"slices"
 	"strings"
@@ -18,12 +19,13 @@ import (
 )
 
 // FollowAgentHost waits through session, up to waitTimeout at a time, for a change to the focus file on rules.AgentHost
-// or to the agent's copy of a focused repository, then reads the focus file and sends a Result when what it reads
-// changed. When the agent's side changed, it takes the agent's new commits in every focused repository into the owner's
-// work tree. When the failed takes change, it sends their errors joined on the second channel, and an empty string once
-// every take succeeds again. While a focused path has no owner copy, it resolves the focus file every poll, so a
-// worktree the owner adds, by hand or with CreateWorkTree, is picked up with no change to the focus file. Every channel
-// closes when ctx ends.
+// or to the agent's copy of a paired work tree, then reads the focus file and sends a Result when what it reads
+// changed. It takes the agent's new commits into each paired work tree whose agent copy changed. A paired work tree is
+// one under rules.OwnerDir whose agent copy exists at the same path under rules.AgentDir, found again when the focus
+// changes and every 15 seconds. When the failed takes and refused paired work trees change, it sends their errors
+// joined on the second channel, and an empty string once every take succeeds again. While a focused path has no owner
+// copy, it resolves the focus file every poll, so a worktree the owner adds, by hand or with CreateWorkTree, is picked
+// up with no change to the focus file. Every channel closes when ctx ends.
 func FollowAgentHost(ctx context.Context, rules Rules, session *agenthost.Session, waitTimeout time.Duration,
 	readOwnerWorkTree OwnerWorkTreeReader) (<-chan Result, <-chan string, <-chan string) {
 	results := make(chan Result)
@@ -154,16 +156,21 @@ func pollAgentHost(ctx context.Context, rules Rules, session *agenthost.Session,
 	lastResult := Result{}
 	resolvesEachPoll := false
 	focused := Focus{Repositories: []gitrepo.Repository{}, Refusals: []error{}}
-	focusedAgentDirs := []string{}
+	scan := emptyOwnerScan()
+	var scanErr error
+	scannedAt := time.Time{}
+	paired := scan.paired()
+	// The owner may fix a failed take without the agent's side changing, so each is retried every poll.
+	failedTakes := map[string]string{}
 	lastTakeFailure := ""
-	ownerStateWrittenAt := time.Time{}
 	lastOwnerStateFailure := ""
-	cachedOwnerState := emptyOwnerStateCache()
+	cachedOwnerWorkTrees := map[string]stampedOwnerWorkTree{}
 	for {
-		changed, waitErr := session.WaitForChange(ctx, focusedAgentDirs, rules.FocusFile, waitTimeout)
+		changedDirs, waitErr := session.WaitForChangedDirs(ctx, paired.agentDirs, rules.FocusFile, waitTimeout)
 		if ctx.Err() != nil {
 			return
 		}
+		focusChanged := false
 		output, err := session.Run(ctx, readScript)
 		var readErr error
 		switch {
@@ -176,7 +183,6 @@ func pollAgentHost(ctx context.Context, rules Rules, session *agenthost.Session,
 		if readErr != nil {
 			lastContent = ""
 			focused = Focus{Repositories: []gitrepo.Repository{}, Refusals: []error{}}
-			focusedAgentDirs = []string{}
 			if readErr.Error() != lastReadFailure && !sendResult(ctx, results, Result{Err: readErr}) {
 				return
 			}
@@ -187,59 +193,83 @@ func pollAgentHost(ctx context.Context, rules Rules, session *agenthost.Session,
 			lastReadFailure = ""
 			resolvedPaths, resolveErr := resolveContent(ctx, rules, lastContent)
 			offeredWorkTrees, offeredErr := existingOnAgentHost(ctx, session.Run, resolvedPaths.MissingWorkTrees)
-			resolved := Focus{Repositories: resolvedPaths.Repositories, Refusals: resolvedPaths.Refusals,
+			focused = Focus{Repositories: resolvedPaths.Repositories, Refusals: resolvedPaths.Refusals,
 				MissingWorkTrees: offeredWorkTrees}
-			resolvesEachPoll = lacksOwnerCopy(resolved, resolveErr)
-			resolvedAgentDirs, agentDirsErr := agentCopyDirs(rules, resolved.Repositories)
-			if agentDirsErr != nil {
-				focused = Focus{Repositories: []gitrepo.Repository{}, Refusals: []error{}}
-				focusedAgentDirs = []string{}
-			} else {
-				focused = resolved
-				focusedAgentDirs = resolvedAgentDirs
-			}
-			resolvedResult := Result{Focus: focused, Err: errors.Join(resolveErr, offeredErr, agentDirsErr)}
+			resolvesEachPoll = lacksOwnerCopy(focused, resolveErr)
+			resolvedResult := Result{Focus: focused, Err: errors.Join(resolveErr, offeredErr)}
 			if contentChanged || !isSameResult(lastResult, resolvedResult) {
-				changed = true
+				focusChanged = true
 				if !sendResult(ctx, results, resolvedResult) {
 					return
 				}
 			}
 			lastResult = resolvedResult
 		}
-		movedWorkTree := false
-		// A failed take is retried every poll, since the owner may fix it without the agent's side changing.
-		if changed || waitErr != nil || lastTakeFailure != "" {
-			failures := []string{}
-			if waitErr != nil {
-				failures = append(failures, waitErr.Error())
-			}
-			repositoryFailures, moved := takeAgentCommits(ctx, rules, session, focused.Repositories, focusedAgentDirs)
-			movedWorkTree = moved
-			failures = append(failures, repositoryFailures...)
-			takeFailure := strings.Join(failures, ", ")
-			if takeFailure != lastTakeFailure {
-				select {
-				case <-ctx.Done():
-					return
-				case takeFailures <- takeFailure:
-				}
-				lastTakeFailure = takeFailure
+		scanDue := focusChanged || time.Since(scannedAt) >= 15*time.Second
+		if scanDue {
+			scannedAt = time.Now()
+			nextScan, err := scanOwnerDir(ctx, rules, session.Run, scan)
+			scanErr = err
+			// A failed scan keeps the last paired work trees.
+			if err == nil {
+				scan = nextScan
+				paired = scan.paired()
+				maps.DeleteFunc(failedTakes, func(agentDir string, failure string) bool {
+					return !slices.Contains(paired.agentDirs, agentDir)
+				})
 			}
 		}
-		ownerStateDue := movedWorkTree || time.Since(ownerStateWrittenAt) >= 15*time.Second
-		if rules.OwnerStateFile != "" && ownerStateDue {
-			ownerStateWrittenAt = time.Now()
-			state, nextCachedOwnerState, err := readOwnerState(ctx, rules, session.Run, readOwnerWorkTree,
-				focused.Repositories, lastTakeFailure, cachedOwnerState)
-			// A failed read keeps the last cache, so an unreachable agent host does not read every work tree again.
-			if err == nil {
-				cachedOwnerState = nextCachedOwnerState
-				err = writeOwnerState(ctx, session.Run, rules.OwnerStateFile, state)
+		takenRepositories := []gitrepo.Repository{}
+		takenAgentDirs := []string{}
+		for index, agentDir := range paired.agentDirs {
+			_, failed := failedTakes[agentDir]
+			if waitErr != nil || failed || slices.Contains(changedDirs, agentDir) {
+				takenRepositories = append(takenRepositories, paired.repositories[index])
+				takenAgentDirs = append(takenAgentDirs, agentDir)
+			}
+		}
+		takeErrs, movedWorkTree := takeAgentCommits(ctx, rules, session, takenRepositories, takenAgentDirs)
+		for index, agentDir := range takenAgentDirs {
+			if takeErrs[index] == nil {
+				delete(failedTakes, agentDir)
+			} else {
+				failedTakes[agentDir] = takeErrs[index].Error()
+			}
+		}
+		failures := slices.Clone(paired.refusals)
+		if waitErr != nil {
+			failures = append(failures, waitErr.Error())
+		}
+		if scanErr != nil {
+			failures = append(failures, scanErr.Error())
+		}
+		for _, agentDir := range paired.agentDirs {
+			failure, failed := failedTakes[agentDir]
+			// A failed read of the agent's HEADs fails every take with the same error, shown once.
+			if failed && !slices.Contains(failures, failure) {
+				failures = append(failures, failure)
+			}
+		}
+		takeFailure := strings.Join(failures, ", ")
+		if takeFailure != lastTakeFailure {
+			select {
+			case <-ctx.Done():
+				return
+			case takeFailures <- takeFailure:
+			}
+			lastTakeFailure = takeFailure
+		}
+		if rules.OwnerStateFile != "" && (movedWorkTree || scanDue) {
+			ownerStateErr := scanErr
+			if scanErr == nil {
+				var state OwnerState
+				state, cachedOwnerWorkTrees = readOwnerState(ctx, readOwnerWorkTree, scan, focused.Repositories,
+					lastTakeFailure, cachedOwnerWorkTrees)
+				ownerStateErr = writeOwnerState(ctx, session.Run, rules.OwnerStateFile, state)
 			}
 			ownerStateFailure := ""
-			if err != nil {
-				ownerStateFailure = "owner state not written: " + err.Error()
+			if ownerStateErr != nil {
+				ownerStateFailure = "owner state not written: " + ownerStateErr.Error()
 			}
 			if ownerStateFailure != lastOwnerStateFailure {
 				select {
@@ -261,15 +291,18 @@ func pollAgentHost(ctx context.Context, rules Rules, session *agenthost.Session,
 	}
 }
 
-// takeAgentCommits brings the agent's new commits in each focused repository into the owner's, leaving the agent's
-// copies as they are, and returns what failed.
+// takeAgentCommits brings the agent's new commits in each of repositories into the owner's, leaving the agent's copies
+// at agentDirs as they are, and returns each one's error, and whether any work tree moved.
 func takeAgentCommits(ctx context.Context, rules Rules, session *agenthost.Session, repositories []gitrepo.Repository,
-	agentDirs []string) ([]string, bool) {
+	agentDirs []string) ([]error, bool) {
+	takeErrs := make([]error, len(repositories))
 	heads, err := gitrepo.ReadAgentHeads(ctx, session.Run, agentDirs)
 	if err != nil {
-		return []string{err.Error()}, false
+		for index := range takeErrs {
+			takeErrs[index] = err
+		}
+		return takeErrs, false
 	}
-	takeErrs := make([]error, len(repositories))
 	moved := make([]bool, len(repositories))
 	var group sync.WaitGroup
 	for index, repository := range repositories {
@@ -279,13 +312,7 @@ func takeAgentCommits(ctx context.Context, rules Rules, session *agenthost.Sessi
 		})
 	}
 	group.Wait()
-	failures := []string{}
-	for _, takeErr := range takeErrs {
-		if takeErr != nil {
-			failures = append(failures, takeErr.Error())
-		}
-	}
-	return failures, slices.Contains(moved, true)
+	return takeErrs, slices.Contains(moved, true)
 }
 
 // agentCopyDirs are the agent's copies of repositories on the agent host, each at the same path under rules.AgentDir as

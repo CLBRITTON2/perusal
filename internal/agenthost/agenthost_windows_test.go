@@ -27,29 +27,35 @@ func TestSession(t *testing.T) {
 				startsANewShellAfterAScriptTimesOut(t, shellName)
 			})
 			t.Run("refusesAResultOverOneMebibyte", func(t *testing.T) { refusesAResultOverOneMebibyte(t, shellName) })
-			t.Run("waitForChangeReportsAWriteToTheFileOrUnderADirButNotToGitObjects", func(t *testing.T) {
-				waitForChangeReportsAWriteToTheFileOrUnderADirButNotToGitObjects(t, shellName)
+			t.Run("waitForChangedDirsReturnsEveryDirOnANewWatchThenOnlyTheDirWrittenOutsideGitObjects",
+				func(t *testing.T) {
+					waitForChangedDirsReturnsEveryDirOnANewWatchThenOnlyTheDirWrittenOutsideGitObjects(t, shellName)
+				})
+			t.Run("waitForChangedDirsEndsOnAWriteToTheFileWithNoDirChanged", func(t *testing.T) {
+				waitForChangedDirsEndsOnAWriteToTheFileWithNoDirChanged(t, shellName)
 			})
 		})
 	}
 }
 
-func waitForChangeReportsAWriteToTheFileOrUnderADirButNotToGitObjects(t *testing.T, shellName string) {
+func waitForChangedDirsReturnsEveryDirOnANewWatchThenOnlyTheDirWrittenOutsideGitObjects(t *testing.T,
+	shellName string) {
 	session := localSession(t, shellName)
 	focusFile := filepath.Join(t.TempDir(), "focus")
 	workTree := t.TempDir()
+	otherWorkTree := t.TempDir()
+	missingWorkTree := filepath.Join(t.TempDir(), "missing")
+	dirs := []string{workTree, otherWorkTree, missingWorkTree}
 	objects := filepath.Join(workTree, ".git", "objects")
-	object := filepath.Join(objects, "object")
-	workTreeFile := filepath.Join(workTree, "a.txt")
 	err := os.MkdirAll(objects, 0o755)
 	require.NoError(t, err)
 	ctx := context.Background()
-	waitForChange := func(write func()) bool {
+	waitForChange := func(write func()) []string {
 		t.Helper()
 		time.AfterFunc(300*time.Millisecond, write)
-		changed, err := session.WaitForChange(ctx, []string{workTree}, focusFile, 3*time.Second)
+		changedDirs, err := session.WaitForChangedDirs(ctx, dirs, focusFile, 3*time.Second)
 		require.NoError(t, err)
-		return changed
+		return changedDirs
 	}
 	writeTo := func(path string) func() {
 		return func() {
@@ -57,19 +63,40 @@ func waitForChangeReportsAWriteToTheFileOrUnderADirButNotToGitObjects(t *testing
 			assert.NoError(t, err)
 		}
 	}
-	writeObject := writeTo(object)
-	writeFocusFile := writeTo(focusFile)
-	writeWorkTreeFile := writeTo(workTreeFile)
+	writeObject := writeTo(filepath.Join(objects, "object"))
+	writeOtherWorkTreeFile := writeTo(filepath.Join(otherWorkTree, "a.txt"))
+	writeWorkTreeFile := writeTo(filepath.Join(workTree, "a.txt"))
 
 	firstChanged := waitForChange(func() {})
 	objectChanged := waitForChange(writeObject)
-	focusFileChanged := waitForChange(writeFocusFile)
-	workTreeFileChanged := waitForChange(writeWorkTreeFile)
+	otherWorkTreeChanged := waitForChange(writeOtherWorkTreeFile)
+	workTreeChanged := waitForChange(writeWorkTreeFile)
 
-	require.True(t, firstChanged)
-	require.False(t, objectChanged)
-	require.True(t, focusFileChanged)
-	require.True(t, workTreeFileChanged)
+	require.Equal(t, dirs, firstChanged)
+	require.Empty(t, objectChanged)
+	require.Equal(t, []string{otherWorkTree}, otherWorkTreeChanged)
+	require.Equal(t, []string{workTree}, workTreeChanged)
+}
+
+func waitForChangedDirsEndsOnAWriteToTheFileWithNoDirChanged(t *testing.T, shellName string) {
+	session := localSession(t, shellName)
+	focusFile := filepath.Join(t.TempDir(), "focus")
+	dirs := []string{t.TempDir()}
+	ctx := context.Background()
+	_, err := session.WaitForChangedDirs(ctx, dirs, focusFile, 3*time.Second)
+	require.NoError(t, err)
+	time.AfterFunc(300*time.Millisecond, func() {
+		err := os.WriteFile(focusFile, []byte("x"), 0o644)
+		assert.NoError(t, err)
+	})
+	started := time.Now()
+
+	changedDirs, err := session.WaitForChangedDirs(ctx, dirs, focusFile, 10*time.Second)
+
+	waited := time.Since(started)
+	require.NoError(t, err)
+	require.Empty(t, changedDirs)
+	require.Less(t, waited, 5*time.Second)
 }
 
 func runsEveryScriptInOneShell(t *testing.T, shellName string) {

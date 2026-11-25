@@ -39,12 +39,11 @@ func TestReadOwnerStateKeepsEachFailedReadAndRefusedPathAsItsRefusal(t *testing.
 	sideSlashed := filepath.ToSlash(side)
 	repositorySlashed := filepath.ToSlash(repository)
 	focused := []gitrepo.Repository{{Dir: sideSlashed}, {Dir: repositorySlashed}}
-	cache := emptyOwnerStateCache()
+	scan := scannedOwnerDir(t, rules, runLocalScript, emptyOwnerScan())
 
-	state, _, err := readOwnerState(context.Background(), rules, runLocalScript, readOwnerWorkTree, focused,
-		"a.go would be overwritten", cache)
+	state, _ := readOwnerState(context.Background(), readOwnerWorkTree, scan, focused, "a.go would be overwritten",
+		map[string]stampedOwnerWorkTree{})
 
-	require.NoError(t, err)
 	require.Len(t, state.WorkTrees, 3)
 	brokenRefusal := state.WorkTrees[0].Refusal
 	require.NotEmpty(t, brokenRefusal)
@@ -64,7 +63,7 @@ func TestReadOwnerStateKeepsEachFailedReadAndRefusedPathAsItsRefusal(t *testing.
 	require.Equal(t, want, state)
 }
 
-func TestReadOwnerStateListsOnlyWorkTreesWhoseCloneIsOnTheAgentHostInOneScript(t *testing.T) {
+func TestReadOwnerStateListsOnlyWorkTreesWhoseCloneIsOnTheAgentHostAfterAScanOfOneScript(t *testing.T) {
 	devDir := t.TempDir()
 	repository, side := repositoryWithWorkTree(t, devDir)
 	gitInit(t, filepath.Join(devDir, "laptop-only"))
@@ -78,12 +77,11 @@ func TestReadOwnerStateListsOnlyWorkTreesWhoseCloneIsOnTheAgentHostInOneScript(t
 	readOwnerWorkTree := func(ctx context.Context, found FoundRepository) (OwnerWorkTree, error) {
 		return OwnerWorkTree{ChangedFiles: []string{}}, nil
 	}
-	cache := emptyOwnerStateCache()
+	scan := scannedOwnerDir(t, rules, countedRun, emptyOwnerScan())
 
-	state, _, err := readOwnerState(context.Background(), rules, countedRun, readOwnerWorkTree, []gitrepo.Repository{}, "",
-		cache)
+	state, _ := readOwnerState(context.Background(), readOwnerWorkTree, scan, []gitrepo.Repository{}, "",
+		map[string]stampedOwnerWorkTree{})
 
-	require.NoError(t, err)
 	require.Equal(t, 1, scripts)
 	ownerPaths := []string{}
 	for _, workTree := range state.WorkTrees {
@@ -108,13 +106,13 @@ func TestReadOwnerStateReadsAgainOnlyTheWorkTreesWhoseGitStateFilesChanged(t *te
 		subject := "read " + strconv.Itoa(readCount)
 		return OwnerWorkTree{HeadSubject: subject, ChangedFiles: []string{}}, nil
 	}
-	cache := emptyOwnerStateCache()
+	scan := scannedOwnerDir(t, rules, runLocalScript, emptyOwnerScan())
+	cache := map[string]stampedOwnerWorkTree{}
 	readAgain := func() ([]string, []OwnerWorkTree) {
 		t.Helper()
 		readPaths = []string{}
-		state, nextCache, err := readOwnerState(context.Background(), rules, runLocalScript, readOwnerWorkTree,
-			[]gitrepo.Repository{}, "", cache)
-		require.NoError(t, err)
+		state, nextCache := readOwnerState(context.Background(), readOwnerWorkTree, scan, []gitrepo.Repository{}, "",
+			cache)
 		cache = nextCache
 		slices.Sort(readPaths)
 		return readPaths, state.WorkTrees
@@ -135,32 +133,23 @@ func TestReadOwnerStateReadsAgainOnlyTheWorkTreesWhoseGitStateFilesChanged(t *te
 	require.Equal(t, firstWorkTrees, unchangedWorkTrees)
 }
 
-func TestReadOwnerStateReusesTheRepositoryOpenedForAnUnchangedGitDir(t *testing.T) {
+func TestScanOwnerDirReusesTheRepositoryOpenedForAnUnchangedGitDir(t *testing.T) {
 	devDir := t.TempDir()
 	repository, _ := repositoryWithWorkTree(t, devDir)
 	agentDir := agentDirHolding(t, "repo")
 	rules := agentHostRules(t, agentDir, devDir)
-	readOwnerWorkTree := func(ctx context.Context, found FoundRepository) (OwnerWorkTree, error) {
-		return OwnerWorkTree{ChangedFiles: []string{}}, nil
-	}
-	firstCache := emptyOwnerStateCache()
-	_, cache, err := readOwnerState(context.Background(), rules, runLocalScript, readOwnerWorkTree,
-		[]gitrepo.Repository{}, "", firstCache)
-	require.NoError(t, err)
-	// Open would find the side work tree's real top level, so only the cached repository carries this one.
-	cachedSide := cache.repositories["repo-side"]
-	cachedSide.Dir = filepath.Join(devDir, "cached-side")
-	cache.repositories["repo-side"] = cachedSide
+	lastScan := scannedOwnerDir(t, rules, runLocalScript, emptyOwnerScan())
+	// Open would find the side work tree's real top level, so only the last scan's repository carries this one.
+	cachedSideDir := filepath.Join(devDir, "cached-side")
+	lastScan.found.Repositories[1].Repository.Dir = cachedSideDir
 
-	state, _, err := readOwnerState(context.Background(), rules, runLocalScript, readOwnerWorkTree,
-		[]gitrepo.Repository{}, "", cache)
+	scan := scannedOwnerDir(t, rules, runLocalScript, lastScan)
 
-	require.NoError(t, err)
-	ownerPaths := []string{}
-	for _, workTree := range state.WorkTrees {
-		ownerPaths = append(ownerPaths, workTree.OwnerPath)
+	dirs := []string{}
+	for _, found := range scan.found.Repositories {
+		dirs = append(dirs, filepath.Clean(found.Repository.Dir))
 	}
-	require.Equal(t, []string{cachedSide.Dir, repository}, ownerPaths)
+	require.Equal(t, []string{repository, cachedSideDir}, dirs)
 }
 
 func TestReadOwnerStateReadsAFailedWorkTreeAgainWhileItsGitStateFilesAreUnchanged(t *testing.T) {
@@ -182,21 +171,18 @@ func TestReadOwnerStateReadsAFailedWorkTreeAgainWhileItsGitStateFilesAreUnchange
 		}
 		return OwnerWorkTree{ChangedFiles: []string{}}, nil
 	}
-	firstCache := emptyOwnerStateCache()
-	_, cache, err := readOwnerState(context.Background(), rules, runLocalScript, readOwnerWorkTree,
-		[]gitrepo.Repository{}, "", firstCache)
-	require.NoError(t, err)
+	scan := scannedOwnerDir(t, rules, runLocalScript, emptyOwnerScan())
+	_, cache := readOwnerState(context.Background(), readOwnerWorkTree, scan, []gitrepo.Repository{}, "",
+		map[string]stampedOwnerWorkTree{})
 
-	state, _, err := readOwnerState(context.Background(), rules, runLocalScript, readOwnerWorkTree,
-		[]gitrepo.Repository{}, "", cache)
+	state, _ := readOwnerState(context.Background(), readOwnerWorkTree, scan, []gitrepo.Repository{}, "", cache)
 
-	require.NoError(t, err)
 	require.Equal(t, 2, sideReads)
 	require.Len(t, state.WorkTrees, 2)
 	require.Empty(t, state.WorkTrees[1].Refusal)
 }
 
-func TestReadOwnerStateFailsOnAWorkTreeWhoseCloneIsOutsideTheOwnerDir(t *testing.T) {
+func TestScanOwnerDirFailsOnAWorkTreeWhoseCloneIsOutsideTheOwnerDir(t *testing.T) {
 	devDir := t.TempDir()
 	elsewhere := filepath.Join(t.TempDir(), "elsewhere")
 	gitInit(t, elsewhere)
@@ -210,16 +196,64 @@ func TestReadOwnerStateFailsOnAWorkTreeWhoseCloneIsOutsideTheOwnerDir(t *testing
 		scripts++
 		return runLocalScript(ctx, script)
 	}
-	readOwnerWorkTree := func(ctx context.Context, found FoundRepository) (OwnerWorkTree, error) {
-		return OwnerWorkTree{ChangedFiles: []string{}}, nil
-	}
-	cache := emptyOwnerStateCache()
 
-	_, _, err := readOwnerState(context.Background(), rules, countedRun, readOwnerWorkTree, []gitrepo.Repository{}, "",
-		cache)
+	_, err := scanOwnerDir(context.Background(), rules, countedRun, emptyOwnerScan())
 
 	require.ErrorContains(t, err, "is not under")
 	require.Zero(t, scripts)
+}
+
+func TestPairedWorkTrees(t *testing.T) {
+	t.Run("pairsOnlyTheWorkTreesWhoseOwnAgentCopyExists", pairsOnlyTheWorkTreesWhoseOwnAgentCopyExists)
+	t.Run("keepsOnlyTheRefusalsOfRefusedWorkTreesWhoseAgentCopyExists",
+		keepsOnlyTheRefusalsOfRefusedWorkTreesWhoseAgentCopyExists)
+}
+
+func pairsOnlyTheWorkTreesWhoseOwnAgentCopyExists(t *testing.T) {
+	devDir := t.TempDir()
+	repository, _ := repositoryWithWorkTree(t, devDir)
+	gitInit(t, filepath.Join(devDir, "laptop-only"))
+	agentDir := agentDirHolding(t, "repo")
+	rules := agentHostRules(t, agentDir, devDir)
+	scan := scannedOwnerDir(t, rules, runLocalScript, emptyOwnerScan())
+
+	paired := scan.paired()
+
+	repositoryAgentDir := filepath.Join(agentDir, "repo")
+	require.Equal(t, []string{repositoryAgentDir}, paired.agentDirs)
+	require.Len(t, paired.repositories, 1)
+	requireSameDirectory(t, paired.repositories[0].Dir, repository)
+	require.Empty(t, paired.refusals)
+}
+
+func keepsOnlyTheRefusalsOfRefusedWorkTreesWhoseAgentCopyExists(t *testing.T) {
+	devDir := t.TempDir()
+	repositoryWithWorkTree(t, devDir)
+	broken := filepath.Join(devDir, "broken")
+	mustMkdir(t, broken)
+	writeGitFile(t, broken, filepath.Join(devDir, "missing"))
+	laptopOnlyBroken := filepath.Join(devDir, "laptop-only-broken")
+	mustMkdir(t, laptopOnlyBroken)
+	writeGitFile(t, laptopOnlyBroken, filepath.Join(devDir, "missing"))
+	agentDir := agentDirHolding(t, "repo-side", "broken")
+	rules := agentHostRules(t, agentDir, devDir)
+	scan := scannedOwnerDir(t, rules, runLocalScript, emptyOwnerScan())
+
+	paired := scan.paired()
+
+	sideAgentDir := filepath.Join(agentDir, "repo-side")
+	brokenGitDir := filepath.Join(devDir, "missing")
+	require.Equal(t, []string{sideAgentDir}, paired.agentDirs)
+	require.Len(t, paired.refusals, 1)
+	require.Contains(t, paired.refusals[0], brokenGitDir)
+}
+
+func scannedOwnerDir(t *testing.T, rules Rules, run func(ctx context.Context, script string) ([]byte, error),
+	last ownerScan) ownerScan {
+	t.Helper()
+	scan, err := scanOwnerDir(context.Background(), rules, run, last)
+	require.NoError(t, err)
+	return scan
 }
 
 func agentDirHolding(t *testing.T, clones ...string) string {

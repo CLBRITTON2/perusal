@@ -10,6 +10,7 @@ import (
 	"io"
 	"os"
 	"os/exec"
+	"slices"
 	"strings"
 	"sync"
 	"time"
@@ -96,62 +97,84 @@ func (session *Session) Run(ctx context.Context, script string) ([]byte, error) 
 	return []byte(result.Output), nil
 }
 
-// WaitForChange waits up to timeout for a change to file or to anything under one of dirs, all Windows paths on the
-// host. The first wait on a new set of paths, as in a new shell, reports a change, since nothing watched before it.
-// Changes inside a .git's objects and logs do not count, since a commit that writes them also moves a ref. A watcher
-// whose buffer overflowed counts as a change. A dir missing on the host is not watched.
-func (session *Session) WaitForChange(ctx context.Context, dirs []string, file string,
-	timeout time.Duration) (bool, error) {
+// The JSON WaitForChangedDirs' script prints. Every is set when the wait cannot say which dirs changed.
+type changedDirsOutput struct {
+	Every   bool  `json:"every"`
+	Indexes []int `json:"indexes"`
+}
+
+// WaitForChangedDirs waits up to timeout for a change to file or to anything under one of dirs, all Windows paths on
+// the host, and returns the dirs that changed, in the order of dirs. A change to file only ends the wait. The first
+// wait on a new set of paths, as in a new shell, and a watcher whose buffer overflowed return every one of dirs, since
+// nothing says which changed. Changes inside a .git's objects and logs do not count, since a commit that writes them
+// also moves a ref. A dir missing on the host is not watched.
+func (session *Session) WaitForChangedDirs(ctx context.Context, dirs []string, file string,
+	timeout time.Duration) ([]string, error) {
 	quotedDirs := make([]string, len(dirs))
 	for index, dir := range dirs {
 		quotedDirs[index] = QuotedString(dir)
 	}
 	separator := strings.LastIndexAny(file, `\/`)
 	if separator < 0 {
-		return false, fmt.Errorf("ssh %s: watch %s: want a full path", session.host, file)
+		return []string{}, fmt.Errorf("ssh %s: watch %s: want a full path", session.host, file)
 	}
-	// Events queue in the shell between waits, so a change made while a take ran still counts.
+	// Events queue in the shell between waits, so a change made while a take ran still counts. Each event carries the
+	// index of the dir its watcher watches, -1 for file.
 	script := strings.Join([]string{
 		"$watchKey = " + QuotedString(file+"|"+strings.Join(dirs, "|")),
-		"$changed = $global:perusalWatchKey -ne $watchKey",
-		"if ($changed) { " +
+		"$dirs = @(" + strings.Join(quotedDirs, ", ") + ")",
+		"$every = $global:perusalWatchKey -ne $watchKey",
+		"if ($every) { " +
 			"Get-EventSubscriber | Where-Object SourceIdentifier -like 'perusal-*' | Unregister-Event; " +
 			"Get-Event | Remove-Event; " +
 			"@($global:perusalWatchers) | Where-Object { $null -ne $_ } | ForEach-Object { $_.Dispose() }; " +
 			"$fileWatcher = New-Object IO.FileSystemWatcher -ArgumentList " + QuotedString(file[:separator]) + ", " +
 			QuotedString(file[separator+1:]) + "; " +
-			"$dirWatchers = @(foreach ($dir in @(" + strings.Join(quotedDirs, ", ") + ")) { " +
-			"if (Test-Path -LiteralPath $dir -PathType Container) { New-Object IO.FileSystemWatcher -ArgumentList $dir " +
-			"-Property @{ IncludeSubdirectories = $true; InternalBufferSize = 65536 } } }); " +
-			"$global:perusalWatchers = @($fileWatcher) + $dirWatchers; " +
-			"foreach ($watcher in $global:perusalWatchers) { " +
+			"$watched = @([pscustomobject]@{ watcher = $fileWatcher; index = -1 }) + " +
+			"@(for ($index = 0; $index -lt $dirs.Count; $index++) { " +
+			"if (Test-Path -LiteralPath $dirs[$index] -PathType Container) { [pscustomobject]@{ watcher = " +
+			"(New-Object IO.FileSystemWatcher -ArgumentList $dirs[$index] " +
+			"-Property @{ IncludeSubdirectories = $true; InternalBufferSize = 65536 }); index = $index } } }); " +
+			"$global:perusalWatchers = @($watched | ForEach-Object { $_.watcher }); " +
+			"foreach ($entry in $watched) { " +
 			"foreach ($eventName in 'Changed', 'Created', 'Deleted', 'Renamed', 'Error') { " +
-			"$null = Register-ObjectEvent -InputObject $watcher -EventName $eventName " +
-			"-SourceIdentifier ('perusal-' + [guid]::NewGuid()) }; $watcher.EnableRaisingEvents = $true }; " +
+			"$null = Register-ObjectEvent -InputObject $entry.watcher -EventName $eventName " +
+			"-SourceIdentifier ('perusal-' + [guid]::NewGuid()) -MessageData $entry.index }; " +
+			"$entry.watcher.EnableRaisingEvents = $true }; " +
 			"$global:perusalWatchKey = $watchKey }",
+		"$changedIndexes = @{}",
+		"$woken = $every",
 		fmt.Sprintf("$deadline = (Get-Date).AddMilliseconds(%d)", timeout.Milliseconds()),
-		"while (-not $changed) { " +
+		"while (-not $woken) { " +
 			"$seconds = [int][Math]::Ceiling(($deadline - (Get-Date)).TotalSeconds); if ($seconds -le 0) { break }; " +
 			"if ($null -eq (Wait-Event -Timeout $seconds)) { break }; " +
 			// Lets the rest of a burst, such as a commit or a checkout, land before the take.
 			"Start-Sleep -Milliseconds 200; " +
 			"foreach ($fileEvent in @(Get-Event)) { Remove-Event -EventIdentifier $fileEvent.EventIdentifier; " +
 			"$sourceArgs = $fileEvent.SourceEventArgs; " +
-			`if ($sourceArgs -is [IO.ErrorEventArgs] -or ` +
-			`$sourceArgs.FullPath -notmatch '\\\.git\\(objects|logs)(\\|$)') { $changed = $true } } }`,
-		"if ($changed) { 'changed' } else { 'unchanged' }",
+			"if ($sourceArgs -is [IO.ErrorEventArgs]) { $every = $true; $woken = $true } " +
+			`elseif ($sourceArgs.FullPath -notmatch '\\\.git\\(objects|logs)(\\|$)') { $woken = $true; ` +
+			"if ($fileEvent.MessageData -ge 0) { $changedIndexes[$fileEvent.MessageData] = $true } } } }",
+		"ConvertTo-Json -Compress -InputObject @{ every = $every; indexes = @($changedIndexes.Keys) }",
 	}, "; ")
 	output, err := session.Run(ctx, script)
 	if err != nil {
-		return false, fmt.Errorf("watch %s and %d work trees: %w", file, len(dirs), err)
+		return []string{}, fmt.Errorf("watch %s and %d work trees: %w", file, len(dirs), err)
 	}
-	switch strings.TrimSpace(string(output)) {
-	case "changed":
-		return true, nil
-	case "unchanged":
-		return false, nil
+	var changed changedDirsOutput
+	if err := json.Unmarshal(output, &changed); err != nil {
+		return []string{}, fmt.Errorf("ssh %s: watch %s: read %q: %w", session.host, file, output, err)
 	}
-	return false, fmt.Errorf("ssh %s: watch %s: want changed or unchanged, got %q", session.host, file, output)
+	if changed.Every {
+		return slices.Clone(dirs), nil
+	}
+	changedDirs := []string{}
+	for index, dir := range dirs {
+		if slices.Contains(changed.Indexes, index) {
+			changedDirs = append(changedDirs, dir)
+		}
+	}
+	return changedDirs, nil
 }
 
 // Close stops the shell, if one is running.
