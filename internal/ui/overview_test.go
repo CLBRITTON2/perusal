@@ -6,9 +6,10 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
-	"reflect"
 	"strings"
 	"testing"
+
+	"github.com/stretchr/testify/require"
 
 	"github.com/CLBRITTON2/perusal/internal/focus"
 )
@@ -25,69 +26,72 @@ func TestReadOwnerWorkTree(t *testing.T) {
 
 func aSquashMergedBranchWithAGoneUpstreamNamesTheBranchItIsMergedInto(t *testing.T) {
 	clone := squashMergedBranchWithAGoneUpstream(t)
+	workRepository := foundAt("work", clone)
 
-	workTree, err := ReadOwnerWorkTree(context.Background(), foundAt("work", clone))
+	workTree, err := ReadOwnerWorkTree(context.Background(), workRepository)
 
-	if err != nil {
-		t.Fatal(err)
-	}
-	want := focus.OwnerWorkTree{Branch: "fix", Head: gitIn(t, clone, "rev-parse", "HEAD"), HeadSubject: "Fix the parser",
+	require.NoError(t, err)
+	head := gitIn(t, clone, "rev-parse", "HEAD")
+	want := focus.OwnerWorkTree{Branch: "fix", Head: head, HeadSubject: "Fix the parser",
 		ChangedFiles: []string{}, BehindDefault: 1, MergedInto: "origin/main"}
-	if !reflect.DeepEqual(workTree, want) {
-		t.Fatalf("got\n%+v\nwant\n%+v", workTree, want)
-	}
+	require.Equal(t, want, workTree)
 }
 
 func aSquashMergedBranchWithALiveUpstreamNamesTheBranchItIsMergedInto(t *testing.T) {
 	clone := squashMergedBranchWithALiveUpstream(t)
+	workRepository := foundAt("work", clone)
 
-	workTree, err := ReadOwnerWorkTree(context.Background(), foundAt("work", clone))
+	workTree, err := ReadOwnerWorkTree(context.Background(), workRepository)
 
-	if err != nil || workTree.Upstream != "origin/fix" || workTree.MergedInto != "origin/main" {
-		t.Fatalf("got %+v, %v, want upstream origin/fix merged into origin/main", workTree, err)
-	}
+	require.NoError(t, err)
+	require.Equal(t, "origin/fix", workTree.Upstream)
+	require.Equal(t, "origin/main", workTree.MergedInto)
 }
 
 func aFreshBranchAtOriginsMainIsNotMerged(t *testing.T) {
 	clone := squashMergedBranchWithALiveUpstream(t)
 	gitIn(t, clone, "switch", "--create", "fresh", "origin/main")
+	workRepository := foundAt("work", clone)
 
-	workTree, err := ReadOwnerWorkTree(context.Background(), foundAt("work", clone))
+	workTree, err := ReadOwnerWorkTree(context.Background(), workRepository)
 
-	if err != nil || workTree.Branch != "fresh" || workTree.MergedInto != "" {
-		t.Fatalf("got %+v, %v, want fresh with no mergedInto", workTree, err)
-	}
+	require.NoError(t, err)
+	require.Equal(t, "fresh", workTree.Branch)
+	require.Empty(t, workTree.MergedInto)
 }
 
 func aBranchWithAChangeOriginsMainLacksIsNotMerged(t *testing.T) {
 	clone := squashMergedBranchWithALiveUpstream(t)
-	if err := os.WriteFile(filepath.Join(clone, "lexer.go"), []byte("package parser\n"), 0o600); err != nil {
-		t.Fatal(err)
-	}
+	lexerPath := filepath.Join(clone, "lexer.go")
+	err := os.WriteFile(lexerPath, []byte("package parser\n"), 0o600)
+	require.NoError(t, err)
 	gitIn(t, clone, "add", "lexer.go")
 	gitIn(t, clone, "commit", "--message", "Add the lexer")
+	workRepository := foundAt("work", clone)
 
-	workTree, err := ReadOwnerWorkTree(context.Background(), foundAt("work", clone))
+	workTree, err := ReadOwnerWorkTree(context.Background(), workRepository)
 
-	if err != nil || workTree.MergedInto != "" {
-		t.Fatalf("got %+v, %v, want no mergedInto", workTree, err)
-	}
+	require.NoError(t, err)
+	require.Empty(t, workTree.MergedInto)
 }
 
 func listsTheFirstFiftyChangedFilesAndCountsThemAll(t *testing.T) {
 	clone := squashMergedBranchWithAGoneUpstream(t)
 	for index := range 51 {
-		if err := os.WriteFile(filepath.Join(clone, fmt.Sprintf("new%02d.txt", index)), []byte("new\n"), 0o600); err != nil {
-			t.Fatal(err)
-		}
+		name := fmt.Sprintf("new%02d.txt", index)
+		path := filepath.Join(clone, name)
+		err := os.WriteFile(path, []byte("new\n"), 0o600)
+		require.NoError(t, err)
 	}
+	workRepository := foundAt("work", clone)
 
-	workTree, err := ReadOwnerWorkTree(context.Background(), foundAt("work", clone))
+	workTree, err := ReadOwnerWorkTree(context.Background(), workRepository)
 
-	if err != nil || len(workTree.ChangedFiles) != 50 || workTree.ChangedFiles[49] != "new49.txt" ||
-		workTree.ChangedFileCount != 51 || workTree.MergedInto != "origin/main" {
-		t.Fatalf("got %+v, %v, want new00.txt to new49.txt of 51 files, still merged into origin/main", workTree, err)
-	}
+	require.NoError(t, err)
+	require.Len(t, workTree.ChangedFiles, 50)
+	require.Equal(t, "new49.txt", workTree.ChangedFiles[49])
+	require.Equal(t, 51, workTree.ChangedFileCount)
+	require.Equal(t, "origin/main", workTree.MergedInto)
 }
 
 func squashMergedBranchWithAGoneUpstream(t *testing.T) string {
@@ -128,19 +132,18 @@ func squashMergedBranchWithALiveUpstream(t *testing.T) string {
 
 func commitParser(t *testing.T, clone string, message string) {
 	t.Helper()
-	if err := os.WriteFile(filepath.Join(clone, "parser.go"), []byte("package parser\n"), 0o600); err != nil {
-		t.Fatal(err)
-	}
+	parserPath := filepath.Join(clone, "parser.go")
+	err := os.WriteFile(parserPath, []byte("package parser\n"), 0o600)
+	require.NoError(t, err)
 	gitIn(t, clone, "add", "parser.go")
 	gitIn(t, clone, "commit", "--message", message)
 }
 
 func gitIn(t *testing.T, dir string, args ...string) string {
 	t.Helper()
-	command := exec.Command("git", append([]string{"-C", dir}, args...)...)
+	gitArgs := append([]string{"-C", dir}, args...)
+	command := exec.Command("git", gitArgs...)
 	output, err := command.CombinedOutput()
-	if err != nil {
-		t.Fatalf("git %s: %v\n%s", strings.Join(args, " "), err, output)
-	}
+	require.NoError(t, err, "git %s\n%s", strings.Join(args, " "), output)
 	return strings.TrimSpace(string(output))
 }

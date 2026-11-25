@@ -1,9 +1,10 @@
 package diff
 
 import (
-	"reflect"
 	"strings"
 	"testing"
+
+	"github.com/stretchr/testify/require"
 )
 
 func TestParseUnified(t *testing.T) {
@@ -36,14 +37,12 @@ func TestParseFile(t *testing.T) {
 	}, "\n")
 
 	fileDiff, err := ParseFile(text)
-	if err != nil {
-		t.Fatal(err)
-	}
+	require.NoError(t, err)
 
-	if fileDiff.Change != FileModified || len(fileDiff.Hunks) != 2 || fileDiff.Hunks[0].Rows[0].Old.Text != "old" ||
-		fileDiff.Hunks[1].Rows[0].New.Text != "new" {
-		t.Fatalf("got %+v, want the deletion's hunk then the addition's as one modified file", fileDiff)
-	}
+	require.Equal(t, FileModified, fileDiff.Change)
+	require.Len(t, fileDiff.Hunks, 2)
+	require.Equal(t, "old", fileDiff.Hunks[0].Rows[0].Old.Text)
+	require.Equal(t, "new", fileDiff.Hunks[1].Rows[0].New.Text)
 }
 
 func readsPathsGitQuotedOrEndedWithATab(t *testing.T) {
@@ -75,18 +74,14 @@ func readsPathsGitQuotedOrEndedWithATab(t *testing.T) {
 	}, "\n")
 
 	sections, err := ParseFiles(text)
-	if err != nil {
-		t.Fatal(err)
-	}
+	require.NoError(t, err)
 
 	paths := []string{}
 	for _, section := range sections {
 		paths = append(paths, section.Path)
 	}
 	wantPaths := []string{"old name.txt", "gone file.go", "café.txt", `thé "x".txt`, "é b.png"}
-	if !reflect.DeepEqual(paths, wantPaths) {
-		t.Fatalf("got paths %q, want %q", paths, wantPaths)
-	}
+	require.Equal(t, wantPaths, paths)
 }
 
 func namesEachFileOfACommitAndWhatHappenedToIt(t *testing.T) {
@@ -114,9 +109,7 @@ func namesEachFileOfACommitAndWhatHappenedToIt(t *testing.T) {
 	}, "\n")
 
 	sections, err := ParseFiles(text)
-	if err != nil {
-		t.Fatal(err)
-	}
+	require.NoError(t, err)
 
 	paths := []string{}
 	changes := []FileChange{}
@@ -126,11 +119,10 @@ func namesEachFileOfACommitAndWhatHappenedToIt(t *testing.T) {
 	}
 	wantPaths := []string{"new.go", "gone.go", "new name.go", "logo b.png"}
 	wantChanges := []FileChange{FileAdded, FileDeleted, FileRenamed, FileModified}
-	if !reflect.DeepEqual(paths, wantPaths) || !reflect.DeepEqual(changes, wantChanges) || !sections[3].FileDiff.Binary ||
-		len(sections[0].FileDiff.Hunks) != 1 {
-		t.Fatalf("got paths %q, changes %v, binary %v, %d hunks in the first", paths, changes, sections[3].FileDiff.Binary,
-			len(sections[0].FileDiff.Hunks))
-	}
+	require.Equal(t, wantPaths, paths)
+	require.Equal(t, wantChanges, changes)
+	require.True(t, sections[3].FileDiff.Binary)
+	require.Len(t, sections[0].FileDiff.Hunks, 1)
 }
 
 func TestChangedSpan(t *testing.T) {
@@ -142,39 +134,34 @@ func TestChangedSpan(t *testing.T) {
 func marksWhatLiesBetweenTheCommonPrefixAndSuffix(t *testing.T) {
 	row := onlyRow(t, "@@ -1 +1 @@\n-\tcall(a, b)\n+\tcall(a, bc)\n")
 
-	if row.Old.Changed != (Span{Start: 10, End: 10}) || row.New.Changed != (Span{Start: 10, End: 11}) {
-		t.Fatalf("got %+v and %+v, want the empty span before ) and the inserted c", row.Old.Changed, row.New.Changed)
-	}
+	require.Equal(t, Span{Start: 10, End: 10}, row.Old.Changed)
+	require.Equal(t, Span{Start: 10, End: 11}, row.New.Changed)
 }
 
 func neverSplitsACharacter(t *testing.T) {
 	row := onlyRow(t, "@@ -1 +1 @@\n-café\n+cafè\n")
 
-	if row.Old.Changed != (Span{Start: 3, End: 5}) || row.New.Changed != (Span{Start: 3, End: 5}) {
-		t.Fatalf("got %+v and %+v, want the whole two-byte é and è", row.Old.Changed, row.New.Changed)
-	}
+	require.Equal(t, Span{Start: 3, End: 5}, row.Old.Changed)
+	require.Equal(t, Span{Start: 3, End: 5}, row.New.Changed)
 }
 
 func marksNothingInAnUnevenBlockOrBetweenUnrelatedLines(t *testing.T) {
 	uneven, err := parseUnified("@@ -1,2 +1 @@\n-same a\n-same b\n+same c\n")
-	if err != nil {
-		t.Fatal(err)
-	}
+	require.NoError(t, err)
 	unrelated := onlyRow(t, "@@ -1 +1 @@\n-abc\n+xyz\n")
 
-	for _, row := range append(uneven.Hunks[0].Rows, unrelated) {
-		if row.Old.Changed != (Span{}) || row.New.Changed != (Span{}) {
-			t.Fatalf("got %+v, want nothing marked", row)
-		}
+	rows := append(uneven.Hunks[0].Rows, unrelated)
+
+	for _, row := range rows {
+		require.Zero(t, row.Old.Changed)
+		require.Zero(t, row.New.Changed)
 	}
 }
 
 func onlyRow(t *testing.T, text string) Row {
 	t.Helper()
 	fileDiff, err := parseUnified(text)
-	if err != nil {
-		t.Fatal(err)
-	}
+	require.NoError(t, err)
 	return fileDiff.Hunks[0].Rows[0]
 }
 
@@ -195,9 +182,7 @@ func pairsRemovedWithAddedAndPadsTheShorterSide(t *testing.T) {
 	}, "\n")
 
 	fileDiff, err := parseUnified(text)
-	if err != nil {
-		t.Fatal(err)
-	}
+	require.NoError(t, err)
 
 	want := FileDiff{Hunks: []Hunk{{
 		Header: "@@ -10,4 +10,3 @@ func f() {",
@@ -208,50 +193,38 @@ func pairsRemovedWithAddedAndPadsTheShorterSide(t *testing.T) {
 			{Old: Line{Kind: LineRemoved, Number: 13, Text: "old three"}, New: Line{Kind: LineBlank}},
 		},
 	}}}
-	if !reflect.DeepEqual(fileDiff, want) {
-		t.Fatalf("diff:\n%+v\nwant:\n%+v", fileDiff, want)
-	}
+	require.Equal(t, want, fileDiff)
 }
 
 func numbersLinesFromEachHunkStart(t *testing.T) {
 	text := "@@ -1 +1,2 @@\n a\n+b\n@@ -40,2 +41,1 @@\n-c\n d\n"
 
 	fileDiff, err := parseUnified(text)
-	if err != nil {
-		t.Fatal(err)
-	}
+	require.NoError(t, err)
 
 	second := fileDiff.Hunks[1].Rows
 	want := []Row{
 		{Old: Line{Kind: LineRemoved, Number: 40, Text: "c"}, New: Line{Kind: LineBlank}},
 		{Old: Line{Kind: LineContext, Number: 41, Text: "d"}, New: Line{Kind: LineContext, Number: 41, Text: "d"}},
 	}
-	if !reflect.DeepEqual(second, want) {
-		t.Fatalf("second hunk rows:\n%+v\nwant:\n%+v", second, want)
-	}
+	require.Equal(t, want, second)
 }
 
 func startsANewPairingWhenRemovalsFollowAdditions(t *testing.T) {
 	text := "@@ -1,2 +1,2 @@\n-a\n+b\n-c\n+d\n"
 
 	fileDiff, err := parseUnified(text)
-	if err != nil {
-		t.Fatal(err)
-	}
+	require.NoError(t, err)
 
 	want := []Row{
 		{Old: Line{Kind: LineRemoved, Number: 1, Text: "a"}, New: Line{Kind: LineAdded, Number: 1, Text: "b"}},
 		{Old: Line{Kind: LineRemoved, Number: 2, Text: "c"}, New: Line{Kind: LineAdded, Number: 2, Text: "d"}},
 	}
-	if !reflect.DeepEqual(fileDiff.Hunks[0].Rows, want) {
-		t.Fatalf("rows:\n%+v\nwant:\n%+v", fileDiff.Hunks[0].Rows, want)
-	}
+	require.Equal(t, want, fileDiff.Hunks[0].Rows)
 }
 
 func rejectsUnknownLinePrefix(t *testing.T) {
 	_, err := parseUnified("@@ -1 +1 @@\n*a\n")
 
-	if err == nil || !strings.Contains(err.Error(), "line 2") {
-		t.Fatalf("got error %v, want an error naming line 2", err)
-	}
+	require.ErrorContains(t, err, "line 2")
 }

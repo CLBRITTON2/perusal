@@ -1,14 +1,12 @@
 package ui
 
 import (
-	"reflect"
-	"regexp"
 	"strings"
 	"testing"
 	"time"
 
 	tea "charm.land/bubbletea/v2"
-	"github.com/charmbracelet/x/ansi"
+	"github.com/stretchr/testify/require"
 
 	"github.com/CLBRITTON2/perusal/internal/diff"
 	"github.com/CLBRITTON2/perusal/internal/gitrepo"
@@ -24,103 +22,105 @@ func TestStashPane(t *testing.T) {
 }
 
 func stashesKeyOpensTheStashPaneAndLoadsTheSelectedDiff(t *testing.T) {
-	m := reviewingRepository(t, gitrepo.Status{Branch: "main"})
-	m = update(t, m, statusMsg{dir: "C:/dev/repo", status: gitrepo.Status{Branch: "main"}, stashes: threeStashes(),
+	model := reviewingRepository(t, gitrepo.Status{Branch: "main"})
+	model = update(t, model, statusMsg{dir: "C:/dev/repo", status: gitrepo.Status{Branch: "main"}, stashes: threeStashes(),
 		loadedAt: stashesLoadedAt()})
 
-	next, loading := m.Update(tea.KeyPressMsg{Code: 'S', Text: "S"})
-	m = asModel(t, next)
+	next, loading := model.Update(tea.KeyPressMsg{Code: 'S', Text: "S"})
+	model = asModel(t, next)
 
-	if m.view != viewStashes || loading == nil {
-		t.Fatalf("got view %d, load %v, want the stash pane open with its diff loading", m.view, loading)
-	}
+	require.Equal(t, viewStashes, model.view)
+	require.NotNil(t, loading)
 }
 
 func rowsShowTheSummaryThenTheBranchAndAge(t *testing.T) {
-	m := stashesOf(t)
+	model := stashesOf(t)
 
-	screen := ansi.Strip(m.renderScreen())
+	screen := plainScreen(model)
 
-	for _, want := range []string{`Fix header\s+main · now`, `Try overview\s+main · 2h`, `Start\s+fix · 3d`} {
-		if !regexp.MustCompile(want).MatchString(screen) {
-			t.Fatalf("got screen:\n%s\nwant %q", screen, want)
-		}
-	}
+	require.Regexp(t, `Fix header\s+main · now`, screen)
+	require.Regexp(t, `Try overview\s+main · 2h`, screen)
+	require.Regexp(t, `Start\s+fix · 3d`, screen)
 }
 
 func aLoadedStashListsItsFilesUnderIt(t *testing.T) {
-	m := stashesOf(t)
-	loading := m.loadSelectedStashDiff()
-	m = update(t, m, commitDiffMsg{dir: "C:/dev/repo", hash: threeStashes()[0].Hash, contextLines: hunkContext,
+	model := stashesOf(t)
+	loading := model.loadSelectedStashDiff()
+	stashes := threeStashes()
+	model = update(t, model, commitDiffMsg{dir: "C:/dev/repo", hash: stashes[0].Hash, contextLines: hunkContext,
 		sections: []diff.FileSection{
 			{Path: "a.go", FileDiff: diff.FileDiff{Change: diff.FileModified}},
 			{Path: "b.go", FileDiff: diff.FileDiff{Change: diff.FileAdded}},
 		}})
 
-	m = update(t, m, tea.KeyPressMsg{Code: 'j', Text: "j"})
+	model = update(t, model, tea.KeyPressMsg{Code: 'j', Text: "j"})
+	loadingAgain := model.loadSelectedStashDiff()
+	rows := model.visibleStashRows()
+	title := model.commitPaneTitle()
 
 	want := []treeRow{{commit: 0, file: commitRow}, {commit: 0, file: 0}, {commit: 0, file: 1},
 		{commit: 1, file: commitRow}, {commit: 2, file: commitRow}}
-	if loading == nil || m.loadSelectedStashDiff() != nil || !reflect.DeepEqual(m.visibleStashRows(), want) ||
-		m.commitPaneTitle() != "1a2b3c4 a.go" {
-		t.Fatalf("got load %v, rows %v, title %q", loading, m.visibleStashRows(), m.commitPaneTitle())
-	}
+	require.NotNil(t, loading)
+	require.Nil(t, loadingAgain)
+	require.Equal(t, want, rows)
+	require.Equal(t, "1a2b3c4 a.go", title)
 }
 
 func clickingTheFoldedStashPaneOpensItAndARowSelectsIt(t *testing.T) {
-	m := reviewingRepository(t, gitrepo.Status{Branch: "main"})
-	m = update(t, m, statusMsg{dir: "C:/dev/repo", status: gitrepo.Status{Branch: "main"}, stashes: threeStashes(),
+	model := reviewingRepository(t, gitrepo.Status{Branch: "main"})
+	model = update(t, model, statusMsg{dir: "C:/dev/repo", status: gitrepo.Status{Branch: "main"}, stashes: threeStashes(),
 		loadedAt: stashesLoadedAt()})
+	foldedStashPaneY := model.foldedPaneY(viewStashes)
 
-	m = update(t, m, tea.MouseClickMsg{X: 3, Y: m.foldedPaneY(viewStashes), Button: tea.MouseLeft})
-	m = update(t, m, tea.MouseClickMsg{X: 3, Y: 5, Button: tea.MouseLeft})
+	model = update(t, model, tea.MouseClickMsg{X: 3, Y: foldedStashPaneY, Button: tea.MouseLeft})
+	model = update(t, model, tea.MouseClickMsg{X: 3, Y: 5, Button: tea.MouseLeft})
 
-	if m.view != viewStashes || m.selectedStash != 1 {
-		t.Fatalf("got view %d, selected stash %d, want the stash pane open on stash 1", m.view, m.selectedStash)
-	}
+	require.Equal(t, viewStashes, model.view)
+	require.Equal(t, 1, model.selectedStash)
 }
 
 func dropKeepsTheSelectionInPlaceAfterTheReload(t *testing.T) {
-	m := selectRow(t, stashesOf(t), 1)
-	m = update(t, m, tea.KeyPressMsg{Code: 'D', Text: "D"})
-	popup := ansi.Strip(m.renderConfirmPopup())
-	next, dropping := m.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
-	m = asModel(t, next)
-	m = update(t, m, popupSuccessMsg{dir: "C:/dev/repo", notice: "dropped stash@{1}"})
+	stashPane := stashesOf(t)
+	model := selectRow(t, stashPane, 1)
+	model = update(t, model, tea.KeyPressMsg{Code: 'D', Text: "D"})
+	popup := plainConfirmPopup(model)
+	next, dropping := model.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
+	model = asModel(t, next)
+	model = update(t, model, popupSuccessMsg{dir: "C:/dev/repo", notice: "dropped stash@{1}"})
 	stashes := threeStashes()
 	shifted := stashes[2]
 	shifted.Ref = "stash@{1}"
-	m = update(t, m, statusMsg{dir: "C:/dev/repo", status: gitrepo.Status{Branch: "main"},
+	model = update(t, model, statusMsg{dir: "C:/dev/repo", status: gitrepo.Status{Branch: "main"},
 		stashes: []gitrepo.Stash{stashes[0], shifted}, loadedAt: stashesLoadedAt()})
+	selected := model.stashes[model.selectedStash]
 
-	if !strings.Contains(popup, "drop stash@{1}") || !strings.Contains(popup, "On main: Try overview") {
-		t.Fatalf("got popup:\n%s", popup)
-	}
-	if dropping == nil || m.footer.text != "dropped stash@{1}" || m.stashes[m.selectedStash].Hash != shifted.Hash {
-		t.Fatalf("got drop %v, footer %q, selected %d, want the older stash selected in its place", dropping,
-			m.footer.text, m.selectedStash)
-	}
+	require.Contains(t, popup, "drop stash@{1}")
+	require.Contains(t, popup, "On main: Try overview")
+	require.NotNil(t, dropping)
+	require.Equal(t, "dropped stash@{1}", model.footer.text)
+	require.Equal(t, shifted.Hash, selected.Hash)
 }
 
 func popNamesTheStashAndReloadsTheStatus(t *testing.T) {
-	m := stashesOf(t)
-	_, popping := m.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
+	model := stashesOf(t)
+	_, popping := model.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
 
-	next, reloading := m.Update(stashPopMsg{dir: "C:/dev/repo", ref: "stash@{0}"})
-	m = asModel(t, next)
+	next, reloading := model.Update(stashPopMsg{dir: "C:/dev/repo", ref: "stash@{0}"})
+	model = asModel(t, next)
 
-	if popping == nil || reloading == nil || m.view != viewStashes || m.footer.text != "popped stash@{0}" {
-		t.Fatalf("got pop %v, reload %v, view %d, footer %q", popping, reloading, m.view, m.footer.text)
-	}
+	require.NotNil(t, popping)
+	require.NotNil(t, reloading)
+	require.Equal(t, viewStashes, model.view)
+	require.Equal(t, "popped stash@{0}", model.footer.text)
 }
 
 func stashesOf(t *testing.T) Model {
 	t.Helper()
-	m := reviewingRepository(t, gitrepo.Status{Branch: "main"})
-	m = update(t, m, statusMsg{dir: "C:/dev/repo", status: gitrepo.Status{Branch: "main"}, stashes: threeStashes(),
+	model := reviewingRepository(t, gitrepo.Status{Branch: "main"})
+	model = update(t, model, statusMsg{dir: "C:/dev/repo", status: gitrepo.Status{Branch: "main"}, stashes: threeStashes(),
 		loadedAt: stashesLoadedAt()})
-	m = update(t, m, tea.KeyPressMsg{Code: tea.KeyTab})
-	return update(t, m, tea.KeyPressMsg{Code: tea.KeyTab})
+	model = update(t, model, tea.KeyPressMsg{Code: tea.KeyTab})
+	return update(t, model, tea.KeyPressMsg{Code: tea.KeyTab})
 }
 
 func threeStashes() []gitrepo.Stash {

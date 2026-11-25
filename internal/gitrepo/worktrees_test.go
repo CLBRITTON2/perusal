@@ -2,11 +2,12 @@ package gitrepo
 
 import (
 	"context"
-	"errors"
+	"io/fs"
 	"os"
 	"path/filepath"
-	"reflect"
 	"testing"
+
+	"github.com/stretchr/testify/require"
 )
 
 func TestWorkTreesListsTheMainOneFirstAndSkipsOneWhoseFolderIsGone(t *testing.T) {
@@ -19,20 +20,18 @@ func TestWorkTreesListsTheMainOneFirstAndSkipsOneWhoseFolderIsGone(t *testing.T)
 		{"worktree", "add", "--detach", detached},
 		{"worktree", "add", "-b", "gone", gone},
 	})
-	if err := os.RemoveAll(gone); err != nil {
-		t.Fatal(err)
-	}
+	removeErr := os.RemoveAll(gone)
+	require.NoError(t, removeErr)
 
 	workTrees, err := Repository{Dir: side}.WorkTrees(context.Background())
 
+	require.NoError(t, err)
 	want := []WorkTree{
 		{Path: filepath.ToSlash(clone), Branch: "main"},
 		{Path: filepath.ToSlash(side), Branch: "side"},
 		{Path: filepath.ToSlash(detached), Branch: ""},
 	}
-	if err != nil || !reflect.DeepEqual(workTrees, want) {
-		t.Fatalf("got %+v, %v, want %+v", workTrees, err, want)
-	}
+	require.Equal(t, want, workTrees)
 }
 
 func TestRemoveWorkTree(t *testing.T) {
@@ -53,7 +52,8 @@ func removesTheWorkTreeItsUnmergedBranchAndItsTakenRef(t *testing.T) {
 
 	err := Repository{Dir: clone}.RemoveWorkTree(context.Background(), WorkTree{Path: side, Branch: "side"})
 
-	assertWorkTreeAndRefsGone(t, err, clone, side)
+	require.NoError(t, err)
+	assertSideWorkTreeAndRefsGone(t, clone, side)
 }
 
 func removesAWorkTreeNothingWasTakenInto(t *testing.T) {
@@ -61,24 +61,21 @@ func removesAWorkTreeNothingWasTakenInto(t *testing.T) {
 
 	err := Repository{Dir: clone}.RemoveWorkTree(context.Background(), WorkTree{Path: side, Branch: "side"})
 
-	assertWorkTreeAndRefsGone(t, err, clone, side)
+	require.NoError(t, err)
+	assertSideWorkTreeAndRefsGone(t, clone, side)
 }
 
 func refusesAWorkTreeWithUncommittedChangesAndKeepsItsBranch(t *testing.T) {
 	clone, side := cloneWithSideWorkTree(t)
-	writeFile(t, filepath.Join(side, "side.txt"), "side\n")
+	untracked := filepath.Join(side, "side.txt")
+	writeFile(t, untracked, "side\n")
 
 	err := Repository{Dir: clone}.RemoveWorkTree(context.Background(), WorkTree{Path: side, Branch: "side"})
 
-	if err == nil {
-		t.Fatal("got no error, want git to refuse the untracked file")
-	}
-	if _, statErr := os.Stat(filepath.Join(side, "side.txt")); statErr != nil {
-		t.Fatalf("got %v, want side.txt kept", statErr)
-	}
-	if refs := gitOutput(t, clone, "for-each-ref", "--format=%(refname)", "refs/heads/side"); refs != "refs/heads/side\n" {
-		t.Fatalf("got refs %q, want side kept", refs)
-	}
+	require.Error(t, err)
+	require.FileExists(t, untracked)
+	refs := gitOutput(t, clone, "for-each-ref", "--format=%(refname)", "refs/heads/side")
+	require.Equal(t, "refs/heads/side\n", refs)
 }
 
 func cloneWithSideWorkTree(t *testing.T) (string, string) {
@@ -89,16 +86,10 @@ func cloneWithSideWorkTree(t *testing.T) (string, string) {
 	return clone, side
 }
 
-func assertWorkTreeAndRefsGone(t *testing.T, err error, clone string, side string) {
+func assertSideWorkTreeAndRefsGone(t *testing.T, clone string, side string) {
 	t.Helper()
-	if err != nil {
-		t.Fatal(err)
-	}
-	if _, statErr := os.Stat(side); !errors.Is(statErr, os.ErrNotExist) {
-		t.Fatalf("got %v for %s, want it removed", statErr, side)
-	}
+	_, statErr := os.Stat(side)
+	require.ErrorIs(t, statErr, fs.ErrNotExist)
 	refs := gitOutput(t, clone, "for-each-ref", "--format=%(refname)", "refs/heads/side", "refs/perusal")
-	if refs != "" {
-		t.Fatalf("got refs %q, want side and its taken ref deleted", refs)
-	}
+	require.Empty(t, refs)
 }

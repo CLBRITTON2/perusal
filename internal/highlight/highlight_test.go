@@ -8,6 +8,7 @@ import (
 	"testing"
 
 	"github.com/CLBRITTON2/perusal/internal/diff"
+	"github.com/stretchr/testify/require"
 )
 
 func TestFileDiff(t *testing.T) {
@@ -27,41 +28,38 @@ func aCommentOpenedInContextColorsTheAddedLineBelowIt(t *testing.T) {
 	}}}
 
 	highlighted, err := FileDiff("a.go", fileDiff)
-	if err != nil {
-		t.Fatal(err)
-	}
+	require.NoError(t, err)
 
 	added := highlighted.Hunks[0].Rows[1].New
 	removed := highlighted.Hunks[0].Rows[1].Old
 	want := diff.Token{Span: diff.Span{Start: 0, End: len(added.Text)}, Color: "#6e6a86"}
-	if len(added.Tokens) != 1 || added.Tokens[0] != want || len(removed.Tokens) == 0 ||
-		removed.Tokens[0].Color == want.Color {
-		t.Fatalf("got added %v, removed %v, want the added line one comment token and the removed line code",
-			added.Tokens, removed.Tokens)
-	}
+	require.Equal(t, []diff.Token{want}, added.Tokens)
+	require.NotEmpty(t, removed.Tokens)
+	require.NotEqual(t, want.Color, removed.Tokens[0].Color)
 }
 
 func theRepositorysOwnFilesLexWithoutDrift(t *testing.T) {
 	paths := []string{"../../go.mod", "../../Makefile", "../../README.md", "highlight.go", "../ui/render.go"}
 	for _, path := range paths {
 		content, err := os.ReadFile(path)
-		if err != nil {
-			t.Fatal(err)
-		}
+		require.NoError(t, err)
+		text := strings.TrimSuffix(string(content), "\n")
+		lines := strings.Split(text, "\n")
 		rows := []diff.Row{}
-		for number, text := range strings.Split(strings.TrimSuffix(string(content), "\n"), "\n") {
+		for number, line := range lines {
 			// The CR catches a lexer that normalizes line endings, which would drift the offsets from Text.
 			rows = append(rows, diff.Row{Old: diff.Line{Kind: diff.LineBlank},
-				New: diff.Line{Kind: diff.LineAdded, Number: number + 1, Text: text + "\r"}})
+				New: diff.Line{Kind: diff.LineAdded, Number: number + 1, Text: line + "\r"}})
 		}
 		fileDiff := diff.FileDiff{Change: diff.FileAdded, Hunks: []diff.Hunk{{Header: "@@ -0,0 +1 @@", Rows: rows}}}
+		name := filepath.Base(path)
 
-		highlighted, err := FileDiff(filepath.Base(path), fileDiff)
+		highlighted, err := FileDiff(name, fileDiff)
+		require.NoError(t, err, path)
 
-		if err != nil || !slices.ContainsFunc(highlighted.Hunks[0].Rows, func(row diff.Row) bool {
+		colored := slices.ContainsFunc(highlighted.Hunks[0].Rows, func(row diff.Row) bool {
 			return len(row.New.Tokens) > 0
-		}) {
-			t.Fatalf("%s: got error %v, want every line lexed and some of them colored", path, err)
-		}
+		})
+		require.True(t, colored, path)
 	}
 }

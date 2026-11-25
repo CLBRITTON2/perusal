@@ -8,6 +8,9 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 func TestSession(t *testing.T) {
@@ -36,35 +39,37 @@ func waitForChangeReportsAWriteToTheFileOrUnderADirButNotToGitObjects(t *testing
 	focusFile := filepath.Join(t.TempDir(), "focus")
 	workTree := t.TempDir()
 	objects := filepath.Join(workTree, ".git", "objects")
-	if err := os.MkdirAll(objects, 0o755); err != nil {
-		t.Fatal(err)
-	}
+	object := filepath.Join(objects, "object")
+	workTreeFile := filepath.Join(workTree, "a.txt")
+	err := os.MkdirAll(objects, 0o755)
+	require.NoError(t, err)
+	ctx := context.Background()
 	waitForChange := func(write func()) bool {
 		t.Helper()
 		time.AfterFunc(300*time.Millisecond, write)
-		changed, err := session.WaitForChange(context.Background(), []string{workTree}, focusFile, 3*time.Second)
-		if err != nil {
-			t.Fatal(err)
-		}
+		changed, err := session.WaitForChange(ctx, []string{workTree}, focusFile, 3*time.Second)
+		require.NoError(t, err)
 		return changed
 	}
 	writeTo := func(path string) func() {
 		return func() {
-			if err := os.WriteFile(path, []byte("x"), 0o644); err != nil {
-				t.Error(err)
-			}
+			err := os.WriteFile(path, []byte("x"), 0o644)
+			assert.NoError(t, err)
 		}
 	}
+	writeObject := writeTo(object)
+	writeFocusFile := writeTo(focusFile)
+	writeWorkTreeFile := writeTo(workTreeFile)
 
-	first := waitForChange(func() {})
-	object := waitForChange(writeTo(filepath.Join(objects, "object")))
-	focus := waitForChange(writeTo(focusFile))
-	edit := waitForChange(writeTo(filepath.Join(workTree, "a.txt")))
+	firstChanged := waitForChange(func() {})
+	objectChanged := waitForChange(writeObject)
+	focusFileChanged := waitForChange(writeFocusFile)
+	workTreeFileChanged := waitForChange(writeWorkTreeFile)
 
-	if !first || object || !focus || !edit {
-		t.Fatalf("got first wait %t, object %t, focus file %t, edit %t, want only the object unchanged", first,
-			object, focus, edit)
-	}
+	require.True(t, firstChanged)
+	require.False(t, objectChanged)
+	require.True(t, focusFileChanged)
+	require.True(t, workTreeFileChanged)
 }
 
 func runsEveryScriptInOneShell(t *testing.T, shellName string) {
@@ -73,40 +78,34 @@ func runsEveryScriptInOneShell(t *testing.T, shellName string) {
 
 	output := scriptOutput(t, session, "'grüße'; [string]$PID; Write-Warning 'kept out of the output'")
 
-	if output != "grüße\r\n"+firstPID {
-		t.Fatalf("got %q, want the text and the first script's process %s", output, firstPID)
-	}
+	require.Equal(t, "grüße\r\n"+firstPID, output)
 }
 
 func returnsAThrownErrorWithItsStderrAndKeepsTheShell(t *testing.T, shellName string) {
 	session := localSession(t, shellName)
 	firstPID := scriptOutput(t, session, "[string]$PID")
+	quotedEmptyDir := QuotedString(t.TempDir())
+	ctx := context.Background()
 
-	output, err := session.Run(context.Background(),
-		"'partial'; $null = git -C "+QuotedString(t.TempDir())+" rev-parse HEAD; throw 'stopped here'")
+	output, err := session.Run(ctx, "'partial'; $null = git -C "+quotedEmptyDir+" rev-parse HEAD; throw 'stopped here'")
 
-	if err == nil || !strings.Contains(err.Error(), "stopped here") || !strings.Contains(err.Error(), "fatal:") ||
-		string(output) != "partial\r\n" {
-		t.Fatalf("got %q and error %v, want the output before the throw and an error with its message and git's stderr",
-			output, err)
-	}
-	if pid := scriptOutput(t, session, "[string]$PID"); pid != firstPID {
-		t.Fatalf("got process %s after the error, want the same shell %s", pid, firstPID)
-	}
+	require.ErrorContains(t, err, "stopped here")
+	require.ErrorContains(t, err, "fatal:")
+	require.Equal(t, "partial\r\n", string(output))
+	pid := scriptOutput(t, session, "[string]$PID")
+	require.Equal(t, firstPID, pid)
 }
 
 func startsANewShellAfterTheShellExits(t *testing.T, shellName string) {
 	session := localSession(t, shellName)
 	firstPID := scriptOutput(t, session, "[string]$PID")
+	ctx := context.Background()
 
-	_, err := session.Run(context.Background(), "[Environment]::Exit(3)")
+	_, err := session.Run(ctx, "[Environment]::Exit(3)")
 
-	if err == nil || !strings.Contains(err.Error(), "the shell exited") {
-		t.Fatalf("got error %v, want one saying the shell exited", err)
-	}
-	if pid := scriptOutput(t, session, "[string]$PID"); pid == firstPID {
-		t.Fatalf("got process %s after the exit, want a new shell", pid)
-	}
+	require.ErrorContains(t, err, "the shell exited")
+	pid := scriptOutput(t, session, "[string]$PID")
+	require.NotEqual(t, firstPID, pid)
 }
 
 func startsANewShellAfterAScriptTimesOut(t *testing.T, shellName string) {
@@ -117,23 +116,20 @@ func startsANewShellAfterAScriptTimesOut(t *testing.T, shellName string) {
 
 	_, err := session.Run(ctx, "Start-Sleep -Seconds 30")
 
-	if err == nil || !strings.Contains(err.Error(), "deadline exceeded") {
-		t.Fatalf("got error %v, want the deadline", err)
-	}
-	if pid := scriptOutput(t, session, "[string]$PID"); pid == firstPID {
-		t.Fatalf("got process %s after the timeout, want a new shell", pid)
-	}
+	require.ErrorContains(t, err, "deadline exceeded")
+	pid := scriptOutput(t, session, "[string]$PID")
+	require.NotEqual(t, firstPID, pid)
 }
 
 func refusesAResultOverOneMebibyte(t *testing.T, shellName string) {
 	session := localSession(t, shellName)
+	ctx := context.Background()
 
-	_, err := session.Run(context.Background(), "'x' * 2MB")
+	_, err := session.Run(ctx, "'x' * 2MB")
 
-	if err == nil || !strings.Contains(err.Error(), "too long") {
-		t.Fatalf("got error %v, want the result refused as too long", err)
-	}
-	scriptOutput(t, session, "'still runs'")
+	require.ErrorContains(t, err, "too long")
+	output := scriptOutput(t, session, "'still runs'")
+	require.Equal(t, "still runs", output)
 }
 
 // A local shell stands in for the ssh login shell, which runs shellLoop the same way.
@@ -143,18 +139,16 @@ func localSession(t *testing.T, shellName string) *Session {
 		return exec.Command(shellName, "-NoProfile", "-NonInteractive", "-Command", shellLoop)
 	})
 	t.Cleanup(func() {
-		if err := session.Close(); err != nil {
-			t.Error(err)
-		}
+		err := session.Close()
+		require.NoError(t, err)
 	})
 	return session
 }
 
 func scriptOutput(t *testing.T, session *Session, script string) string {
 	t.Helper()
-	output, err := session.Run(context.Background(), script)
-	if err != nil {
-		t.Fatal(err)
-	}
+	ctx := context.Background()
+	output, err := session.Run(ctx, script)
+	require.NoError(t, err)
 	return strings.TrimSpace(string(output))
 }

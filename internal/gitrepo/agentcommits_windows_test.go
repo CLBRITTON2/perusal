@@ -3,14 +3,15 @@ package gitrepo
 import (
 	"bytes"
 	"context"
-	"errors"
 	"fmt"
+	"io/fs"
 	"os"
 	"os/exec"
 	"path/filepath"
-	"reflect"
 	"strings"
 	"testing"
+
+	"github.com/stretchr/testify/require"
 )
 
 func TestTakeAgentCommits(t *testing.T) {
@@ -31,9 +32,8 @@ func refusesACommitWritingOverMaximumTakenBytes(t *testing.T) {
 
 	changed, err := takeAgentCommits(t, owner, agent)
 
-	if !errors.Is(err, ErrTakenCommitsTooLarge) || changed {
-		t.Fatalf("got changed %v, error %v, want ErrTakenCommitsTooLarge", changed, err)
-	}
+	require.ErrorIs(t, err, ErrTakenCommitsTooLarge)
+	require.False(t, changed)
 	assertChangedFiles(t, owner, []FileStatus{})
 }
 
@@ -52,39 +52,34 @@ func addsTheAgentsBranchAtWhereItLeftOriginsDefaultBranch(t *testing.T) {
 	commitAll(t, owner, "Origin moves on")
 	runSteps(t, owner, [][]string{{"push", "origin", "main"}})
 	workTree := filepath.Join(t.TempDir(), "claude-x")
+	agentHead := readAgentHead(t, agent)
 
-	base, err := Repository{Dir: owner}.AddWorkTreeFromAgent(context.Background(), agent, readAgentHead(t, agent),
-		workTree)
+	base, err := Repository{Dir: owner}.AddWorkTreeFromAgent(context.Background(), agent, agentHead, workTree)
 
-	if err != nil || base != branchPoint {
-		t.Fatalf("got base %s, error %v, want %s, where claude/x left main", base, err, branchPoint)
-	}
-	if head := revParse(t, workTree, "HEAD"); head != branchPoint {
-		t.Fatalf("got the new work tree's HEAD at %s, want %s", head, branchPoint)
-	}
-	if branch := strings.TrimSpace(gitOutput(t, workTree, "branch", "--show-current")); branch != "claude/x" {
-		t.Fatalf("got branch %q in the new work tree, want claude/x", branch)
-	}
-	if _, err := takeAgentCommits(t, workTree, agent); err != nil {
-		t.Fatal(err)
-	}
-	assertFileHolds(t, filepath.Join(workTree, "agent.txt"), "agent\n")
+	require.NoError(t, err)
+	require.Equal(t, branchPoint, base)
+	workTreeHead := revParse(t, workTree, "HEAD")
+	require.Equal(t, branchPoint, workTreeHead)
+	branchOutput := gitOutput(t, workTree, "branch", "--show-current")
+	branch := strings.TrimSpace(branchOutput)
+	require.Equal(t, "claude/x", branch)
+	_, takeErr := takeAgentCommits(t, workTree, agent)
+	require.NoError(t, takeErr)
+	agentFile := filepath.Join(workTree, "agent.txt")
+	assertFileHolds(t, agentFile, "agent\n")
 }
 
 func refusesADetachedHead(t *testing.T) {
 	owner, agent := ownerAndAgentClonesOfOrigin(t)
 	runSteps(t, agent, [][]string{{"switch", "--detach", "HEAD"}})
 	workTree := filepath.Join(t.TempDir(), "detached")
+	agentHead := readAgentHead(t, agent)
 
-	_, err := Repository{Dir: owner}.AddWorkTreeFromAgent(context.Background(), agent, readAgentHead(t, agent),
-		workTree)
+	_, err := Repository{Dir: owner}.AddWorkTreeFromAgent(context.Background(), agent, agentHead, workTree)
 
-	if err == nil || !strings.Contains(err.Error(), "detached HEAD") {
-		t.Fatalf("got error %v, want the detached HEAD refused", err)
-	}
-	if _, statErr := os.Stat(workTree); !errors.Is(statErr, os.ErrNotExist) {
-		t.Fatalf("got %v for %s, want no work tree", statErr, workTree)
-	}
+	require.ErrorContains(t, err, "detached HEAD")
+	_, statErr := os.Stat(workTree)
+	require.ErrorIs(t, statErr, fs.ErrNotExist)
 }
 
 // Both are clones of a bare origin, as the laptop's and the VM's are clones from GitHub.
@@ -108,15 +103,11 @@ func TestReadAgentHeads(t *testing.T) {
 
 	heads, err := ReadAgentHeads(context.Background(), runLocalScript, []string{notAClone, agent})
 
-	if err != nil {
-		t.Fatal(err)
-	}
-	if heads[0].Err == nil || !strings.Contains(heads[0].Err.Error(), notAClone) {
-		t.Fatalf("got error %v for %s, want one naming it", heads[0].Err, notAClone)
-	}
-	if heads[1] != (AgentHead{Commit: revParse(t, agent, "HEAD"), Branch: "refs/heads/main"}) {
-		t.Fatalf("got %+v for %s, want its HEAD on main", heads[1], agent)
-	}
+	require.NoError(t, err)
+	require.ErrorContains(t, heads[0].Err, notAClone)
+	agentCommit := revParse(t, agent, "HEAD")
+	want := AgentHead{Commit: agentCommit, Branch: "refs/heads/main"}
+	require.Equal(t, want, heads[1])
 }
 
 func showsTheAgentsCommitAsUnstagedChanges(t *testing.T) {
@@ -130,36 +121,32 @@ func showsTheAgentsCommitAsUnstagedChanges(t *testing.T) {
 
 	changed, err := takeAgentCommits(t, owner, agent)
 
-	if err != nil || !changed {
-		t.Fatalf("got changed %v, error %v, want the commit taken", changed, err)
-	}
+	require.NoError(t, err)
+	require.True(t, changed)
 	assertChangedFiles(t, owner, []FileStatus{
 		{Path: "a.txt", IndexStatus: ' ', WorktreeStatus: 'M'},
 		{Path: "b.txt", IndexStatus: ' ', WorktreeStatus: 'D'},
 		{Path: "new.txt", IndexStatus: '?', WorktreeStatus: '?'},
 	})
-	assertFileHolds(t, filepath.Join(owner, "a.txt"), "agent\n")
-	if head := revParse(t, owner, "HEAD"); head != ownerHead {
-		t.Fatalf("got the owner's HEAD at %s, want it left at %s", head, ownerHead)
-	}
+	aFile := filepath.Join(owner, "a.txt")
+	assertFileHolds(t, aFile, "agent\n")
+	ownerHeadAfter := revParse(t, owner, "HEAD")
+	require.Equal(t, ownerHead, ownerHeadAfter)
 }
 
 func takesOnlyWhatTheNextCommitChangesAfterTheOwnerCommits(t *testing.T) {
 	owner, agent := ownerAndAgentCopies(t)
 	writeFile(t, filepath.Join(agent, "a.txt"), "agent\n")
 	commitAll(t, agent, "First")
-	if _, err := takeAgentCommits(t, owner, agent); err != nil {
-		t.Fatal(err)
-	}
+	_, firstErr := takeAgentCommits(t, owner, agent)
+	require.NoError(t, firstErr)
 	commitAll(t, owner, "Owner takes the first")
 	writeFile(t, filepath.Join(agent, "b.txt"), "agent\n")
 	commitAll(t, agent, "Second")
 
 	_, err := takeAgentCommits(t, owner, agent)
 
-	if err != nil {
-		t.Fatal(err)
-	}
+	require.NoError(t, err)
 	assertChangedFiles(t, owner, []FileStatus{{Path: "b.txt", IndexStatus: ' ', WorktreeStatus: 'M'}})
 }
 
@@ -167,9 +154,8 @@ func keepsAFileTheOwnerEditedAndRefusesTheCommit(t *testing.T) {
 	owner, agent := ownerAndAgentCopies(t)
 	writeFile(t, filepath.Join(agent, "a.txt"), "agent\n")
 	commitAll(t, agent, "First")
-	if _, err := takeAgentCommits(t, owner, agent); err != nil {
-		t.Fatal(err)
-	}
+	_, firstErr := takeAgentCommits(t, owner, agent)
+	require.NoError(t, firstErr)
 	writeFile(t, filepath.Join(owner, "a.txt"), "owner\n")
 	writeFile(t, filepath.Join(agent, "a.txt"), "agent again\n")
 	writeFile(t, filepath.Join(agent, "b.txt"), "agent\n")
@@ -177,27 +163,27 @@ func keepsAFileTheOwnerEditedAndRefusesTheCommit(t *testing.T) {
 
 	changed, err := takeAgentCommits(t, owner, agent)
 
-	if err == nil || !strings.Contains(err.Error(), "a.txt") || changed {
-		t.Fatalf("got changed %v, error %v, want the commit refused over a.txt", changed, err)
-	}
-	assertFileHolds(t, filepath.Join(owner, "a.txt"), "owner\n")
-	assertFileHolds(t, filepath.Join(owner, "b.txt"), "b\n")
+	require.ErrorContains(t, err, "a.txt")
+	require.False(t, changed)
+	aFile := filepath.Join(owner, "a.txt")
+	assertFileHolds(t, aFile, "owner\n")
+	bFile := filepath.Join(owner, "b.txt")
+	assertFileHolds(t, bFile, "b\n")
 }
 
 func skipsTheFetchWhenTheAgentsHeadIsTaken(t *testing.T) {
 	owner, agent := ownerAndAgentCopies(t)
 	writeFile(t, filepath.Join(agent, "a.txt"), "agent\n")
 	commitAll(t, agent, "Agent")
-	if _, err := takeAgentCommits(t, owner, agent); err != nil {
-		t.Fatal(err)
-	}
+	_, firstErr := takeAgentCommits(t, owner, agent)
+	require.NoError(t, firstErr)
+	missing := filepath.Join(t.TempDir(), "missing")
+	agentHead := readAgentHead(t, agent)
 
-	changed, err := Repository{Dir: owner}.TakeAgentCommits(context.Background(),
-		filepath.Join(t.TempDir(), "missing"), readAgentHead(t, agent))
+	changed, err := Repository{Dir: owner}.TakeAgentCommits(context.Background(), missing, agentHead)
 
-	if err != nil || changed {
-		t.Fatalf("got changed %v, error %v, want nothing to do", changed, err)
-	}
+	require.NoError(t, err)
+	require.False(t, changed)
 	assertChangedFiles(t, owner, []FileStatus{{Path: "a.txt", IndexStatus: ' ', WorktreeStatus: 'M'}})
 }
 
@@ -211,23 +197,21 @@ func refusesACommitNamingAPathInDotGit(t *testing.T) {
 
 	changed, err := takeAgentCommits(t, owner, agent)
 
-	if err == nil || !strings.Contains(err.Error(), "hasDotgit") || changed {
-		t.Fatalf("got changed %v, error %v, want fsck's hasDotgit refusal", changed, err)
-	}
+	require.ErrorContains(t, err, "hasDotgit")
+	require.False(t, changed)
 	assertChangedFiles(t, owner, []FileStatus{})
 }
 
 func takeAgentCommits(t *testing.T, owner string, agent string) (bool, error) {
 	t.Helper()
-	return Repository{Dir: owner}.TakeAgentCommits(context.Background(), agent, readAgentHead(t, agent))
+	agentHead := readAgentHead(t, agent)
+	return Repository{Dir: owner}.TakeAgentCommits(context.Background(), agent, agentHead)
 }
 
 func readAgentHead(t *testing.T, agent string) AgentHead {
 	t.Helper()
 	heads, err := ReadAgentHeads(context.Background(), runLocalScript, []string{agent})
-	if err != nil {
-		t.Fatal(err)
-	}
+	require.NoError(t, err)
 	return heads[0]
 }
 
@@ -269,64 +253,63 @@ func runLocalScript(ctx context.Context, script string) ([]byte, error) {
 func gitOutputFromInput(t *testing.T, dir string, input string, args ...string) string {
 	t.Helper()
 	output, err := runGit(context.Background(), Repository{Dir: dir}, args, input, []string{})
-	if err != nil {
-		t.Fatal(err)
-	}
+	require.NoError(t, err)
 	return strings.TrimSpace(string(output))
 }
 
 func removeFile(t *testing.T, path string) {
 	t.Helper()
-	if err := os.Remove(path); err != nil {
-		t.Fatal(err)
-	}
+	err := os.Remove(path)
+	require.NoError(t, err)
 }
 
 func assertChangedFiles(t *testing.T, dir string, want []FileStatus) {
 	t.Helper()
 	workTree, err := Repository{Dir: dir}.Status(context.Background())
-	if err != nil {
-		t.Fatal(err)
-	}
-	if !reflect.DeepEqual(workTree.Files, want) {
-		t.Fatalf("got changed files %+v in %s, want %+v", workTree.Files, dir, want)
-	}
-}
-
-func assertFileHolds(t *testing.T, path string, want string) {
-	t.Helper()
-	content, err := os.ReadFile(path)
-	if err != nil || string(content) != want {
-		t.Fatalf("got %q (%v) in %s, want %q", content, err, path, want)
-	}
+	require.NoError(t, err)
+	require.Equal(t, want, workTree.Files)
 }
 
 func TestReadAgentWorkTree(t *testing.T) {
-	_, agent := ownerAndAgentCopies(t)
+	t.Run("readsAMissingCopyAsNotExisting", readsAMissingCopyAsNotExisting)
+	t.Run("readsAnUntrackedFileAsUncommitted", readsAnUntrackedFileAsUncommitted)
+	t.Run("readsACleanCopyWithItsHead", readsACleanCopyWithItsHead)
+}
+
+func readsAMissingCopyAsNotExisting(t *testing.T) {
 	missing := filepath.Join(t.TempDir(), "missing")
+
+	agentWorkTree, err := ReadAgentWorkTree(context.Background(), runLocalScript, missing)
+
+	require.NoError(t, err)
+	want := AgentWorkTree{Dir: missing}
+	require.Equal(t, want, agentWorkTree)
+}
+
+func readsAnUntrackedFileAsUncommitted(t *testing.T) {
+	_, agent := ownerAndAgentCopies(t)
 	dirty := filepath.Join(t.TempDir(), "dirty")
 	runSteps(t, agent, [][]string{{"worktree", "add", "-b", "dirty", dirty}})
 	writeFile(t, filepath.Join(dirty, "new.txt"), "new\n")
 	head := revParse(t, agent, "HEAD")
 
-	for name, test := range map[string]struct {
-		dir  string
-		want AgentWorkTree
-	}{
-		"readsAMissingCopyAsNotExisting": {dir: missing, want: AgentWorkTree{Dir: missing}},
-		"readsAnUntrackedFileAsUncommitted": {dir: dirty, want: AgentWorkTree{Dir: dirty, Exists: true, Uncommitted: true,
-			Head: AgentHead{Commit: head, Branch: "refs/heads/dirty"}}},
-		"readsACleanCopyWithItsHead": {dir: agent, want: AgentWorkTree{Dir: agent, Exists: true,
-			Head: AgentHead{Commit: head, Branch: "refs/heads/main"}}},
-	} {
-		t.Run(name, func(t *testing.T) {
-			agentWorkTree, err := ReadAgentWorkTree(context.Background(), runLocalScript, test.dir)
+	agentWorkTree, err := ReadAgentWorkTree(context.Background(), runLocalScript, dirty)
 
-			if err != nil || agentWorkTree != test.want {
-				t.Fatalf("got %+v, %v, want %+v", agentWorkTree, err, test.want)
-			}
-		})
-	}
+	require.NoError(t, err)
+	want := AgentWorkTree{Dir: dirty, Exists: true, Uncommitted: true,
+		Head: AgentHead{Commit: head, Branch: "refs/heads/dirty"}}
+	require.Equal(t, want, agentWorkTree)
+}
+
+func readsACleanCopyWithItsHead(t *testing.T) {
+	_, agent := ownerAndAgentCopies(t)
+	head := revParse(t, agent, "HEAD")
+
+	agentWorkTree, err := ReadAgentWorkTree(context.Background(), runLocalScript, agent)
+
+	require.NoError(t, err)
+	want := AgentWorkTree{Dir: agent, Exists: true, Head: AgentHead{Commit: head, Branch: "refs/heads/main"}}
+	require.Equal(t, want, agentWorkTree)
 }
 
 func TestHasTaken(t *testing.T) {
@@ -338,27 +321,38 @@ func TestHasTaken(t *testing.T) {
 
 func isTrueForACommitInTheOwnersBranch(t *testing.T) {
 	owner, agent := ownerAndAgentCopies(t)
+	agentHead := readAgentHead(t, agent)
 
-	assertHasTaken(t, owner, readAgentHead(t, agent), true)
+	taken, err := Repository{Dir: owner}.HasTaken(context.Background(), agentHead)
+
+	require.NoError(t, err)
+	require.True(t, taken)
 }
 
 func isTrueForTheCommitTheLastTakeTook(t *testing.T) {
 	owner, agent := ownerAndAgentCopies(t)
 	writeFile(t, filepath.Join(agent, "a.txt"), "agent\n")
 	commitAll(t, agent, "Agent")
-	if _, err := takeAgentCommits(t, owner, agent); err != nil {
-		t.Fatal(err)
-	}
+	_, takeErr := takeAgentCommits(t, owner, agent)
+	require.NoError(t, takeErr)
+	agentHead := readAgentHead(t, agent)
 
-	assertHasTaken(t, owner, readAgentHead(t, agent), true)
+	taken, err := Repository{Dir: owner}.HasTaken(context.Background(), agentHead)
+
+	require.NoError(t, err)
+	require.True(t, taken)
 }
 
 func isFalseForACommitTheOwnerLacks(t *testing.T) {
 	owner, agent := ownerAndAgentCopies(t)
 	writeFile(t, filepath.Join(agent, "a.txt"), "agent\n")
 	commitAll(t, agent, "Agent")
+	agentHead := readAgentHead(t, agent)
 
-	assertHasTaken(t, owner, readAgentHead(t, agent), false)
+	taken, err := Repository{Dir: owner}.HasTaken(context.Background(), agentHead)
+
+	require.NoError(t, err)
+	require.False(t, taken)
 }
 
 func isFalseForAFetchedCommitOutsideTheOwnersBranch(t *testing.T) {
@@ -366,16 +360,12 @@ func isFalseForAFetchedCommitOutsideTheOwnersBranch(t *testing.T) {
 	writeFile(t, filepath.Join(agent, "a.txt"), "agent\n")
 	commitAll(t, agent, "Agent")
 	runSteps(t, owner, [][]string{{"fetch", agent, "main:refs/fetched/main"}})
+	agentHead := readAgentHead(t, agent)
 
-	assertHasTaken(t, owner, readAgentHead(t, agent), false)
-}
+	taken, err := Repository{Dir: owner}.HasTaken(context.Background(), agentHead)
 
-func assertHasTaken(t *testing.T, owner string, head AgentHead, want bool) {
-	t.Helper()
-	taken, err := Repository{Dir: owner}.HasTaken(context.Background(), head)
-	if err != nil || taken != want {
-		t.Fatalf("got taken %v, error %v, want %v", taken, err, want)
-	}
+	require.NoError(t, err)
+	require.False(t, taken)
 }
 
 func TestRemoveAgentWorkTree(t *testing.T) {
@@ -385,29 +375,26 @@ func TestRemoveAgentWorkTree(t *testing.T) {
 
 func removesTheCopyAndItsBranch(t *testing.T) {
 	agent, side := cloneWithSideWorkTree(t)
-	agentWorkTree, err := ReadAgentWorkTree(context.Background(), runLocalScript, side)
-	if err != nil {
-		t.Fatal(err)
-	}
+	agentWorkTree, readErr := ReadAgentWorkTree(context.Background(), runLocalScript, side)
+	require.NoError(t, readErr)
 
-	err = RemoveAgentWorkTree(context.Background(), runLocalScript, agent, agentWorkTree)
+	err := RemoveAgentWorkTree(context.Background(), runLocalScript, agent, agentWorkTree)
 
-	assertWorkTreeAndRefsGone(t, err, agent, side)
+	require.NoError(t, err)
+	assertSideWorkTreeAndRefsGone(t, agent, side)
 }
 
 func refusesACopyWhoseHeadMovedSinceItWasRead(t *testing.T) {
 	agent, side := cloneWithSideWorkTree(t)
-	agentWorkTree, err := ReadAgentWorkTree(context.Background(), runLocalScript, side)
-	if err != nil {
-		t.Fatal(err)
-	}
+	agentWorkTree, readErr := ReadAgentWorkTree(context.Background(), runLocalScript, side)
+	require.NoError(t, readErr)
 	writeFile(t, filepath.Join(side, "side.txt"), "side\n")
 	commitAll(t, side, "Side")
+	moved := revParse(t, side, "HEAD")
 
-	err = RemoveAgentWorkTree(context.Background(), runLocalScript, agent, agentWorkTree)
+	err := RemoveAgentWorkTree(context.Background(), runLocalScript, agent, agentWorkTree)
 
-	if err == nil || !strings.Contains(err.Error(), "HEAD moved to "+revParse(t, side, "HEAD")) {
-		t.Fatalf("got error %v, want the moved HEAD refused", err)
-	}
-	assertFileHolds(t, filepath.Join(side, "side.txt"), "side\n")
+	require.ErrorContains(t, err, "HEAD moved to "+moved)
+	sideFile := filepath.Join(side, "side.txt")
+	assertFileHolds(t, sideFile, "side\n")
 }

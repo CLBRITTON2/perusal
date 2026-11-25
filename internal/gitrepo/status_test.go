@@ -1,8 +1,9 @@
 package gitrepo
 
 import (
-	"reflect"
 	"testing"
+
+	"github.com/stretchr/testify/require"
 )
 
 func TestParseStatus(t *testing.T) {
@@ -20,10 +21,8 @@ func readsBranchHeadersAndEveryEntryKind(t *testing.T) {
 		"? dir/new.txt\x00")
 
 	status, err := parseStatus(output)
-	if err != nil {
-		t.Fatal(err)
-	}
 
+	require.NoError(t, err)
 	want := Status{
 		Branch:     "master",
 		Head:       "72164ac5a6f1bcbca714a97261c5bf3627aeadd7",
@@ -36,27 +35,23 @@ func readsBranchHeadersAndEveryEntryKind(t *testing.T) {
 			{Path: "dir/new.txt", IndexStatus: '?', WorktreeStatus: '?'},
 		},
 	}
-	if !reflect.DeepEqual(status, want) {
-		t.Fatalf("status:\n%+v\nwant:\n%+v", status, want)
-	}
+	require.Equal(t, want, status)
 }
 
 func readsDetachedUnbornHeadWithNoUpstream(t *testing.T) {
-	status, err := parseStatus([]byte("# branch.oid (initial)\x00# branch.head (detached)\x00"))
-	if err != nil {
-		t.Fatal(err)
-	}
+	output := []byte("# branch.oid (initial)\x00# branch.head (detached)\x00")
 
+	status, err := parseStatus(output)
+
+	require.NoError(t, err)
 	want := Status{Files: []FileStatus{}}
-	if !reflect.DeepEqual(status, want) {
-		t.Fatalf("status:\n%+v\nwant:\n%+v", status, want)
-	}
+	require.Equal(t, want, status)
 }
 
 func rejectsARenameWithNoOriginalPath(t *testing.T) {
-	_, err := parseStatus([]byte("2 R. N... 100644 100644 100644 1a2b3c4 1a2b3c4 R100 new.go\x00"))
+	output := []byte("2 R. N... 100644 100644 100644 1a2b3c4 1a2b3c4 R100 new.go\x00")
 
-	if err == nil {
-		t.Fatal("got no error for a rename with no original path")
-	}
+	_, err := parseStatus(output)
+
+	require.Error(t, err)
 }

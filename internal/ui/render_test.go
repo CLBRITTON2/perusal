@@ -1,12 +1,13 @@
 package ui
 
 import (
-	"slices"
 	"strings"
 	"testing"
 
 	"charm.land/lipgloss/v2"
 	"github.com/charmbracelet/x/ansi"
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 
 	"github.com/CLBRITTON2/perusal/internal/diff"
 )
@@ -33,21 +34,19 @@ func TestRenderUnifiedListsRemovedLinesAboveAddedOnes(t *testing.T) {
 		},
 	}}}
 
-	got := strippedLines(lineTexts(renderFileDiff(fileDiff, renderUnified, 6))[1:])
+	rendered := renderFileDiff(fileDiff, renderUnified, 6)
+	lines := lineTexts(rendered)
 
+	got := strippedLines(lines[1:])
 	want := []string{"1 1 a ", "2   b ", "3   c ", "  2 B ", "  3 C ", "  4 d ", "4 5 e "}
-	if !slices.Equal(got, want) {
-		t.Fatalf("got\n%q\nwant\n%q", got, want)
-	}
+	require.Equal(t, want, got)
 }
 
 func TestWrapRowsGivesAClusterWiderThanTheRowARowOfItsOwn(t *testing.T) {
 	got := wrapRows("世界", 1)
 
 	want := []diff.Span{{Start: 0, End: 3}, {Start: 3, End: 6}}
-	if !slices.Equal(got, want) {
-		t.Fatalf("got %v, want %v", got, want)
-	}
+	require.Equal(t, want, got)
 }
 
 func TestRenderFileDiff(t *testing.T) {
@@ -61,9 +60,9 @@ func TestTheChangedPartKeepsItsHighlightPastATabAndAWrap(t *testing.T) {
 
 	got := strippedLines(lines)
 	want := []string{"1     keep  ", "  CHANGED   ", "  tail      "}
-	if !slices.Equal(got, want) || !strings.Contains(lines[1], addedChangedStyle.Render("CHANGED")+addedTextStyle.Render("   ")) {
-		t.Fatalf("got\n%q\nwant\n%q with only CHANGED highlighted", got, want)
-	}
+	require.Equal(t, want, got)
+	changedRun := addedChangedStyle.Render("CHANGED") + addedTextStyle.Render("   ")
+	require.Contains(t, lines[1], changedRun)
 }
 
 func TestATokenSpanningTheChangedPartKeepsBothItsColorAndTheChangedBackground(t *testing.T) {
@@ -72,12 +71,12 @@ func TestATokenSpanningTheChangedPartKeepsBothItsColorAndTheChangedBackground(t 
 
 	lines := wrapSide(line, 1, 40)
 
-	want := addedTextStyle.Foreground(lipgloss.Color("#31748f")).Render("ret") +
-		addedChangedStyle.Foreground(lipgloss.Color("#31748f")).Render(" va") +
+	tokenColor := lipgloss.Color("#31748f")
+	want := addedTextStyle.Foreground(tokenColor).Render("ret") +
+		addedChangedStyle.Foreground(tokenColor).Render(" va") +
 		addedChangedStyle.Render("lue")
-	if len(lines) != 1 || !strings.Contains(lines[0], want) {
-		t.Fatalf("got %q, want %q", lines, want)
-	}
+	require.Len(t, lines, 1)
+	require.Contains(t, lines[0], want)
 }
 
 func TestBorderLine(t *testing.T) {
@@ -86,17 +85,14 @@ func TestBorderLine(t *testing.T) {
 
 func cutsALongTitleToKeepTheLineCounts(t *testing.T) {
 	counts := renderLineCounts(diff.LineCounts{Added: 12, Removed: 3})
+	longTitleLine := borderLine("╭", titleStyle, "internal/ui/model.go", counts, "╮", 22)
+	shortTitleLine := borderLine("╭", titleStyle, "a.go", counts, "╮", 22)
+	narrowLine := borderLine("╭", titleStyle, "a.go", counts, "╮", 13)
 
-	got := strippedLines([]string{
-		borderLine("╭", titleStyle, "internal/ui/model.go", counts, "╮", 22),
-		borderLine("╭", titleStyle, "a.go", counts, "╮", 22),
-		borderLine("╭", titleStyle, "a.go", counts, "╮", 13),
-	})
+	got := strippedLines([]string{longTitleLine, shortTitleLine, narrowLine})
 
 	want := []string{"╭─ internal… ─ +12 -3 ─╮", "╭─ a.go ────── +12 -3 ─╮", "╭─ a.go ──────╮"}
-	if !slices.Equal(got, want) {
-		t.Fatalf("got\n%q\nwant\n%q", got, want)
-	}
+	require.Equal(t, want, got)
 }
 
 func showsANewFileAcrossTheWholeWidth(t *testing.T) {
@@ -108,13 +104,12 @@ func showsANewFileAcrossTheWholeWidth(t *testing.T) {
 		},
 	}}}
 
-	lines := lineTexts(renderFileDiff(fileDiff, renderSideBySide, 21))
+	rendered := renderFileDiff(fileDiff, renderSideBySide, 21)
+	lines := lineTexts(rendered)
 
 	got := strippedLines(lines[1:])
 	want := []string{"1 package x          ", "2                    "}
-	if !slices.Equal(got, want) {
-		t.Fatalf("got\n%q\nwant\n%q", got, want)
-	}
+	require.Equal(t, want, got)
 }
 
 func wrapsALongLineAndPadsTheOtherSide(t *testing.T) {
@@ -126,36 +121,32 @@ func wrapsALongLineAndPadsTheOtherSide(t *testing.T) {
 		},
 	}}}
 
-	lines := lineTexts(renderFileDiff(fileDiff, renderSideBySide, 21))
+	rendered := renderFileDiff(fileDiff, renderSideBySide, 21)
+	lines := lineTexts(rendered)
 
 	got := strippedLines(lines[1:])
 	want := []string{"7 old     │7 abcd    ", "          │  efgh    ", "          │  ijklmnop"}
-	if !slices.Equal(got, want) {
-		t.Fatalf("got\n%q\nwant\n%q", got, want)
-	}
+	require.Equal(t, want, got)
 }
 
 func replacesEscapeSequenceStart(t *testing.T) {
 	got := sanitizeText("a\x1b]0;title\x07b\x9bc")
 
-	if got != "a�]0;title�b�c" {
-		t.Fatalf("got %q", got)
-	}
+	require.Equal(t, "a�]0;title�b�c", got)
 }
 
 func replacesBidiOverride(t *testing.T) {
 	got := sanitizeText("if admin‮ {")
 
-	if got != "if admin� {" {
-		t.Fatalf("got %q", got)
-	}
+	require.Equal(t, "if admin� {", got)
 }
 
 func everyRowFillsTheWidthExactly(t *testing.T) {
+	longText := strings.Repeat("long ", 40)
 	fileDiff := diff.FileDiff{Hunks: []diff.Hunk{{
 		Header: "@@ -9,2 +9,2 @@",
 		Rows: []diff.Row{
-			{Old: diff.Line{Kind: diff.LineRemoved, Number: 9, Text: strings.Repeat("long ", 40)},
+			{Old: diff.Line{Kind: diff.LineRemoved, Number: 9, Text: longText},
 				New: diff.Line{Kind: diff.LineAdded, Number: 9, Text: "\t世界 wide"}},
 			{Old: diff.Line{Kind: diff.LineRemoved, Number: 10, Text: "x"}, New: diff.Line{Kind: diff.LineBlank}},
 			{Old: diff.Line{Kind: diff.LineContext, Number: 11, Text: ""}, New: diff.Line{Kind: diff.LineContext, Number: 11, Text: ""}},
@@ -163,10 +154,12 @@ func everyRowFillsTheWidthExactly(t *testing.T) {
 	}}}
 
 	for _, width := range []int{40, 41, 120} {
-		for index, line := range lineTexts(renderFileDiff(fileDiff, renderSideBySide, width)) {
-			if got := ansi.StringWidth(line); got != width {
-				t.Errorf("width %d, row %d: %d cells: %q", width, index, got, ansi.Strip(line))
-			}
+		rendered := renderFileDiff(fileDiff, renderSideBySide, width)
+		lines := lineTexts(rendered)
+		for _, line := range lines {
+			lineWidth := ansi.StringWidth(line)
+			plainLine := ansi.Strip(line)
+			assert.Equal(t, width, lineWidth, plainLine)
 		}
 	}
 }

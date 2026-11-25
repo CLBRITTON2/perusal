@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"io/fs"
 	"path/filepath"
-	"reflect"
 	"slices"
 	"strconv"
 	"strings"
@@ -14,6 +13,7 @@ import (
 
 	tea "charm.land/bubbletea/v2"
 	"github.com/charmbracelet/x/ansi"
+	"github.com/stretchr/testify/require"
 
 	"github.com/CLBRITTON2/perusal/internal/diff"
 	"github.com/CLBRITTON2/perusal/internal/focus"
@@ -31,26 +31,20 @@ func TestFocusSwitch(t *testing.T) {
 }
 
 func TestTheOverviewListsTheFocusedRepositoriesFirstAndMarksThem(t *testing.T) {
-	m := focusOnSeveral(t, map[string]bool{"C:/dev/cwd": false, "C:/dev/first": true, "C:/dev/second": false})
-	m = update(t, m, tea.KeyPressMsg{Code: 'o', Text: "o"})
+	model := focusOnSeveral(t, map[string]bool{"C:/dev/cwd": false, "C:/dev/first": true, "C:/dev/second": false})
+	model = update(t, model, tea.KeyPressMsg{Code: 'o', Text: "o"})
 
-	m = update(t, m, overviewMsg{rows: []overviewRow{
+	model = update(t, model, overviewMsg{rows: []overviewRow{
 		repositoryRow{FoundRepository: foundAt("elsewhere", "C:/dev/elsewhere")},
 		repositoryRow{FoundRepository: foundAt("first", "C:/dev/first")},
 		repositoryRow{FoundRepository: foundAt("second", "C:/dev/second")},
 	}})
+	got := overviewLines(model)
 
-	lines := listLines(m.overview, m.overviewCells, "no repositories found", 118, m.paneInnerHeight())
-	got := []string{}
-	for _, line := range lines {
-		got = append(got, strings.Join(strings.Fields(ansi.Strip(line)), " "))
-	}
 	branch := " " + branchGlyph + " detached HEAD clean"
 	want := []string{"▌● " + folderGlyph + " first" + branch, "● " + folderGlyph + " second" + branch,
 		folderGlyph + " elsewhere" + branch}
-	if !reflect.DeepEqual(got, want) {
-		t.Fatalf("got %q, want %q", got, want)
-	}
+	require.Equal(t, want, got)
 }
 
 func TestPendingOverviewRow(t *testing.T) {
@@ -59,112 +53,130 @@ func TestPendingOverviewRow(t *testing.T) {
 }
 
 func showsLoadingUntilItsRowArrives(t *testing.T) {
-	m := focusOnSeveral(t, map[string]bool{"C:/dev/cwd": false, "C:/dev/first": true, "C:/dev/second": false})
-	m = update(t, m, tea.KeyPressMsg{Code: 'o', Text: "o"})
-	next, loads := m.Update(overviewMsg{rows: []overviewRow{
+	model := focusOnSeveral(t, map[string]bool{"C:/dev/cwd": false, "C:/dev/first": true, "C:/dev/second": false})
+	model = update(t, model, tea.KeyPressMsg{Code: 'o', Text: "o"})
+	next, loads := model.Update(overviewMsg{rows: []overviewRow{
 		pendingRow{FoundRepository: foundAt("first", "C:/dev/first")},
 		pendingRow{FoundRepository: foundAt("second", "C:/dev/second")},
 	}})
-	m = asModel(t, next)
-	pending := overviewLines(m)
+	model = asModel(t, next)
+	pending := overviewLines(model)
 
-	m = update(t, m, overviewRowMsg{row: repositoryRow{FoundRepository: foundAt("first", "C:/dev/first")}})
+	model = update(t, model, overviewRowMsg{row: repositoryRow{FoundRepository: foundAt("first", "C:/dev/first")}})
+	loaded := overviewLines(model)
 
 	wantPending := []string{"▌● " + folderGlyph + " first loading...", "● " + folderGlyph + " second loading..."}
 	wantLoaded := []string{"▌● " + folderGlyph + " first " + branchGlyph + " detached HEAD clean",
 		"● " + folderGlyph + " second loading..."}
-	if loads == nil || !reflect.DeepEqual(pending, wantPending) || !reflect.DeepEqual(overviewLines(m), wantLoaded) {
-		t.Fatalf("got loads %v, %q then %q, want loads, %q then %q", loads, pending, overviewLines(m), wantPending,
-			wantLoaded)
-	}
+	require.NotNil(t, loads)
+	require.Equal(t, wantPending, pending)
+	require.Equal(t, wantLoaded, loaded)
 }
 
 func leavesTheTableWithTheErrorWhenGitFails(t *testing.T) {
-	m := focusOnSeveral(t, map[string]bool{"C:/dev/cwd": false, "C:/dev/first": false, "C:/dev/second": true})
-	m = update(t, m, tea.KeyPressMsg{Code: 'o', Text: "o"})
-	m = update(t, m, overviewMsg{rows: []overviewRow{
+	model := focusOnSeveral(t, map[string]bool{"C:/dev/cwd": false, "C:/dev/first": false, "C:/dev/second": true})
+	model = update(t, model, tea.KeyPressMsg{Code: 'o', Text: "o"})
+	model = update(t, model, overviewMsg{rows: []overviewRow{
 		pendingRow{FoundRepository: foundAt("first", "C:/dev/first")},
 		pendingRow{FoundRepository: foundAt("second", "C:/dev/second")},
 	}})
 
-	m = update(t, m, overviewRowFailureMsg{dir: "C:/dev/first", err: errors.New("run git status in C:/dev/first")})
+	model = update(t, model, overviewRowFailureMsg{dir: "C:/dev/first", err: errors.New("run git status in C:/dev/first")})
+	lines := overviewLines(model)
 
 	want := []string{"▌● " + folderGlyph + " second loading..."}
-	if !reflect.DeepEqual(overviewLines(m), want) || m.footer.text != "skipped run git status in C:/dev/first" {
-		t.Fatalf("got %q, footer %q, want %q and the error", overviewLines(m), m.footer.text, want)
-	}
+	require.Equal(t, want, lines)
+	require.Equal(t, "skipped run git status in C:/dev/first", model.footer.text)
 }
 
-func overviewLines(m Model) []string {
+func overviewLines(model Model) []string {
+	height := model.paneInnerHeight()
 	lines := []string{}
-	for _, line := range listLines(m.overview, m.overviewCells, "no repositories found", 118, m.paneInnerHeight()) {
-		lines = append(lines, strings.Join(strings.Fields(ansi.Strip(line)), " "))
+	for _, line := range listLines(model.overview, model.overviewCells, "no repositories found", 118, height) {
+		plain := ansi.Strip(line)
+		words := strings.Fields(plain)
+		lines = append(lines, strings.Join(words, " "))
 	}
 	return lines
 }
 
-func opensTheFirstFocusedRepositoryWithUncommittedChanges(t *testing.T) {
-	m := focusOnSeveral(t, map[string]bool{"C:/dev/cwd": false, "C:/dev/first": false, "C:/dev/second": true})
+func plainScreen(model Model) string {
+	rendered := model.renderScreen()
+	return ansi.Strip(rendered)
+}
 
-	if m.repository.Dir != "C:/dev/second" {
-		t.Fatalf("got %s, want C:/dev/second", m.repository.Dir)
-	}
+func plainHeader(model Model) string {
+	rendered := model.renderHeader()
+	return ansi.Strip(rendered)
+}
+
+func plainFooter(model Model) string {
+	rendered := model.renderFooter()
+	return ansi.Strip(rendered)
+}
+
+func plainConfirmPopup(model Model) string {
+	rendered := model.renderConfirmPopup()
+	return ansi.Strip(rendered)
+}
+
+func opensTheFirstFocusedRepositoryWithUncommittedChanges(t *testing.T) {
+	model := focusOnSeveral(t, map[string]bool{"C:/dev/cwd": false, "C:/dev/first": false, "C:/dev/second": true})
+
+	require.Equal(t, "C:/dev/second", model.repository.Dir)
 }
 
 func aFocusThatStillNamesTheReviewedRepositoryKeepsItAndShowsTheRefusals(t *testing.T) {
-	m := focusOnSeveral(t, map[string]bool{"C:/dev/cwd": false, "C:/dev/first": true, "C:/dev/second": false})
+	model := focusOnSeveral(t, map[string]bool{"C:/dev/cwd": false, "C:/dev/first": true, "C:/dev/second": false})
 
-	m = update(t, m, focus.Focus{
+	model = update(t, model, focus.Focus{
 		Repositories: []gitrepo.Repository{{Dir: "C:/dev/cwd"}, {Dir: "C:/dev/other"}, {Dir: "C:/dev/first"}},
 		Refusals:     []error{errors.New("C:/dev/notes: no .git")},
 	})
 
-	if m.repository.Dir != "C:/dev/first" || !m.footer.isError || !strings.Contains(m.footer.text, "C:/dev/notes: no .git") {
-		t.Fatalf("got %s, footer %q, want C:/dev/first and the refusal", m.repository.Dir, m.footer.text)
-	}
+	require.Equal(t, "C:/dev/first", model.repository.Dir)
+	require.True(t, model.footer.isError)
+	require.Contains(t, model.footer.text, "C:/dev/notes: no .git")
 }
 
 func aFocusWithADifferentFirstRepositoryPicksAgain(t *testing.T) {
-	m := focusOnSeveral(t, map[string]bool{"C:/dev/cwd": false, "C:/dev/first": true, "C:/dev/second": false})
-	m = update(t, m, tea.BlurMsg{})
+	model := focusOnSeveral(t, map[string]bool{"C:/dev/cwd": false, "C:/dev/first": true, "C:/dev/second": false})
+	model = update(t, model, tea.BlurMsg{})
 	focused := []gitrepo.Repository{{Dir: "C:/dev/other"}, {Dir: "C:/dev/first"}}
 
-	m = update(t, m, focus.Focus{Repositories: focused, Refusals: []error{}})
+	model = update(t, model, focus.Focus{Repositories: focused, Refusals: []error{}})
 	uncommitted := map[string]bool{"C:/dev/other": true, "C:/dev/first": true}
-	m = update(t, m, uncommittedMsg{focused: focused, uncommitted: uncommitted})
+	model = update(t, model, uncommittedMsg{focused: focused, uncommitted: uncommitted})
 
-	if m.repository.Dir != "C:/dev/other" {
-		t.Fatalf("got %s, want C:/dev/other", m.repository.Dir)
-	}
+	require.Equal(t, "C:/dev/other", model.repository.Dir)
 }
 
 func focusOnSeveral(t *testing.T, uncommitted map[string]bool) Model {
 	t.Helper()
 	focused := []gitrepo.Repository{{Dir: "C:/dev/cwd"}, {Dir: "C:/dev/first"}, {Dir: "C:/dev/second"}}
-	m := update(t, New(findNothing, openAnything, nil, AgentHost{}), tea.WindowSizeMsg{Width: 120, Height: 30})
-	m = update(t, m, focus.Focus{Repositories: focused, Refusals: []error{}})
-	return update(t, m, uncommittedMsg{focused: focused, uncommitted: uncommitted})
+	model := New(findNothing, openAnything, nil, AgentHost{})
+	model = update(t, model, tea.WindowSizeMsg{Width: 120, Height: 30})
+	model = update(t, model, focus.Focus{Repositories: focused, Refusals: []error{}})
+	return update(t, model, uncommittedMsg{focused: focused, uncommitted: uncommitted})
 }
 
 func TestEnterInTheOverviewReviewsTheSelectedRepositoryAndKeepsTheFocus(t *testing.T) {
-	m := focusOnSeveral(t, map[string]bool{"C:/dev/cwd": false, "C:/dev/first": true, "C:/dev/second": false})
-	m = update(t, m, tea.KeyPressMsg{Code: 'o', Text: "o"})
-	m = update(t, m, overviewMsg{rows: []overviewRow{
+	model := focusOnSeveral(t, map[string]bool{"C:/dev/cwd": false, "C:/dev/first": true, "C:/dev/second": false})
+	model = update(t, model, tea.KeyPressMsg{Code: 'o', Text: "o"})
+	model = update(t, model, overviewMsg{rows: []overviewRow{
 		repositoryRow{FoundRepository: foundAt("first", "C:/dev/first")},
 		repositoryRow{FoundRepository: foundAt("org/elsewhere", "C:/dev/org/elsewhere")},
 	}})
-	screen := ansi.Strip(m.renderScreen())
+	screen := plainScreen(model)
 
-	m = update(t, m, tea.KeyPressMsg{Code: 'j', Text: "j"})
-	m = update(t, m, tea.KeyPressMsg{Code: tea.KeyEnter})
+	model = update(t, model, tea.KeyPressMsg{Code: 'j', Text: "j"})
+	model = update(t, model, tea.KeyPressMsg{Code: tea.KeyEnter})
 
-	if !strings.Contains(screen, "org/elsewhere") || !strings.Contains(screen, "1 of 2") {
-		t.Fatalf("got screen %q, want both rows with first selected", screen)
-	}
-	if m.mode == modeOverview || m.repository.Dir != "C:/dev/org/elsewhere" || len(m.focused) != 3 {
-		t.Fatalf("got mode %d, %s, %d focused, want the overview closed on org/elsewhere with 3 focused",
-			m.mode, m.repository.Dir, len(m.focused))
-	}
+	require.Contains(t, screen, "org/elsewhere")
+	require.Contains(t, screen, "1 of 2")
+	require.NotEqual(t, modeOverview, model.mode)
+	require.Equal(t, "C:/dev/org/elsewhere", model.repository.Dir)
+	require.Len(t, model.focused, 3)
 }
 
 func TestARefusedRepositoryIsAMutedRowWithItsSummaryAndEnterShowsTheReason(t *testing.T) {
@@ -174,23 +186,24 @@ func TestARefusedRepositoryIsAMutedRowWithItsSummaryAndEnterShowsTheReason(t *te
 			{RelativePath: "agents", Err: fmt.Errorf("%w: C:/dev/agents/.git has no deny", focus.ErrGitDirUnprotected)},
 		}}, nil
 	}
-	m := update(t, New(list, openAnything, nil, AgentHost{}), tea.WindowSizeMsg{Width: 120, Height: 30})
-	m = update(t, m, tea.KeyPressMsg{Code: 'o', Text: "o"})
-	m = update(t, m, overviewRequest{findRepositories: list}.load())
-	screen := ansi.Strip(m.renderScreen())
+	model := New(list, openAnything, nil, AgentHost{})
+	model = update(t, model, tea.WindowSizeMsg{Width: 120, Height: 30})
+	model = update(t, model, tea.KeyPressMsg{Code: 'o', Text: "o"})
+	found := overviewRequest{findRepositories: list}.load()
+	model = update(t, model, found)
+	screen := plainScreen(model)
 
-	next, cmd := m.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
-	m = asModel(t, next)
+	next, cmd := model.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
+	model = asModel(t, next)
 
-	want := folderGlyph + " agents  not write-denied to the agent"
-	if !strings.Contains(screen, want) || strings.Index(screen, "agents") > strings.Index(screen, "notes") {
-		t.Fatalf("got screen:\n%s\nwant agents before notes, as %q", screen, want)
-	}
+	agentsIndex := strings.Index(screen, "agents")
+	notesIndex := strings.Index(screen, "notes")
 	wantFooter := "agents is refused: " + focus.ErrGitDirUnprotected.Error() + ": C:/dev/agents/.git has no deny"
-	if cmd != nil || m.mode != modeOverview || m.footer.text != wantFooter {
-		t.Fatalf("got command %v, mode %d, footer %q, want the reason with the overview still open", cmd,
-			m.mode, m.footer.text)
-	}
+	require.Contains(t, screen, folderGlyph+" agents  not write-denied to the agent")
+	require.Less(t, agentsIndex, notesIndex, screen)
+	require.Nil(t, cmd)
+	require.Equal(t, modeOverview, model.mode)
+	require.Equal(t, wantFooter, model.footer.text)
 }
 
 func TestPullInTheOverview(t *testing.T) {
@@ -201,10 +214,10 @@ func TestPullInTheOverview(t *testing.T) {
 }
 
 func theRowShowsPullingUntilThePulledRowReplacesIt(t *testing.T) {
-	m := overviewWithTwoRepositories(t)
-	next, cmd := m.Update(tea.KeyPressMsg{Code: 'p', Text: "p"})
-	m = asModel(t, next)
-	pulling := ansi.Strip(m.renderScreen())
+	model := overviewWithTwoRepositories(t)
+	next, cmd := model.Update(tea.KeyPressMsg{Code: 'p', Text: "p"})
+	model = asModel(t, next)
+	pulling := plainScreen(model)
 	pulled := repositoryRow{
 		FoundRepository: foundAt("first", "C:/dev/first"),
 		status: gitrepo.Status{
@@ -212,55 +225,56 @@ func theRowShowsPullingUntilThePulledRowReplacesIt(t *testing.T) {
 		},
 	}
 
-	m = update(t, m, syncedMsg{row: pulled, notice: "pulled first"})
+	model = update(t, model, syncedMsg{row: pulled, notice: "pulled first"})
 
-	if cmd == nil || !strings.Contains(pulling, "pulling...") {
-		t.Fatalf("got command %v and screen %q, want a pull running and shown", cmd, pulling)
-	}
-	if !reflect.DeepEqual(m.overview.rows[0], pulled) || len(m.syncing) != 0 || m.footer.text != "pulled first" {
-		t.Fatalf("got row %+v, syncing %v, footer %q, want the pulled row in place", m.overview.rows[0],
-			m.syncing, m.footer.text)
-	}
+	require.NotNil(t, cmd)
+	require.Contains(t, pulling, "pulling...")
+	require.Equal(t, pulled, model.overview.rows[0])
+	require.Empty(t, model.syncing)
+	require.Equal(t, "pulled first", model.footer.text)
 }
 
 func aRowWithNoUpstreamIsNotPulled(t *testing.T) {
-	m := update(t, overviewWithTwoRepositories(t), tea.KeyPressMsg{Code: 'j', Text: "j"})
-	next, cmd := m.Update(tea.KeyPressMsg{Code: 'p', Text: "p"})
-	m = asModel(t, next)
+	model := overviewWithTwoRepositories(t)
+	model = update(t, model, tea.KeyPressMsg{Code: 'j', Text: "j"})
+	next, cmd := model.Update(tea.KeyPressMsg{Code: 'p', Text: "p"})
+	model = asModel(t, next)
 
-	if cmd != nil || len(m.syncing) != 0 || !m.footer.isError {
-		t.Fatalf("got command %v, syncing %v, footer %q, want a refusal", cmd, m.syncing, m.footer.text)
-	}
+	require.Nil(t, cmd)
+	require.Empty(t, model.syncing)
+	require.True(t, model.footer.isError)
 }
 
 func aRowWhoseUpstreamWasDeletedIsExplained(t *testing.T) {
-	m := update(t, overviewWithTwoRepositories(t), overviewMsg{rows: []overviewRow{repositoryRow{
+	model := overviewWithTwoRepositories(t)
+	model = update(t, model, overviewMsg{rows: []overviewRow{repositoryRow{
 		FoundRepository: foundAt("first", "C:/dev/first"),
 		status: gitrepo.Status{
 			Branch: "fix", Tracking: gitrepo.Tracking{Upstream: "origin/fix", UpstreamGone: true}, HasCommits: true,
 		},
 	}}})
-	next, cmd := m.Update(tea.KeyPressMsg{Code: 'p', Text: "p"})
-	m = asModel(t, next)
+	next, cmd := model.Update(tea.KeyPressMsg{Code: 'p', Text: "p"})
+	model = asModel(t, next)
 
-	if cmd != nil || m.footer.text != "first tracks origin/fix, which was deleted from the remote, so there is nothing to pull" {
-		t.Fatalf("got command %v, footer %q, want the deleted upstream named", cmd, m.footer.text)
-	}
+	require.Nil(t, cmd)
+	require.Equal(t, "first tracks origin/fix, which was deleted from the remote, so there is nothing to pull",
+		model.footer.text)
 }
 
 func aFinishedRowIsSwitchedThoughItTracksNoUpstream(t *testing.T) {
-	m := update(t, overviewWithTwoRepositories(t), overviewMsg{rows: []overviewRow{repositoryRow{
+	model := overviewWithTwoRepositories(t)
+	model = update(t, model, overviewMsg{rows: []overviewRow{repositoryRow{
 		FoundRepository: foundAt("first", "C:/dev/first"),
 		status:          gitrepo.Status{Branch: "fix", HasCommits: true, Files: []gitrepo.FileStatus{}},
 		defaultBranch:   originMain(),
 		finished:        true,
 	}}})
-	next, cmd := m.Update(tea.KeyPressMsg{Code: 'p', Text: "p"})
-	m = asModel(t, next)
+	next, cmd := model.Update(tea.KeyPressMsg{Code: 'p', Text: "p"})
+	model = asModel(t, next)
 
-	if cmd == nil || m.syncing["C:/dev/first"] != "pulling..." || m.footer.isError {
-		t.Fatalf("got command %v, syncing %v, footer %q, want the switch running", cmd, m.syncing, m.footer.text)
-	}
+	require.NotNil(t, cmd)
+	require.Equal(t, "pulling...", model.syncing["C:/dev/first"])
+	require.False(t, model.footer.isError)
 }
 
 func TestFetchInTheOverview(t *testing.T) {
@@ -269,34 +283,34 @@ func TestFetchInTheOverview(t *testing.T) {
 }
 
 func fetchesOnlyTheSelectedRow(t *testing.T) {
-	next, cmd := overviewWithTwoRepositories(t).Update(tea.KeyPressMsg{Code: 'f', Text: "f"})
-	m := asModel(t, next)
+	overview := overviewWithTwoRepositories(t)
 
-	if cmd == nil || !reflect.DeepEqual(m.syncing, map[string]string{"C:/dev/first": "fetching..."}) {
-		t.Fatalf("got command %v, syncing %v, want first fetching", cmd, m.syncing)
-	}
+	next, cmd := overview.Update(tea.KeyPressMsg{Code: 'f', Text: "f"})
+	model := asModel(t, next)
+
+	require.NotNil(t, cmd)
+	require.Equal(t, map[string]string{"C:/dev/first": "fetching..."}, model.syncing)
 }
 
 func fetchAllFetchesEveryRepositoryAndNamesTheFailures(t *testing.T) {
-	next, cmd := overviewWithTwoRepositories(t).Update(tea.KeyPressMsg{Code: 'F', Text: "F"})
-	m := asModel(t, next)
-	fetching := ansi.Strip(m.renderScreen())
+	overview := overviewWithTwoRepositories(t)
+	next, cmd := overview.Update(tea.KeyPressMsg{Code: 'F', Text: "F"})
+	model := asModel(t, next)
+	fetching := plainScreen(model)
 	fetched := repositoryRow{
 		FoundRepository: foundAt("first", "C:/dev/first"),
 		status:          gitrepo.Status{Branch: "main", Tracking: gitrepo.Tracking{Upstream: "origin/main", Behind: 5}},
 	}
 
-	m = update(t, m, fetchedAllMsg{dirs: []string{"C:/dev/first", "C:/dev/org/elsewhere"},
+	model = update(t, model, fetchedAllMsg{dirs: []string{"C:/dev/first", "C:/dev/org/elsewhere"},
 		rows: []repositoryRow{fetched}, failures: []string{"run git fetch --prune in C:/dev/org/elsewhere: exit status 128"}})
 
-	if cmd == nil || strings.Count(fetching, "fetching...") != 2 {
-		t.Fatalf("got command %v and screen:\n%s\nwant both rows fetching", cmd, fetching)
-	}
-	if !reflect.DeepEqual(m.overview.rows[0], fetched) || len(m.syncing) != 0 ||
-		m.footer.text != "fetch failed: run git fetch --prune in C:/dev/org/elsewhere: exit status 128" {
-		t.Fatalf("got row %+v, syncing %v, footer %q, want first fetched and the failure named", m.overview.rows[0],
-			m.syncing, m.footer.text)
-	}
+	fetchingCount := strings.Count(fetching, "fetching...")
+	require.NotNil(t, cmd)
+	require.Equal(t, 2, fetchingCount, fetching)
+	require.Equal(t, fetched, model.overview.rows[0])
+	require.Empty(t, model.syncing)
+	require.Equal(t, "fetch failed: run git fetch --prune in C:/dev/org/elsewhere: exit status 128", model.footer.text)
 }
 
 func TestPushInTheOverview(t *testing.T) {
@@ -305,41 +319,40 @@ func TestPushInTheOverview(t *testing.T) {
 }
 
 func aRepositoryNotUnderReviewClosesItsPopupOnItsResult(t *testing.T) {
-	m := update(t, overviewWithTwoRepositories(t), overviewMsg{rows: []overviewRow{repositoryRow{
+	model := overviewWithTwoRepositories(t)
+	model = update(t, model, overviewMsg{rows: []overviewRow{repositoryRow{
 		FoundRepository: foundAt("second", "C:/dev/second"),
 		status: gitrepo.Status{
 			Branch: "main", Tracking: gitrepo.Tracking{Upstream: "origin/main", Ahead: 1}, HasCommits: true,
 		},
 	}}})
-	m = update(t, m, tea.KeyPressMsg{Code: 'P', Text: "P"})
-	popup := ansi.Strip(m.renderConfirmPopup())
+	model = update(t, model, tea.KeyPressMsg{Code: 'P', Text: "P"})
+	popup := plainConfirmPopup(model)
 
-	next, cmd := m.Update(popupSuccessMsg{dir: "C:/dev/second", notice: "pushed to origin/main"})
-	m = asModel(t, next)
+	next, cmd := model.Update(popupSuccessMsg{dir: "C:/dev/second", notice: "pushed to origin/main"})
+	model = asModel(t, next)
 
-	if !strings.Contains(popup, "push main to origin/main") || m.repository.Dir == "C:/dev/second" {
-		t.Fatalf("got popup:\n%s\nfor repository %q, want a push of second", popup, m.repository.Dir)
-	}
-	if m.popup.kind != noPopup || m.footer.text != "pushed to origin/main" || cmd == nil {
-		t.Fatalf("got popup %d, footer %q, command %v, want it closed and the row reloading", m.popup.kind,
-			m.footer.text, cmd)
-	}
+	require.Contains(t, popup, "push main to origin/main")
+	require.NotEqual(t, "C:/dev/second", model.repository.Dir)
+	require.Equal(t, noPopup, model.popup.kind)
+	require.Equal(t, "pushed to origin/main", model.footer.text)
+	require.NotNil(t, cmd)
 }
 
 func aBranchWithNoUpstreamIsPublished(t *testing.T) {
-	m := update(t, overviewWithTwoRepositories(t), overviewMsg{rows: []overviewRow{repositoryRow{
+	model := overviewWithTwoRepositories(t)
+	model = update(t, model, overviewMsg{rows: []overviewRow{repositoryRow{
 		FoundRepository:   foundAt("second", "C:/dev/second"),
 		status:            gitrepo.Status{Branch: "feature", HasCommits: true},
 		commitsOnNoRemote: 2,
 	}}})
-	screen := ansi.Strip(m.renderScreen())
+	screen := plainScreen(model)
 
-	m = update(t, m, tea.KeyPressMsg{Code: 'P', Text: "P"})
+	model = update(t, model, tea.KeyPressMsg{Code: 'P', Text: "P"})
+	popup := plainConfirmPopup(model)
 
-	popup := ansi.Strip(m.renderConfirmPopup())
-	if !strings.Contains(screen, "↑2 unpublished") || !strings.Contains(popup, "publish feature to origin") {
-		t.Fatalf("got screen:\n%s\npopup:\n%s\nwant the unpushed commits shown and offered", screen, popup)
-	}
+	require.Contains(t, screen, "↑2 unpublished")
+	require.Contains(t, popup, "publish feature to origin")
 }
 
 func TestCherryPickInTheOverview(t *testing.T) {
@@ -349,7 +362,8 @@ func TestCherryPickInTheOverview(t *testing.T) {
 }
 
 func cherryPickOffersTheWorkTreesBranchOntoItsMainClonesDefaultBranch(t *testing.T) {
-	m := update(t, overviewWithTwoRepositories(t), overviewMsg{rows: []overviewRow{
+	model := overviewWithTwoRepositories(t)
+	model = update(t, model, overviewMsg{rows: []overviewRow{
 		repositoryRow{
 			FoundRepository: focus.FoundRepository{RelativePath: "repo", Repository: gitrepo.Repository{
 				Dir: "C:/dev/repo", GitDir: filepath.FromSlash("C:/dev/repo/.git"),
@@ -364,20 +378,20 @@ func cherryPickOffersTheWorkTreesBranchOntoItsMainClonesDefaultBranch(t *testing
 			status: gitrepo.Status{Branch: "fix", HasCommits: true},
 		},
 	}})
-	m = update(t, m, tea.KeyPressMsg{Code: 'j', Text: "j"})
+	model = update(t, model, tea.KeyPressMsg{Code: 'j', Text: "j"})
 
-	next, cmd := m.Update(tea.KeyPressMsg{Code: 'C', Text: "C"})
-	m = asModel(t, next)
+	next, cmd := model.Update(tea.KeyPressMsg{Code: 'C', Text: "C"})
+	model = asModel(t, next)
+	popup := plainConfirmPopup(model)
 
-	popup := ansi.Strip(m.renderConfirmPopup())
-	if cmd != nil || !strings.Contains(popup, "cherry-pick fix onto main") || m.popup.dir != "C:/dev/repo" {
-		t.Fatalf("got command %v, footer %q, popup:\n%s\nfor %q, want a cherry-pick of fix onto main in repo", cmd,
-			m.footer.text, popup, m.popup.dir)
-	}
+	require.Nil(t, cmd)
+	require.Contains(t, popup, "cherry-pick fix onto main")
+	require.Equal(t, "C:/dev/repo", model.popup.dir)
 }
 
 func cherryPickRefusesAMainClone(t *testing.T) {
-	m := update(t, overviewWithTwoRepositories(t), overviewMsg{rows: []overviewRow{repositoryRow{
+	model := overviewWithTwoRepositories(t)
+	model = update(t, model, overviewMsg{rows: []overviewRow{repositoryRow{
 		FoundRepository: focus.FoundRepository{RelativePath: "repo", Repository: gitrepo.Repository{
 			Dir: "C:/dev/repo", GitDir: "C:/dev/repo/.git",
 		}},
@@ -385,17 +399,17 @@ func cherryPickRefusesAMainClone(t *testing.T) {
 		defaultBranch: originMain(),
 	}}})
 
-	next, cmd := m.Update(tea.KeyPressMsg{Code: 'C', Text: "C"})
-	m = asModel(t, next)
+	next, cmd := model.Update(tea.KeyPressMsg{Code: 'C', Text: "C"})
+	model = asModel(t, next)
 
-	if cmd != nil || m.popup.kind != noPopup || !strings.Contains(m.footer.text, "repo is a main clone") {
-		t.Fatalf("got command %v, popup %d, footer %q, want the main clone refused", cmd, m.popup.kind,
-			m.footer.text)
-	}
+	require.Nil(t, cmd)
+	require.Equal(t, noPopup, model.popup.kind)
+	require.Contains(t, model.footer.text, "repo is a main clone")
 }
 
 func TestTheOverviewDetailsTheSelectedRepository(t *testing.T) {
-	m := update(t, overviewWithTwoRepositories(t), overviewMsg{rows: []overviewRow{
+	model := overviewWithTwoRepositories(t)
+	model = update(t, model, overviewMsg{rows: []overviewRow{
 		repositoryRow{
 			FoundRepository: foundAt("first", "C:/dev/first"),
 			status: gitrepo.Status{
@@ -407,20 +421,17 @@ func TestTheOverviewDetailsTheSelectedRepository(t *testing.T) {
 		},
 		repositoryRow{FoundRepository: foundAt("second", "C:/dev/second")},
 	}})
-	first := ansi.Strip(m.renderScreen())
+	first := plainScreen(model)
 
-	m = update(t, m, tea.KeyPressMsg{Code: 'j', Text: "j"})
+	model = update(t, model, tea.KeyPressMsg{Code: 'j', Text: "j"})
+	second := plainScreen(model)
 
 	for _, want := range []string{"changes", " M edited.go", "outgoing", "aaa1111 Add the local change", "incoming",
 		"bbb2222 Add the remote change"} {
-		if !strings.Contains(first, want) {
-			t.Fatalf("got screen:\n%s\nwant %q", first, want)
-		}
+		require.Contains(t, first, want)
 	}
-	if second := ansi.Strip(m.renderScreen()); strings.Contains(second, "edited.go") ||
-		strings.Contains(second, "aaa1111") {
-		t.Fatalf("got screen:\n%s\nwant the details of second only", second)
-	}
+	require.NotContains(t, second, "edited.go")
+	require.NotContains(t, second, "aaa1111")
 }
 
 func TestOverviewTableHeight(t *testing.T) {
@@ -430,7 +441,11 @@ func TestOverviewTableHeight(t *testing.T) {
 }
 
 func aShortOverviewListTakesOneLinePerRow(t *testing.T) {
-	assertDetailsTopBorderOnLine(t, overviewWithTwoRepositories(t), headerHeight+1+2+1)
+	model := overviewWithTwoRepositories(t)
+
+	detailsTop := detailsTopBorderLine(model)
+
+	require.Equal(t, headerHeight+1+2+1, detailsTop)
 }
 
 func aLongOverviewListLeavesTheDetailsFiveRows(t *testing.T) {
@@ -439,78 +454,110 @@ func aLongOverviewListLeavesTheDetailsFiveRows(t *testing.T) {
 		name := "repo" + strconv.Itoa(index)
 		rows = append(rows, repositoryRow{FoundRepository: foundAt(name, "C:/dev/"+name)})
 	}
-	m := update(t, overviewWithTwoRepositories(t), overviewMsg{rows: rows})
+	model := overviewWithTwoRepositories(t)
+	model = update(t, model, overviewMsg{rows: rows})
 
-	assertDetailsTopBorderOnLine(t, m, m.height-footerHeight-(5+2))
+	detailsTop := detailsTopBorderLine(model)
+
+	require.Equal(t, model.height-footerHeight-(5+2), detailsTop)
 }
 
 func aFilterKeepsTheOverviewTableHeight(t *testing.T) {
-	m := typeText(t, overviewWithTwoRepositories(t), "/elsewhere")
+	overview := overviewWithTwoRepositories(t)
+	model := typeText(t, overview, "/elsewhere")
 
-	assertDetailsTopBorderOnLine(t, m, headerHeight+1+2+1)
+	detailsTop := detailsTopBorderLine(model)
+
+	require.Equal(t, headerHeight+1+2+1, detailsTop)
 }
 
-func assertDetailsTopBorderOnLine(t *testing.T, m Model, want int) {
-	t.Helper()
-	lines := strings.Split(ansi.Strip(m.renderScreen()), "\n")
-	detailsTop := slices.IndexFunc(lines, func(line string) bool { return strings.Contains(line, "─ changes ─") })
-	if detailsTop != want {
-		t.Fatalf("got the details' top border on line %d, want %d, screen:\n%s", detailsTop, want,
-			strings.Join(lines, "\n"))
-	}
+func detailsTopBorderLine(model Model) int {
+	screen := plainScreen(model)
+	lines := strings.Split(screen, "\n")
+	return slices.IndexFunc(lines, func(line string) bool { return strings.Contains(line, "─ changes ─") })
 }
 
 func TestMayBeFinished(t *testing.T) {
-	changed := []gitrepo.FileStatus{{Path: "a.go", IndexStatus: ' ', WorktreeStatus: 'M'}}
-	for name, test := range map[string]struct {
-		status gitrepo.Status
-		want   bool
-	}{
-		"aBranchWhoseUpstreamWasDeleted": {
-			status: gitrepo.Status{Branch: "fix", Tracking: gitrepo.Tracking{Upstream: "origin/fix", UpstreamGone: true}},
-			want:   true,
-		},
-		"aBranchThatNeverHadAnUpstream": {status: gitrepo.Status{Branch: "fix"}, want: true},
-		"aBranchWhoseUpstreamStillExists": {
-			status: gitrepo.Status{Branch: "fix", Tracking: gitrepo.Tracking{Upstream: "origin/fix"}},
-		},
-		"aBranchWithChanges": {status: gitrepo.Status{Branch: "fix", Files: changed}},
-		"aDetachedHead":      {status: gitrepo.Status{}},
-		"theDefaultBranchWithItsRemoteGone": {
-			status: gitrepo.Status{Branch: "main", Tracking: gitrepo.Tracking{Upstream: "origin/main", UpstreamGone: true}},
-		},
-	} {
-		t.Run(name, func(t *testing.T) {
-			if got := mayBeFinished(test.status, originMain()); got != test.want {
-				t.Fatalf("got %t, want %t", got, test.want)
-			}
-		})
-	}
+	t.Run("aBranchWhoseUpstreamWasDeletedMayBeFinished", aBranchWhoseUpstreamWasDeletedMayBeFinished)
+	t.Run("aBranchThatNeverHadAnUpstreamMayBeFinished", aBranchThatNeverHadAnUpstreamMayBeFinished)
+	t.Run("aBranchWhoseUpstreamStillExistsIsNotFinished", aBranchWhoseUpstreamStillExistsIsNotFinished)
+	t.Run("aBranchWithChangesIsNotFinished", aBranchWithChangesIsNotFinished)
+	t.Run("aDetachedHeadIsNotFinished", aDetachedHeadIsNotFinished)
+	t.Run("theDefaultBranchWithItsRemoteGoneIsNotFinished", theDefaultBranchWithItsRemoteGoneIsNotFinished)
+}
+
+func aBranchWhoseUpstreamWasDeletedMayBeFinished(t *testing.T) {
+	status := gitrepo.Status{Branch: "fix", Tracking: gitrepo.Tracking{Upstream: "origin/fix", UpstreamGone: true}}
+
+	finished := mayBeFinished(status, originMain())
+
+	require.True(t, finished)
+}
+
+func aBranchThatNeverHadAnUpstreamMayBeFinished(t *testing.T) {
+	status := gitrepo.Status{Branch: "fix"}
+
+	finished := mayBeFinished(status, originMain())
+
+	require.True(t, finished)
+}
+
+func aBranchWhoseUpstreamStillExistsIsNotFinished(t *testing.T) {
+	status := gitrepo.Status{Branch: "fix", Tracking: gitrepo.Tracking{Upstream: "origin/fix"}}
+
+	finished := mayBeFinished(status, originMain())
+
+	require.False(t, finished)
+}
+
+func aBranchWithChangesIsNotFinished(t *testing.T) {
+	status := gitrepo.Status{Branch: "fix", Files: []gitrepo.FileStatus{{Path: "a.go", IndexStatus: ' ', WorktreeStatus: 'M'}}}
+
+	finished := mayBeFinished(status, originMain())
+
+	require.False(t, finished)
+}
+
+func aDetachedHeadIsNotFinished(t *testing.T) {
+	status := gitrepo.Status{}
+
+	finished := mayBeFinished(status, originMain())
+
+	require.False(t, finished)
+}
+
+func theDefaultBranchWithItsRemoteGoneIsNotFinished(t *testing.T) {
+	status := gitrepo.Status{Branch: "main", Tracking: gitrepo.Tracking{Upstream: "origin/main", UpstreamGone: true}}
+
+	finished := mayBeFinished(status, originMain())
+
+	require.False(t, finished)
 }
 
 func TestRefreshInTheOverviewListsAnAddedRepositoryAndKeepsTheSelection(t *testing.T) {
-	m := update(t, overviewWithTwoRepositories(t), tea.KeyPressMsg{Code: 'j', Text: "j"})
-	next, cmd := m.Update(tea.KeyPressMsg{Code: 'r', Text: "r"})
-	m = asModel(t, next)
+	model := overviewWithTwoRepositories(t)
+	model = update(t, model, tea.KeyPressMsg{Code: 'j', Text: "j"})
+	next, cmd := model.Update(tea.KeyPressMsg{Code: 'r', Text: "r"})
+	model = asModel(t, next)
 
-	m = update(t, m, overviewMsg{rows: []overviewRow{
+	model = update(t, model, overviewMsg{rows: []overviewRow{
 		pendingRow{FoundRepository: foundAt("added", "C:/dev/added")},
 		pendingRow{FoundRepository: foundAt("first", "C:/dev/first")},
 		pendingRow{FoundRepository: foundAt("org/elsewhere", "C:/dev/org/elsewhere")},
 	}})
+	selected, _ := model.overview.selectedRow()
+	selectedPath := selected.relativePath()
 
-	selected, _ := m.overview.selectedRow()
-	if cmd == nil || len(m.overview.rows) != 3 || selected.relativePath() != "org/elsewhere" {
-		t.Fatalf("got command %v, %d rows, %q selected, want a reload listing 3 with org/elsewhere still selected",
-			cmd, len(m.overview.rows), selected.relativePath())
-	}
+	require.NotNil(t, cmd)
+	require.Len(t, model.overview.rows, 3)
+	require.Equal(t, "org/elsewhere", selectedPath)
 }
 
 func overviewWithTwoRepositories(t *testing.T) Model {
 	t.Helper()
-	m := focusOnSeveral(t, map[string]bool{"C:/dev/cwd": false, "C:/dev/first": true, "C:/dev/second": false})
-	m = update(t, m, tea.KeyPressMsg{Code: 'o', Text: "o"})
-	return update(t, m, overviewMsg{rows: []overviewRow{
+	model := focusOnSeveral(t, map[string]bool{"C:/dev/cwd": false, "C:/dev/first": true, "C:/dev/second": false})
+	model = update(t, model, tea.KeyPressMsg{Code: 'o', Text: "o"})
+	return update(t, model, overviewMsg{rows: []overviewRow{
 		repositoryRow{
 			FoundRepository: foundAt("first", "C:/dev/first"),
 			status: gitrepo.Status{
@@ -532,37 +579,33 @@ func TestOverviewMouse(t *testing.T) {
 }
 
 func theWheelMovesTheOverviewSelection(t *testing.T) {
-	m := overviewOfWorkTrees(t)
-	start := m.overview.selected
+	model := overviewOfWorkTrees(t)
+	start := model.overview.selected
 
-	m = update(t, m, tea.MouseWheelMsg{X: 10, Y: 25, Button: tea.MouseWheelDown})
-	down := m.overview.selected
-	m = update(t, m, tea.MouseWheelMsg{X: 10, Y: 25, Button: tea.MouseWheelUp})
+	model = update(t, model, tea.MouseWheelMsg{X: 10, Y: 25, Button: tea.MouseWheelDown})
+	down := model.overview.selected
+	model = update(t, model, tea.MouseWheelMsg{X: 10, Y: 25, Button: tea.MouseWheelUp})
 
-	if down != start+1 || m.overview.selected != start {
-		t.Fatalf("got %d after wheel down and %d after wheel up, want %d then %d", down, m.overview.selected,
-			start+1, start)
-	}
+	require.Equal(t, start+1, down)
+	require.Equal(t, start, model.overview.selected)
 }
 
 func clickingAnOverviewRowSelectsIt(t *testing.T) {
-	m := overviewOfWorkTrees(t)
+	model := overviewOfWorkTrees(t)
 
-	m = update(t, m, tea.MouseClickMsg{X: 10, Y: headerHeight + 1 + 2, Button: tea.MouseLeft})
+	model = update(t, model, tea.MouseClickMsg{X: 10, Y: headerHeight + 1 + 2, Button: tea.MouseLeft})
 
-	if m.overview.selected != 2 || m.mode != modeOverview {
-		t.Fatalf("got selected %d, mode %d, want the third row selected in the overview", m.overview.selected, m.mode)
-	}
+	require.Equal(t, 2, model.overview.selected)
+	require.Equal(t, modeOverview, model.mode)
 }
 
 func clickingBelowTheLastOverviewRowKeepsTheSelection(t *testing.T) {
-	m := update(t, overviewOfWorkTrees(t), tea.KeyPressMsg{Code: 'j', Text: "j"})
+	model := overviewOfWorkTrees(t)
+	model = update(t, model, tea.KeyPressMsg{Code: 'j', Text: "j"})
 
-	m = update(t, m, tea.MouseClickMsg{X: 10, Y: headerHeight + 1 + 4, Button: tea.MouseLeft})
+	model = update(t, model, tea.MouseClickMsg{X: 10, Y: headerHeight + 1 + 4, Button: tea.MouseLeft})
 
-	if m.overview.selected != 1 {
-		t.Fatalf("got selected %d, want 1", m.overview.selected)
-	}
+	require.Equal(t, 1, model.overview.selected)
 }
 
 func TestOverviewFilter(t *testing.T) {
@@ -586,243 +629,252 @@ func TestOverviewFilter(t *testing.T) {
 }
 
 func keepsTheRowsHoldingTheQuerysCharactersInOrderAndTitlesIt(t *testing.T) {
-	m := typeText(t, overviewOfWorkTrees(t), "/dwfix")
+	overview := overviewOfWorkTrees(t)
+
+	model := typeText(t, overview, "/dwfix")
+	lines := overviewLines(model)
+	screen := plainScreen(model)
+	height := model.paneInnerHeight()
+	styledLines := listLines(model.overview, model.overviewCells, "", 118, height)
+	unselected := styledLines[1]
+	highlightedFix := searchMatchStyle.Render("fix")
 
 	want := []string{"▌ " + folderGlyph + " worktrees/desktop-edge-win/fix-proxy " + branchGlyph + " fix-proxy clean",
 		folderGlyph + " worktrees/desktop-edge-win/fix-dns " + branchGlyph + " fix-dns clean"}
-	screen := ansi.Strip(m.renderScreen())
-	if !reflect.DeepEqual(overviewLines(m), want) || !strings.Contains(screen, "repositories /dwfix") {
-		t.Fatalf("got %q and screen:\n%s\nwant %q titled repositories /dwfix", overviewLines(m), screen, want)
-	}
-	unselected := listLines(m.overview, m.overviewCells, "", 118, m.paneInnerHeight())[1]
-	if !strings.Contains(unselected, searchMatchStyle.Render("fix")) {
-		t.Fatalf("got row %q, want fix highlighted", unselected)
-	}
+	require.Equal(t, want, lines)
+	require.Contains(t, screen, "repositories /dwfix")
+	require.Contains(t, unselected, highlightedFix)
 }
 
 func everyWordMustMatchThePathOrTheBranch(t *testing.T) {
-	m := typeText(t, overviewOfWorkTrees(t), "/edge dns")
+	overview := overviewOfWorkTrees(t)
+
+	model := typeText(t, overview, "/edge dns")
+	lines := overviewLines(model)
 
 	want := []string{"▌ " + folderGlyph + " worktrees/desktop-edge-win/fix-dns " + branchGlyph + " fix-dns clean"}
-	if !reflect.DeepEqual(overviewLines(m), want) {
-		t.Fatalf("got %q, want %q", overviewLines(m), want)
-	}
+	require.Equal(t, want, lines)
 }
 
 func anUppercaseLetterMakesTheWordCaseSensitive(t *testing.T) {
-	m := update(t, overviewOfWorkTrees(t), overviewRowMsg{row: repositoryRow{
+	model := overviewOfWorkTrees(t)
+	model = update(t, model, overviewRowMsg{row: repositoryRow{
 		FoundRepository: foundAt("ziti", "C:/dev/ziti"), status: gitrepo.Status{Branch: "Fix-docs", HasCommits: true},
 	}})
 
-	m = typeText(t, m, "/Fix")
+	model = typeText(t, model, "/Fix")
+	lines := overviewLines(model)
 
 	want := []string{"▌ " + folderGlyph + " ziti " + branchGlyph + " Fix-docs clean"}
-	if !reflect.DeepEqual(overviewLines(m), want) {
-		t.Fatalf("got %q, want %q", overviewLines(m), want)
-	}
+	require.Equal(t, want, lines)
 }
 
 func arrowsMoveTheSelectionWhileTypingAndJTypesALetter(t *testing.T) {
-	m := typeText(t, overviewOfWorkTrees(t), "/fix")
+	overview := overviewOfWorkTrees(t)
+	model := typeText(t, overview, "/fix")
 
-	m = update(t, m, tea.KeyPressMsg{Code: tea.KeyDown})
-	down, _ := m.overview.selectedRow()
-	m = update(t, m, tea.KeyPressMsg{Code: tea.KeyUp})
-	up, _ := m.overview.selectedRow()
-	m = typeText(t, m, "j")
+	model = update(t, model, tea.KeyPressMsg{Code: tea.KeyDown})
+	down, _ := model.overview.selectedRow()
+	downPath := down.relativePath()
+	model = update(t, model, tea.KeyPressMsg{Code: tea.KeyUp})
+	up, _ := model.overview.selectedRow()
+	upPath := up.relativePath()
+	model = typeText(t, model, "j")
+	query := model.overviewQuery.Value()
 
-	if down.relativePath() != "worktrees/desktop-edge-win/fix-dns" ||
-		up.relativePath() != "worktrees/desktop-edge-win/fix-proxy" {
-		t.Fatalf("got %q after down and %q after up, want fix-dns then fix-proxy", down.relativePath(),
-			up.relativePath())
-	}
-	if m.overviewQuery.Value() != "fixj" || len(m.overview.rows) != 0 {
-		t.Fatalf("got query %q and %d rows, want fixj matching nothing", m.overviewQuery.Value(), len(m.overview.rows))
-	}
+	require.Equal(t, "worktrees/desktop-edge-win/fix-dns", downPath)
+	require.Equal(t, "worktrees/desktop-edge-win/fix-proxy", upPath)
+	require.Equal(t, "fixj", query)
+	require.Empty(t, model.overview.rows)
 }
 
 func aPasteFiltersTheRows(t *testing.T) {
-	m := typeText(t, overviewOfWorkTrees(t), "/")
+	overview := overviewOfWorkTrees(t)
+	model := typeText(t, overview, "/")
 
-	m = update(t, m, tea.PasteMsg{Content: "dns"})
+	model = update(t, model, tea.PasteMsg{Content: "dns"})
+	lines := overviewLines(model)
 
 	want := []string{"▌ " + folderGlyph + " worktrees/desktop-edge-win/fix-dns " + branchGlyph + " fix-dns clean"}
-	if !reflect.DeepEqual(overviewLines(m), want) {
-		t.Fatalf("got %q, want %q", overviewLines(m), want)
-	}
+	require.Equal(t, want, lines)
 }
 
 func aPasteIntoTheSearchFiltersTheLog(t *testing.T) {
-	m := logOf(t, []gitrepo.Commit{
+	model := logOf(t, []gitrepo.Commit{
 		{Hash: strings.Repeat("1", 40), Message: "Add tree"},
 		{Hash: strings.Repeat("2", 40), Message: "Fix wrap"},
 	})
-	m = update(t, m, tea.KeyPressMsg{Code: '/', Text: "/"})
+	model = update(t, model, tea.KeyPressMsg{Code: '/', Text: "/"})
 
-	m = update(t, m, tea.PasteMsg{Content: "wrap"})
+	model = update(t, model, tea.PasteMsg{Content: "wrap"})
+	rows := model.visibleLogRows()
 
-	if !reflect.DeepEqual(m.visibleLogRows(), []treeRow{{commit: 1, file: commitRow}}) {
-		t.Fatalf("got rows %v, want only commit 1", m.visibleLogRows())
-	}
+	require.Equal(t, []treeRow{{commit: 1, file: commitRow}}, rows)
 }
 
 func deleteActsOnTheFilteredRowAndTheReloadStaysFiltered(t *testing.T) {
-	m := typeText(t, overviewOfWorkTrees(t), "/fix")
-	m = update(t, m, tea.KeyPressMsg{Code: tea.KeyDown})
-	m = update(t, m, tea.KeyPressMsg{Code: tea.KeyTab})
+	overview := overviewOfWorkTrees(t)
+	model := typeText(t, overview, "/fix")
+	model = update(t, model, tea.KeyPressMsg{Code: tea.KeyDown})
+	model = update(t, model, tea.KeyPressMsg{Code: tea.KeyTab})
 
-	next, check := m.Update(tea.KeyPressMsg{Code: 'D', Text: "D"})
-	m = asModel(t, next)
-	if check == nil || m.footer.text != "" {
-		t.Fatalf("got command %v, footer %q, want the delete check to run", check, m.footer.text)
-	}
-	failure, isFailure := check().(gitFailureMsg)
-	if !isFailure || !strings.Contains(failure.err.Error(), "C:/dev/worktrees/desktop-edge-win/fix-dns") {
-		t.Fatalf("got %#v, want the check to run in fix-dns, whose made up directory fails", failure)
-	}
+	next, check := model.Update(tea.KeyPressMsg{Code: 'D', Text: "D"})
+	model = asModel(t, next)
+	require.NotNil(t, check)
+	require.Empty(t, model.footer.text)
+	checkMsg := check()
+	failure, isFailure := checkMsg.(gitFailureMsg)
+	require.True(t, isFailure, "got %#v, want the check to run in fix-dns, whose made up directory fails", checkMsg)
+	require.ErrorContains(t, failure.err, "C:/dev/worktrees/desktop-edge-win/fix-dns")
 
-	m = update(t, m, overviewMsg{rows: slices.Delete(workTreeRows(), 2, 3)})
+	reloaded := slices.Delete(workTreeRows(), 2, 3)
+	model = update(t, model, overviewMsg{rows: reloaded})
+	lines := overviewLines(model)
 
 	want := []string{"▌ " + folderGlyph + " worktrees/desktop-edge-win/fix-proxy " + branchGlyph + " fix-proxy clean"}
-	if !reflect.DeepEqual(overviewLines(m), want) {
-		t.Fatalf("got %q after the reload, want %q", overviewLines(m), want)
-	}
+	require.Equal(t, want, lines)
 }
 
 func aRowFillingInMatchesOnItsBranch(t *testing.T) {
-	m := typeText(t, overviewOfWorkTrees(t), "/release")
-	m = update(t, m, tea.KeyPressMsg{Code: tea.KeyTab})
+	overview := overviewOfWorkTrees(t)
+	model := typeText(t, overview, "/release")
+	model = update(t, model, tea.KeyPressMsg{Code: tea.KeyTab})
 
-	m = update(t, m, overviewRowMsg{row: repositoryRow{
+	model = update(t, model, overviewRowMsg{row: repositoryRow{
 		FoundRepository: foundAt("ziti", "C:/dev/ziti"), status: gitrepo.Status{Branch: "release", HasCommits: true},
 	}})
+	lines := overviewLines(model)
 
 	want := []string{"▌ " + folderGlyph + " ziti " + branchGlyph + " release clean"}
-	if !reflect.DeepEqual(overviewLines(m), want) {
-		t.Fatalf("got %q, want %q", overviewLines(m), want)
-	}
+	require.Equal(t, want, lines)
 }
 
 func theFooterShowsTheQueryWhileTypingThenTheOverviewKeys(t *testing.T) {
-	m := typeText(t, overviewOfWorkTrees(t), "/dns")
-	typing := ansi.Strip(m.renderFooter())
+	overview := overviewOfWorkTrees(t)
+	model := typeText(t, overview, "/dns")
+	typing := plainFooter(model)
 
-	m = update(t, m, tea.KeyPressMsg{Code: tea.KeyTab})
-	kept := ansi.Strip(m.renderFooter())
+	model = update(t, model, tea.KeyPressMsg{Code: tea.KeyTab})
+	kept := plainFooter(model)
 
-	if !strings.Contains(typing, " /dns") || !strings.Contains(typing, "enter open  tab keep  esc clear") {
-		t.Fatalf("got footer %q while typing, want the query and enter open  tab keep  esc clear", typing)
-	}
-	if !strings.Contains(kept, "j/k select  / search  enter open") {
-		t.Fatalf("got footer %q after tab, want the overview keys with / search", kept)
-	}
+	require.Contains(t, typing, " /dns")
+	require.Contains(t, typing, "enter open  tab keep  esc clear")
+	require.Contains(t, kept, "j/k select  / search  enter open")
 }
 
 func enterWhileTypingOpensTheSelectedRow(t *testing.T) {
-	m := typeText(t, overviewOfWorkTrees(t), "/dns")
+	overview := overviewOfWorkTrees(t)
+	model := typeText(t, overview, "/dns")
 
-	next, open := m.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
-	m = asModel(t, next)
+	next, open := model.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
+	model = asModel(t, next)
 
-	if m.mode != modeBrowsing || m.repository.Dir != "C:/dev/worktrees/desktop-edge-win/fix-dns" || open == nil {
-		t.Fatalf("got mode %d, repository %q, command %v, want fix-dns opened", m.mode, m.repository.Dir, open)
-	}
+	require.Equal(t, modeBrowsing, model.mode)
+	require.Equal(t, "C:/dev/worktrees/desktop-edge-win/fix-dns", model.repository.Dir)
+	require.NotNil(t, open)
 }
 
 func aHiddenPendingRowThatFailsIsSkipped(t *testing.T) {
-	m := update(t, overviewOfWorkTrees(t), overviewMsg{rows: []overviewRow{
+	model := overviewOfWorkTrees(t)
+	model = update(t, model, overviewMsg{rows: []overviewRow{
 		pendingRow{FoundRepository: foundAt("first", "C:/dev/first")},
 		pendingRow{FoundRepository: foundAt("second", "C:/dev/second")},
 	}})
-	m = typeText(t, m, "/second")
-	m = update(t, m, tea.KeyPressMsg{Code: tea.KeyTab})
+	model = typeText(t, model, "/second")
+	model = update(t, model, tea.KeyPressMsg{Code: tea.KeyTab})
 
-	m = update(t, m, overviewRowFailureMsg{dir: "C:/dev/first", err: errors.New("run git status in C:/dev/first")})
-	footer := m.footer.text
-	m = update(t, m, tea.KeyPressMsg{Code: tea.KeyEscape})
+	model = update(t, model, overviewRowFailureMsg{dir: "C:/dev/first", err: errors.New("run git status in C:/dev/first")})
+	footer := model.footer.text
+	model = update(t, model, tea.KeyPressMsg{Code: tea.KeyEscape})
+	lines := overviewLines(model)
 
 	want := []string{"▌● " + folderGlyph + " second loading..."}
-	if !reflect.DeepEqual(overviewLines(m), want) || footer != "skipped run git status in C:/dev/first" {
-		t.Fatalf("got %q after clearing the filter, footer %q, want %q and the error", overviewLines(m), footer, want)
-	}
+	require.Equal(t, want, lines)
+	require.Equal(t, "skipped run git status in C:/dev/first", footer)
 }
 
 func escWhileTypingShowsEveryRow(t *testing.T) {
-	m := typeText(t, overviewOfWorkTrees(t), "/dns")
+	overview := overviewOfWorkTrees(t)
+	model := typeText(t, overview, "/dns")
 
-	m = update(t, m, tea.KeyPressMsg{Code: tea.KeyEscape})
+	model = update(t, model, tea.KeyPressMsg{Code: tea.KeyEscape})
+	lines := overviewLines(model)
+	typing := model.overviewQuery.Focused()
 
-	if len(overviewLines(m)) != 4 || m.mode != modeOverview || m.overviewQuery.Focused() {
-		t.Fatalf("got %q, mode %d, typing %t, want every row in the overview keys", overviewLines(m), m.mode,
-			m.overviewQuery.Focused())
-	}
+	require.Len(t, lines, 4)
+	require.Equal(t, modeOverview, model.mode)
+	require.False(t, typing)
 }
 
 func backspaceOnAnEmptyQueryStopsTyping(t *testing.T) {
-	m := typeText(t, overviewOfWorkTrees(t), "/d")
+	overview := overviewOfWorkTrees(t)
+	model := typeText(t, overview, "/d")
 
-	m = update(t, m, tea.KeyPressMsg{Code: tea.KeyBackspace})
-	stillTyping := m.overviewQuery.Focused()
-	m = update(t, m, tea.KeyPressMsg{Code: tea.KeyBackspace})
+	model = update(t, model, tea.KeyPressMsg{Code: tea.KeyBackspace})
+	stillTyping := model.overviewQuery.Focused()
+	model = update(t, model, tea.KeyPressMsg{Code: tea.KeyBackspace})
+	lines := overviewLines(model)
+	typing := model.overviewQuery.Focused()
 
-	if !stillTyping || len(overviewLines(m)) != 4 || m.mode != modeOverview || m.overviewQuery.Focused() {
-		t.Fatalf("got typing %t after deleting d, then %q, mode %d, typing %t, want every row in the overview keys",
-			stillTyping, overviewLines(m), m.mode, m.overviewQuery.Focused())
-	}
+	require.True(t, stillTyping)
+	require.Len(t, lines, 4)
+	require.Equal(t, modeOverview, model.mode)
+	require.False(t, typing)
 }
 
 func escClearsAKeptFilterThenClosesTheOverview(t *testing.T) {
-	m := typeText(t, overviewOfWorkTrees(t), "/dns")
-	m = update(t, m, tea.KeyPressMsg{Code: tea.KeyTab})
+	overview := overviewOfWorkTrees(t)
+	model := typeText(t, overview, "/dns")
+	model = update(t, model, tea.KeyPressMsg{Code: tea.KeyTab})
 
-	m = update(t, m, tea.KeyPressMsg{Code: tea.KeyEscape})
-	cleared := overviewLines(m)
-	m = update(t, m, tea.KeyPressMsg{Code: tea.KeyEscape})
+	model = update(t, model, tea.KeyPressMsg{Code: tea.KeyEscape})
+	cleared := overviewLines(model)
+	model = update(t, model, tea.KeyPressMsg{Code: tea.KeyEscape})
 
-	if len(cleared) != 4 || m.mode != modeBrowsing {
-		t.Fatalf("got %q after the first esc and mode %d after the second, want every row then the overview closed",
-			cleared, m.mode)
-	}
+	require.Len(t, cleared, 4)
+	require.Equal(t, modeBrowsing, model.mode)
 }
 
 func aQueryMatchingNothingSaysSo(t *testing.T) {
-	m := typeText(t, overviewOfWorkTrees(t), "/qq")
+	overview := overviewOfWorkTrees(t)
 
-	if screen := ansi.Strip(m.renderScreen()); !strings.Contains(screen, "no repositories match") {
-		t.Fatalf("got screen:\n%s\nwant no repositories match", screen)
-	}
+	model := typeText(t, overview, "/qq")
+	screen := plainScreen(model)
+
+	require.Contains(t, screen, "no repositories match")
 }
 
 func reopeningTheOverviewShowsEveryRow(t *testing.T) {
-	m := typeText(t, overviewOfWorkTrees(t), "/dns")
-	m = update(t, m, tea.KeyPressMsg{Code: tea.KeyTab})
-	m = update(t, m, tea.KeyPressMsg{Code: 'o', Text: "o"})
+	overview := overviewOfWorkTrees(t)
+	model := typeText(t, overview, "/dns")
+	model = update(t, model, tea.KeyPressMsg{Code: tea.KeyTab})
+	model = update(t, model, tea.KeyPressMsg{Code: 'o', Text: "o"})
 
-	m = update(t, m, tea.KeyPressMsg{Code: 'o', Text: "o"})
-	m = update(t, m, overviewMsg{rows: workTreeRows()})
+	model = update(t, model, tea.KeyPressMsg{Code: 'o', Text: "o"})
+	model = update(t, model, overviewMsg{rows: workTreeRows()})
+	lines := overviewLines(model)
+	query := model.overviewQuery.Value()
 
-	if len(overviewLines(m)) != 4 || m.overviewQuery.Value() != "" {
-		t.Fatalf("got %q, query %q, want every row and no query", overviewLines(m), m.overviewQuery.Value())
-	}
+	require.Len(t, lines, 4)
+	require.Empty(t, query)
 }
 
 func fetchAllFetchesTheRowsTheFilterHides(t *testing.T) {
-	m := typeText(t, overviewOfWorkTrees(t), "/dns")
-	m = update(t, m, tea.KeyPressMsg{Code: tea.KeyTab})
+	overview := overviewOfWorkTrees(t)
+	model := typeText(t, overview, "/dns")
+	model = update(t, model, tea.KeyPressMsg{Code: tea.KeyTab})
 
-	m = update(t, m, tea.KeyPressMsg{Code: 'F', Text: "F"})
+	model = update(t, model, tea.KeyPressMsg{Code: 'F', Text: "F"})
 
-	if len(m.syncing) != 4 {
-		t.Fatalf("got syncing %v, want all 4 repositories fetching", m.syncing)
-	}
+	require.Len(t, model.syncing, 4)
 }
 
 // overviewOfWorkTrees lists the main clone desktop-edge-win, its work trees fix-proxy and fix-dns, and ziti.
 func overviewOfWorkTrees(t *testing.T) Model {
 	t.Helper()
-	m := focusOnSeveral(t, map[string]bool{"C:/dev/cwd": false, "C:/dev/first": true, "C:/dev/second": false})
-	m = update(t, m, tea.KeyPressMsg{Code: 'o', Text: "o"})
-	return update(t, m, overviewMsg{rows: workTreeRows()})
+	model := focusOnSeveral(t, map[string]bool{"C:/dev/cwd": false, "C:/dev/first": true, "C:/dev/second": false})
+	model = update(t, model, tea.KeyPressMsg{Code: 'o', Text: "o"})
+	return update(t, model, overviewMsg{rows: workTreeRows()})
 }
 
 func workTreeRows() []overviewRow {
@@ -848,12 +900,12 @@ func workTreeRows() []overviewRow {
 	}
 }
 
-func typeText(t *testing.T, m Model, text string) Model {
+func typeText(t *testing.T, model Model, text string) Model {
 	t.Helper()
 	for _, character := range text {
-		m = update(t, m, tea.KeyPressMsg{Code: character, Text: string(character)})
+		model = update(t, model, tea.KeyPressMsg{Code: character, Text: string(character)})
 	}
-	return m
+	return model
 }
 
 func TestWholeFile(t *testing.T) {
@@ -866,37 +918,40 @@ func keepsTheTopLineOnScreenBothWays(t *testing.T) {
 	hunks := diff.FileDiff{
 		Hunks: []diff.Hunk{contextHunk(10, 24, "line"), contextHunk(40, 54, "line"), contextHunk(70, 84, "line")}}
 	wholeFile := diff.FileDiff{Hunks: []diff.Hunk{contextHunk(1, 100, "line")}}
-	m := reviewingRepository(t, gitrepo.Status{Files: twoFiles()})
-	m = update(t, m, tea.WindowSizeMsg{Width: 120, Height: 16})
-	m = update(t, m, diffMsg{dir: "C:/dev/repo", path: "a.go", contextLines: hunkContext, fileDiff: hunks})
-	m.diffView.SetYOffset(20)
+	model := reviewingRepository(t, gitrepo.Status{Files: twoFiles()})
+	model = update(t, model, tea.WindowSizeMsg{Width: 120, Height: 16})
+	model = update(t, model, diffMsg{dir: "C:/dev/repo", path: "a.go", contextLines: hunkContext, fileDiff: hunks})
+	model.diffView.SetYOffset(20)
 
-	m = update(t, m, tea.KeyPressMsg{Code: 'f', Text: "f"})
-	m = update(t, m, diffMsg{dir: "C:/dev/repo", path: "a.go", contextLines: wholeFileContext, fileDiff: wholeFile})
-	wholeFileOffset := m.diffView.YOffset()
-	m = update(t, m, tea.KeyPressMsg{Code: 'f', Text: "f"})
-	m = update(t, m, diffMsg{dir: "C:/dev/repo", path: "a.go", contextLines: hunkContext, fileDiff: hunks})
+	model = update(t, model, tea.KeyPressMsg{Code: 'f', Text: "f"})
+	model = update(t, model, diffMsg{dir: "C:/dev/repo", path: "a.go", contextLines: wholeFileContext, fileDiff: wholeFile})
+	wholeFileOffset := model.diffView.YOffset()
+	model = update(t, model, tea.KeyPressMsg{Code: 'f', Text: "f"})
+	model = update(t, model, diffMsg{dir: "C:/dev/repo", path: "a.go", contextLines: hunkContext, fileDiff: hunks})
+	hunkOffset := model.diffView.YOffset()
 
-	if wholeFileOffset != 43 || m.diffView.YOffset() != 20 {
-		t.Fatalf("got offsets %d then %d, want line 43 on top at 43 then back at 20", wholeFileOffset, m.diffView.YOffset())
-	}
+	require.Equal(t, 43, wholeFileOffset)
+	require.Equal(t, 20, hunkOffset)
 }
 
 func TestARewrapKeepsTheTopDiffLineOnScreen(t *testing.T) {
 	longLines := diff.FileDiff{Hunks: []diff.Hunk{contextHunk(1, 60, strings.Repeat("word ", 30))}}
-	m := reviewingRepository(t, gitrepo.Status{Files: twoFiles()})
-	m = update(t, m, tea.WindowSizeMsg{Width: 120, Height: 16})
-	m = update(t, m, diffMsg{dir: "C:/dev/repo", path: "a.go", contextLines: hunkContext, fileDiff: longLines})
-	m.diffView.SetYOffset(firstReaching(m.diffLines(), sourceLine{section: 0, oldNumber: 0, newNumber: 20}))
-	m = update(t, m, tea.KeyPressMsg{Code: 'u', Text: "u"})
-	afterUnified := topLineNumber(m)
-	m = update(t, m, tea.WindowSizeMsg{Width: 80, Height: 16})
-	afterResize := topLineNumber(m)
-	m = update(t, m, tea.KeyPressMsg{Code: 'd', Text: "d"})
+	model := reviewingRepository(t, gitrepo.Status{Files: twoFiles()})
+	model = update(t, model, tea.WindowSizeMsg{Width: 120, Height: 16})
+	model = update(t, model, diffMsg{dir: "C:/dev/repo", path: "a.go", contextLines: hunkContext, fileDiff: longLines})
+	diffLines := model.diffLines()
+	lineTwenty := firstReaching(diffLines, sourceLine{section: 0, oldNumber: 0, newNumber: 20})
+	model.diffView.SetYOffset(lineTwenty)
+	model = update(t, model, tea.KeyPressMsg{Code: 'u', Text: "u"})
+	afterUnified := topLineNumber(model)
+	model = update(t, model, tea.WindowSizeMsg{Width: 80, Height: 16})
+	afterResize := topLineNumber(model)
+	model = update(t, model, tea.KeyPressMsg{Code: 'd', Text: "d"})
+	afterSideBySide := topLineNumber(model)
 
-	if afterUnified != 20 || afterResize != 20 || topLineNumber(m) != 20 {
-		t.Fatalf("got top lines %d, %d, %d, want line 20 throughout", afterUnified, afterResize, topLineNumber(m))
-	}
+	require.Equal(t, 20, afterUnified)
+	require.Equal(t, 20, afterResize)
+	require.Equal(t, 20, afterSideBySide)
 }
 
 func TestNAndShiftNJumpBetweenChangesAndWrapAround(t *testing.T) {
@@ -905,21 +960,19 @@ func TestNAndShiftNJumpBetweenChangesAndWrapAround(t *testing.T) {
 		hunk.Rows[number-1] = diff.Row{Old: diff.Line{Kind: diff.LineRemoved, Number: number, Text: "old"},
 			New: diff.Line{Kind: diff.LineAdded, Number: number, Text: "new"}}
 	}
-	m := reviewingRepository(t, gitrepo.Status{Files: twoFiles()})
-	m = update(t, m, tea.WindowSizeMsg{Width: 120, Height: 16})
-	m = update(t, m, diffMsg{dir: "C:/dev/repo", path: "a.go", contextLines: hunkContext,
+	model := reviewingRepository(t, gitrepo.Status{Files: twoFiles()})
+	model = update(t, model, tea.WindowSizeMsg{Width: 120, Height: 16})
+	model = update(t, model, diffMsg{dir: "C:/dev/repo", path: "a.go", contextLines: hunkContext,
 		fileDiff: diff.FileDiff{Hunks: []diff.Hunk{hunk}}})
 
 	got := []int{}
 	for _, press := range []tea.KeyPressMsg{{Code: 'n', Text: "n"}, {Code: 'n', Text: "n"}, {Code: 'n', Text: "n"},
 		{Code: 'N', Text: "N"}, {Code: 'N', Text: "N"}} {
-		m = update(t, m, press)
-		got = append(got, topLineNumber(m))
+		model = update(t, model, press)
+		got = append(got, topLineNumber(model))
 	}
 
-	if !reflect.DeepEqual(got, []int{27, 89, 27, 89, 27}) {
-		t.Fatalf("got top lines %v, want 27, 89, 27, 89, 27", got)
-	}
+	require.Equal(t, []int{27, 89, 27, 89, 27}, got)
 }
 
 func TestNSkipsAChangeAlreadyAtTheTopOfTheScreen(t *testing.T) {
@@ -928,87 +981,73 @@ func TestNSkipsAChangeAlreadyAtTheTopOfTheScreen(t *testing.T) {
 		hunk.Rows[number-1] = diff.Row{Old: diff.Line{Kind: diff.LineRemoved, Number: number, Text: "old"},
 			New: diff.Line{Kind: diff.LineAdded, Number: number, Text: "new"}}
 	}
-	m := reviewingRepository(t, gitrepo.Status{Files: twoFiles()})
-	m = update(t, m, tea.WindowSizeMsg{Width: 120, Height: 16})
-	m = update(t, m, diffMsg{dir: "C:/dev/repo", path: "a.go", contextLines: hunkContext,
+	model := reviewingRepository(t, gitrepo.Status{Files: twoFiles()})
+	model = update(t, model, tea.WindowSizeMsg{Width: 120, Height: 16})
+	model = update(t, model, diffMsg{dir: "C:/dev/repo", path: "a.go", contextLines: hunkContext,
 		fileDiff: diff.FileDiff{Hunks: []diff.Hunk{hunk}}})
 
-	m = update(t, m, tea.KeyPressMsg{Code: 'n', Text: "n"})
+	model = update(t, model, tea.KeyPressMsg{Code: 'n', Text: "n"})
+	topLine := topLineNumber(model)
 
-	if topLineNumber(m) != 57 {
-		t.Fatalf("got top line %d, want 57, three lines above the change at 60", topLineNumber(m))
-	}
+	require.Equal(t, 57, topLine, "want three lines above the change at 60")
 }
 
 func TestTheFooterFitsAndQuestionMarkListsEveryKey(t *testing.T) {
-	m := reviewingRepository(t, gitrepo.Status{Files: twoFiles()})
-	footer := ansi.Strip(m.renderFooter())
+	model := reviewingRepository(t, gitrepo.Status{Files: twoFiles()})
+	footer := plainFooter(model)
 
-	m = update(t, m, tea.KeyPressMsg{Code: '?', Text: "?"})
-	keyList := ansi.Strip(m.renderKeyListPopup())
-	m = update(t, m, tea.KeyPressMsg{Code: tea.KeyEscape})
+	model = update(t, model, tea.KeyPressMsg{Code: '?', Text: "?"})
+	renderedKeyList := model.renderKeyListPopup()
+	keyList := ansi.Strip(renderedKeyList)
+	model = update(t, model, tea.KeyPressMsg{Code: tea.KeyEscape})
 
-	if strings.Contains(footer, "…") || !strings.Contains(footer, "? all keys") {
-		t.Fatalf("got footer %q, want it whole with ? all keys", footer)
-	}
+	require.NotContains(t, footer, "…")
+	require.Contains(t, footer, "? all keys")
 	for _, want := range []string{"discard", "next change", "unified", "overview", "quit"} {
-		if !strings.Contains(keyList, want) {
-			t.Fatalf("got key list:\n%s\nwant the key list to hold %q", keyList, want)
-		}
+		require.Contains(t, keyList, want)
 	}
-	if m.popup.kind != noPopup {
-		t.Fatalf("got popup %d after esc, want none", m.popup.kind)
-	}
+	require.Equal(t, noPopup, model.popup.kind)
 }
 
 func TestATakeFailureStaysInTheFooterAcrossKeysAndFocusSwitchesUntilItClears(t *testing.T) {
-	m := update(t, reviewingRepository(t, gitrepo.Status{Files: unstagedFiles()}), tea.BlurMsg{})
-	m = update(t, m, TakeFailure{Reason: "claude/settings.json would be overwritten"})
+	model := reviewingRepository(t, gitrepo.Status{Files: unstagedFiles()})
+	model = update(t, model, tea.BlurMsg{})
+	model = update(t, model, TakeFailure{Reason: "claude/settings.json would be overwritten"})
 
-	m = update(t, m, tea.KeyPressMsg{Code: 'j', Text: "j"})
-	afterKey := ansi.Strip(m.renderFooter())
-	m = update(t, m, focusOnOne("C:/dev/other"))
-	afterFocusSwitch := ansi.Strip(m.renderFooter())
-	switchedDir := m.repository.Dir
-	m = update(t, m, TakeFailure{Reason: ""})
+	model = update(t, model, tea.KeyPressMsg{Code: 'j', Text: "j"})
+	afterKey := plainFooter(model)
+	model = update(t, model, focusOnOne("C:/dev/other"))
+	afterFocusSwitch := plainFooter(model)
+	switchedDir := model.repository.Dir
+	model = update(t, model, TakeFailure{Reason: ""})
+	afterTake := plainFooter(model)
 
-	if switchedDir != "C:/dev/other" {
-		t.Fatalf("got %s after the focus, want C:/dev/other", switchedDir)
-	}
-
-	for _, footer := range []string{afterKey, afterFocusSwitch} {
-		if !strings.Contains(footer, "claude/settings.json would be overwritten") {
-			t.Fatalf("got footer %q, want the take failure", footer)
-		}
-	}
-	if footer := ansi.Strip(m.renderFooter()); !strings.Contains(footer, "? all keys") {
-		t.Fatalf("got footer %q after the take succeeded, want the key help", footer)
-	}
+	require.Equal(t, "C:/dev/other", switchedDir)
+	require.Contains(t, afterKey, "claude/settings.json would be overwritten")
+	require.Contains(t, afterFocusSwitch, "claude/settings.json would be overwritten")
+	require.Contains(t, afterTake, "? all keys")
 }
 
 func TestAnOwnerStateFailureShowsBesideATakeFailureUntilAWriteSucceeds(t *testing.T) {
-	m := update(t, reviewingRepository(t, gitrepo.Status{Files: unstagedFiles()}), tea.BlurMsg{})
-	m = update(t, m, TakeFailure{Reason: "a.go would be overwritten"})
-	m = update(t, m, OwnerStateFailure{Reason: "owner state not written: ssh agent-host: the shell exited"})
-	bothFailed := ansi.Strip(m.renderFooter())
-	m = update(t, m, TakeFailure{Reason: ""})
-	writeFailed := ansi.Strip(m.renderFooter())
-	m = update(t, m, OwnerStateFailure{Reason: ""})
-	written := ansi.Strip(m.renderFooter())
+	model := reviewingRepository(t, gitrepo.Status{Files: unstagedFiles()})
+	model = update(t, model, tea.BlurMsg{})
+	model = update(t, model, TakeFailure{Reason: "a.go would be overwritten"})
+	model = update(t, model, OwnerStateFailure{Reason: "owner state not written: ssh agent-host: the shell exited"})
+	bothFailed := plainFooter(model)
+	model = update(t, model, TakeFailure{Reason: ""})
+	writeFailed := plainFooter(model)
+	model = update(t, model, OwnerStateFailure{Reason: ""})
+	written := plainFooter(model)
 
-	if !strings.Contains(bothFailed, "a.go would be overwritten, owner state not written: ssh agent-host") {
-		t.Fatalf("got footer %q, want both failures", bothFailed)
-	}
-	if !strings.Contains(writeFailed, "✗ owner state not written: ssh agent-host") {
-		t.Fatalf("got footer %q after the take succeeded, want the owner state failure", writeFailed)
-	}
-	if !strings.Contains(written, "? all keys") {
-		t.Fatalf("got footer %q after the write succeeded, want the key help", written)
-	}
+	require.Contains(t, bothFailed, "a.go would be overwritten, owner state not written: ssh agent-host")
+	require.Contains(t, writeFailed, "✗ owner state not written: ssh agent-host")
+	require.Contains(t, written, "? all keys")
 }
 
-func topLineNumber(m Model) int {
-	return m.diffLines()[m.diffView.YOffset()].source.newNumber
+func topLineNumber(model Model) int {
+	lines := model.diffLines()
+	offset := model.diffView.YOffset()
+	return lines[offset].source.newNumber
 }
 
 func contextHunk(first int, last int, text string) diff.Hunk {
@@ -1021,48 +1060,49 @@ func contextHunk(first int, last int, text string) diff.Hunk {
 }
 
 func dropsAFileDiffLoadedWithTheOtherContext(t *testing.T) {
-	m := reviewingRepository(t, gitrepo.Status{Files: twoFiles()})
-	next, reload := m.Update(tea.KeyPressMsg{Code: 'f', Text: "f"})
-	m = asModel(t, next)
+	model := reviewingRepository(t, gitrepo.Status{Files: twoFiles()})
+	next, reload := model.Update(tea.KeyPressMsg{Code: 'f', Text: "f"})
+	model = asModel(t, next)
 
-	m = update(t, m, diffMsg{dir: "C:/dev/repo", path: "a.go", contextLines: hunkContext,
+	model = update(t, model, diffMsg{dir: "C:/dev/repo", path: "a.go", contextLines: hunkContext,
 		fileDiff: diff.FileDiff{Hunks: []diff.Hunk{{Header: "@@ -5 +5 @@"}}}})
-	afterStaleLoad := m.fileDiff
-	m = update(t, m, diffMsg{dir: "C:/dev/repo", path: "a.go", contextLines: wholeFileContext,
+	afterStaleLoad := model.fileDiff
+	model = update(t, model, diffMsg{dir: "C:/dev/repo", path: "a.go", contextLines: wholeFileContext,
 		fileDiff: diff.FileDiff{Hunks: []diff.Hunk{{Header: "@@ -1,9 +1,9 @@"}}}})
 
-	if reload == nil || len(afterStaleLoad.Hunks) != 0 || len(m.fileDiff.Hunks) != 1 || m.fileDiff.Hunks[0].Header != "@@ -1,9 +1,9 @@" {
-		t.Fatalf("got reload %v, stale %v, shown %v, want only the whole file diff shown", reload, afterStaleLoad, m.fileDiff)
-	}
+	require.NotNil(t, reload)
+	require.Empty(t, afterStaleLoad.Hunks)
+	require.Len(t, model.fileDiff.Hunks, 1)
+	require.Equal(t, "@@ -1,9 +1,9 @@", model.fileDiff.Hunks[0].Header)
 }
 
 func reloadsACommitOnlyWhileItWasLoadedWithTheOtherContext(t *testing.T) {
 	commit := gitrepo.Commit{Hash: strings.Repeat("1", 40), Message: "Add tree"}
-	m := logOf(t, []gitrepo.Commit{commit})
-	m = update(t, m, commitDiffMsg{dir: "C:/dev/repo", hash: commit.Hash, contextLines: hunkContext,
+	model := logOf(t, []gitrepo.Commit{commit})
+	model = update(t, model, commitDiffMsg{dir: "C:/dev/repo", hash: commit.Hash, contextLines: hunkContext,
 		sections: []diff.FileSection{{Path: "a.go"}}})
-	hunkContextLoad := m.loadSelectedCommitDiff()
+	hunkContextLoad := model.loadSelectedCommitDiff()
 
-	m = update(t, m, tea.KeyPressMsg{Code: 'f', Text: "f"})
-	wholeFileLoad := m.loadSelectedCommitDiff()
-	m = update(t, m, tea.KeyPressMsg{Code: 'f', Text: "f"})
+	model = update(t, model, tea.KeyPressMsg{Code: 'f', Text: "f"})
+	wholeFileLoad := model.loadSelectedCommitDiff()
+	model = update(t, model, tea.KeyPressMsg{Code: 'f', Text: "f"})
+	backToHunksLoad := model.loadSelectedCommitDiff()
 
-	if hunkContextLoad != nil || wholeFileLoad == nil || m.loadSelectedCommitDiff() != nil {
-		t.Fatalf("got loads %v, %v, %v, want only the whole file one", hunkContextLoad, wholeFileLoad, m.loadSelectedCommitDiff())
-	}
+	require.Nil(t, hunkContextLoad)
+	require.NotNil(t, wholeFileLoad)
+	require.Nil(t, backToHunksLoad)
 }
 
 func TestDiscardOpensOnTheSelectedFile(t *testing.T) {
-	m := reviewingRepository(t, gitrepo.Status{Files: twoFiles()})
-	m = update(t, m, tea.KeyPressMsg{Code: 'j', Text: "j"})
+	model := reviewingRepository(t, gitrepo.Status{Files: twoFiles()})
+	model = update(t, model, tea.KeyPressMsg{Code: 'j', Text: "j"})
 
-	m = update(t, m, tea.KeyPressMsg{Code: 'x', Text: "x"})
+	model = update(t, model, tea.KeyPressMsg{Code: 'x', Text: "x"})
+	popup := plainConfirmPopup(model)
 
-	popup := ansi.Strip(m.renderConfirmPopup())
-	if m.popup.kind != confirmPopup || !strings.Contains(popup, "discard b.go") ||
-		!strings.Contains(popup, "back to HEAD") {
-		t.Fatalf("got popup %d:\n%s", m.popup.kind, popup)
-	}
+	require.Equal(t, confirmPopup, model.popup.kind)
+	require.Contains(t, popup, "discard b.go")
+	require.Contains(t, popup, "back to HEAD")
 }
 
 func findNothing(context.Context) (focus.Found, error) {
@@ -1070,33 +1110,41 @@ func findNothing(context.Context) (focus.Found, error) {
 }
 
 func TestHeaderNamesLocationAndCountsBranchesAndWorkTrees(t *testing.T) {
+	t.Run("theMainWorkTreeHeaderNamesTheCloneAndCountsRemoteBranches",
+		theMainWorkTreeHeaderNamesTheCloneAndCountsRemoteBranches)
+	t.Run("aLinkedWorkTreeHeaderNamesItsPathAndOmitsRemoteBranches",
+		aLinkedWorkTreeHeaderNamesItsPathAndOmitsRemoteBranches)
+}
+
+func theMainWorkTreeHeaderNamesTheCloneAndCountsRemoteBranches(t *testing.T) {
+	header := headerReviewing(t, "C:/dev/repo", 37)
+
+	trimmed := strings.TrimRight(header, " ")
+	startsWithLocation := strings.HasPrefix(header, " "+folderGlyph+" repo  ")
+	endsWithCounts := strings.HasSuffix(trimmed, "3 branches (37 remote) · 2 work trees")
+	require.True(t, startsWithLocation, header)
+	require.True(t, endsWithCounts, header)
+}
+
+func aLinkedWorkTreeHeaderNamesItsPathAndOmitsRemoteBranches(t *testing.T) {
+	header := headerReviewing(t, "C:/dev/worktrees/repo/side", 0)
+
+	trimmed := strings.TrimRight(header, " ")
+	startsWithLocation := strings.HasPrefix(header, " "+folderGlyph+" repo/side  ")
+	endsWithCounts := strings.HasSuffix(trimmed, "3 branches · 2 work trees")
+	require.True(t, startsWithLocation, header)
+	require.True(t, endsWithCounts, header)
+}
+
+func headerReviewing(t *testing.T, dir string, remoteBranchCount int) string {
+	t.Helper()
 	workTrees := []gitrepo.WorkTree{{Path: "C:/dev/repo"}, {Path: "C:/dev/worktrees/repo/side"}}
-	for name, test := range map[string]struct {
-		dir               string
-		remoteBranchCount int
-		wantLocation      string
-		want              string
-	}{
-		"inTheMainWorkTree": {dir: "C:/dev/repo", remoteBranchCount: 37, wantLocation: "repo",
-			want: "3 branches (37 remote) · 2 work trees"},
-		"inALinkedWorkTree": {dir: "C:/dev/worktrees/repo/side", wantLocation: "repo/side", want: "3 branches · 2 work trees"},
-	} {
-		t.Run(name, func(t *testing.T) {
-			m := update(t, New(findNothing, openAnything, nil, AgentHost{}), tea.WindowSizeMsg{Width: 120, Height: 30})
-			m = update(t, m, focusOnOne(test.dir))
-			m = update(t, m, statusMsg{dir: test.dir, status: gitrepo.Status{Branch: "main"}, branchCount: 3,
-				remoteBranchCount: test.remoteBranchCount, workTrees: workTrees})
-
-			header := ansi.Strip(m.renderHeader())
-
-			if !strings.HasPrefix(header, " "+folderGlyph+" "+test.wantLocation+"  ") {
-				t.Errorf("got header %q, want it to start with location %q", header, test.wantLocation)
-			}
-			if !strings.HasSuffix(strings.TrimRight(header, " "), test.want) {
-				t.Fatalf("got header %q, want it to end with %q", header, test.want)
-			}
-		})
-	}
+	model := New(findNothing, openAnything, nil, AgentHost{})
+	model = update(t, model, tea.WindowSizeMsg{Width: 120, Height: 30})
+	model = update(t, model, focusOnOne(dir))
+	model = update(t, model, statusMsg{dir: dir, status: gitrepo.Status{Branch: "main"}, branchCount: 3,
+		remoteBranchCount: remoteBranchCount, workTrees: workTrees})
+	return plainHeader(model)
 }
 
 func focusOnOne(dir string) focus.Focus {
@@ -1105,9 +1153,10 @@ func focusOnOne(dir string) focus.Focus {
 
 func reviewingRepository(t *testing.T, status gitrepo.Status) Model {
 	t.Helper()
-	m := update(t, New(findNothing, openAnything, nil, AgentHost{}), tea.WindowSizeMsg{Width: 120, Height: 30})
-	m = update(t, m, focusOnOne("C:/dev/repo"))
-	return update(t, m, statusMsg{dir: "C:/dev/repo", status: status})
+	model := New(findNothing, openAnything, nil, AgentHost{})
+	model = update(t, model, tea.WindowSizeMsg{Width: 120, Height: 30})
+	model = update(t, model, focusOnOne("C:/dev/repo"))
+	return update(t, model, statusMsg{dir: "C:/dev/repo", status: status})
 }
 
 func TestAFocusChangeWhilePerusalsTerminalHasFocus(t *testing.T) {
@@ -1122,148 +1171,147 @@ func TestAFocusChangeWhilePerusalsTerminalHasFocus(t *testing.T) {
 }
 
 func TestTheViewAsksTheTerminalToReportFocusAndBlur(t *testing.T) {
-	m := reviewingRepository(t, gitrepo.Status{Files: unstagedFiles()})
+	model := reviewingRepository(t, gitrepo.Status{Files: unstagedFiles()})
 
-	if !m.View().ReportFocus {
-		t.Fatal("got a view without ReportFocus, want the terminal to send focus and blur")
-	}
+	view := model.View()
+
+	require.True(t, view.ReportFocus)
 }
 
 func waitsWhileOnlyADiffIsOpenAndTheHeaderNamesIt(t *testing.T) {
-	m := reviewingRepository(t, gitrepo.Status{Files: unstagedFiles()})
+	model := reviewingRepository(t, gitrepo.Status{Files: unstagedFiles()})
 
-	m = update(t, m, focusOnOne("C:/dev/other"))
+	model = update(t, model, focusOnOne("C:/dev/other"))
+	header := plainHeader(model)
+	trimmed := strings.TrimRight(header, " ")
+	namesNextFocus := strings.HasSuffix(trimmed, "   next focus: other")
 
-	header := strings.TrimRight(ansi.Strip(m.renderHeader()), " ")
-	if m.repository.Dir != "C:/dev/repo" || !strings.HasSuffix(header, "   next focus: other") {
-		t.Fatalf("got %s, header %q, want C:/dev/repo and next focus: other", m.repository.Dir, header)
-	}
+	require.Equal(t, "C:/dev/repo", model.repository.Dir)
+	require.True(t, namesNextFocus, header)
 }
 
 func appliesOnBlurAndClosesTheCommitPopupAndItsDraft(t *testing.T) {
-	m := update(t, typingCommitDraft(t, "fix"), focusOnOne("C:/dev/other"))
-	waiting := m
+	model := typingCommitDraft(t, "fix")
+	model = update(t, model, focusOnOne("C:/dev/other"))
+	waiting := model
 
-	m = update(t, m, tea.BlurMsg{})
+	model = update(t, model, tea.BlurMsg{})
+	header := plainHeader(model)
+	draft := model.summaryBox.Value()
 
-	if waiting.popup.kind != commitPopup || waiting.repository.Dir != "C:/dev/repo" {
-		t.Fatalf("got popup %d on %s while focused, want the commit popup on C:/dev/repo", waiting.popup.kind,
-			waiting.repository.Dir)
-	}
-	header := ansi.Strip(m.renderHeader())
-	if m.repository.Dir != "C:/dev/other" || m.popup.kind != noPopup || m.summaryBox.Value() != "" ||
-		strings.Contains(header, "next focus") {
-		t.Fatalf("got %s, popup %d, draft %q, header %q, want C:/dev/other with no popup, draft or next focus",
-			m.repository.Dir, m.popup.kind, m.summaryBox.Value(), header)
-	}
+	require.Equal(t, commitPopup, waiting.popup.kind)
+	require.Equal(t, "C:/dev/repo", waiting.repository.Dir)
+	require.Equal(t, "C:/dev/other", model.repository.Dir)
+	require.Equal(t, noPopup, model.popup.kind)
+	require.Empty(t, draft)
+	require.NotContains(t, header, "next focus")
 }
 
 func appliesAtOnceWhileBlurredAcrossSwitches(t *testing.T) {
-	m := update(t, reviewingRepository(t, gitrepo.Status{Files: unstagedFiles()}), tea.BlurMsg{})
+	model := reviewingRepository(t, gitrepo.Status{Files: unstagedFiles()})
+	model = update(t, model, tea.BlurMsg{})
 
-	m = update(t, m, focusOnOne("C:/dev/first"))
-	first := m.repository.Dir
-	m = update(t, m, focusOnOne("C:/dev/second"))
+	model = update(t, model, focusOnOne("C:/dev/first"))
+	first := model.repository.Dir
+	model = update(t, model, focusOnOne("C:/dev/second"))
 
-	if first != "C:/dev/first" || m.repository.Dir != "C:/dev/second" {
-		t.Fatalf("got %s, then %s, want C:/dev/first, then C:/dev/second", first, m.repository.Dir)
-	}
+	require.Equal(t, "C:/dev/first", first)
+	require.Equal(t, "C:/dev/second", model.repository.Dir)
 }
 
 func waitsAgainOnceTheTerminalRegainsFocus(t *testing.T) {
-	m := update(t, reviewingRepository(t, gitrepo.Status{Files: unstagedFiles()}), tea.BlurMsg{})
-	m = update(t, m, tea.FocusMsg{})
+	model := reviewingRepository(t, gitrepo.Status{Files: unstagedFiles()})
+	model = update(t, model, tea.BlurMsg{})
+	model = update(t, model, tea.FocusMsg{})
 
-	m = update(t, m, focusOnOne("C:/dev/other"))
+	model = update(t, model, focusOnOne("C:/dev/other"))
 
-	if m.repository.Dir != "C:/dev/repo" {
-		t.Fatalf("got %s, want C:/dev/repo", m.repository.Dir)
-	}
+	require.Equal(t, "C:/dev/repo", model.repository.Dir)
 }
 
 func appliesOnlyTheNewestOne(t *testing.T) {
-	m := update(t, reviewingRepository(t, gitrepo.Status{Files: unstagedFiles()}), focusOnOne("C:/dev/first"))
-	m = update(t, m, focusOnOne("C:/dev/second"))
-	header := strings.TrimRight(ansi.Strip(m.renderHeader()), " ")
+	model := reviewingRepository(t, gitrepo.Status{Files: unstagedFiles()})
+	model = update(t, model, focusOnOne("C:/dev/first"))
+	model = update(t, model, focusOnOne("C:/dev/second"))
+	header := plainHeader(model)
+	trimmed := strings.TrimRight(header, " ")
+	namesSecond := strings.HasSuffix(trimmed, "next focus: second")
 
-	m = update(t, m, tea.BlurMsg{})
+	model = update(t, model, tea.BlurMsg{})
 
-	if !strings.HasSuffix(header, "next focus: second") || m.repository.Dir != "C:/dev/second" {
-		t.Fatalf("got header %q, then %s, want next focus: second, then C:/dev/second", header, m.repository.Dir)
-	}
+	require.True(t, namesSecond, header)
+	require.Equal(t, "C:/dev/second", model.repository.Dir)
 }
 
 func aRejectionWaitsAsRefusedAndShowsItsReasonOnlyOnBlur(t *testing.T) {
-	m := update(t, typingCommitDraft(t, "fix"), FocusRejection{Reason: "outside the dev directory"})
-	waiting := m
-	header := strings.TrimRight(ansi.Strip(waiting.renderHeader()), " ")
+	model := typingCommitDraft(t, "fix")
+	model = update(t, model, FocusRejection{Reason: "outside the dev directory"})
+	waiting := model
+	waitingHeader := plainHeader(waiting)
+	trimmedHeader := strings.TrimRight(waitingHeader, " ")
+	namesRefused := strings.HasSuffix(trimmedHeader, "   next focus: refused")
+	waitingScreen := plainScreen(waiting)
 
-	m = update(t, m, tea.BlurMsg{})
+	model = update(t, model, tea.BlurMsg{})
+	screen := plainScreen(model)
 
-	if waiting.repository.Dir != "C:/dev/repo" || waiting.popup.kind != commitPopup ||
-		!strings.HasSuffix(header, "   next focus: refused") ||
-		strings.Contains(ansi.Strip(waiting.renderScreen()), "outside the dev directory") {
-		t.Fatalf("got %s, popup %d, header %q, screen %q, want the commit popup on C:/dev/repo, next focus: refused "+
-			"and no reason", waiting.repository.Dir, waiting.popup.kind, header, ansi.Strip(waiting.renderScreen()))
-	}
-	if m.repository.Dir != "" || m.popup.kind != noPopup ||
-		!strings.Contains(ansi.Strip(m.renderScreen()), "outside the dev directory") {
-		t.Fatalf("got %s, popup %d, screen %q, want no repository, no popup and the reason", m.repository.Dir,
-			m.popup.kind, ansi.Strip(m.renderScreen()))
-	}
+	require.Equal(t, "C:/dev/repo", waiting.repository.Dir)
+	require.Equal(t, commitPopup, waiting.popup.kind)
+	require.True(t, namesRefused, waitingHeader)
+	require.NotContains(t, waitingScreen, "outside the dev directory")
+	require.Empty(t, model.repository.Dir)
+	require.Equal(t, noPopup, model.popup.kind)
+	require.Contains(t, screen, "outside the dev directory")
 }
 
 func aFocusAfterAWaitingRejectionReplacesIt(t *testing.T) {
-	m := update(t, reviewingRepository(t, gitrepo.Status{Files: unstagedFiles()}),
-		FocusRejection{Reason: "outside the dev directory"})
-	m = update(t, m, focusOnOne("C:/dev/other"))
+	model := reviewingRepository(t, gitrepo.Status{Files: unstagedFiles()})
+	model = update(t, model, FocusRejection{Reason: "outside the dev directory"})
+	model = update(t, model, focusOnOne("C:/dev/other"))
 
-	m = update(t, m, tea.BlurMsg{})
+	model = update(t, model, tea.BlurMsg{})
 
-	if m.repository.Dir != "C:/dev/other" || m.rejection != "" {
-		t.Fatalf("got %s, rejection %q, want C:/dev/other with no rejection", m.repository.Dir, m.rejection)
-	}
+	require.Equal(t, "C:/dev/other", model.repository.Dir)
+	require.Empty(t, model.rejection)
 }
 
 func isDroppedByEnterOnAnotherRepositoryInTheOverview(t *testing.T) {
-	m := update(t, reviewingRepository(t, gitrepo.Status{Files: unstagedFiles()}), tea.KeyPressMsg{Code: 'o', Text: "o"})
-	m = update(t, m, overviewMsg{rows: []overviewRow{
+	model := reviewingRepository(t, gitrepo.Status{Files: unstagedFiles()})
+	model = update(t, model, tea.KeyPressMsg{Code: 'o', Text: "o"})
+	model = update(t, model, overviewMsg{rows: []overviewRow{
 		repositoryRow{FoundRepository: foundAt("repo", "C:/dev/repo")},
 		repositoryRow{FoundRepository: foundAt("elsewhere", "C:/dev/elsewhere")},
 	}})
-	m = update(t, m, focusOnOne("C:/dev/other"))
+	model = update(t, model, focusOnOne("C:/dev/other"))
 
-	m = update(t, m, tea.KeyPressMsg{Code: 'j', Text: "j"})
-	m = update(t, m, tea.KeyPressMsg{Code: tea.KeyEnter})
+	model = update(t, model, tea.KeyPressMsg{Code: 'j', Text: "j"})
+	model = update(t, model, tea.KeyPressMsg{Code: tea.KeyEnter})
+	header := plainHeader(model)
 
-	if m.repository.Dir != "C:/dev/elsewhere" || m.waitingFocus != nil ||
-		strings.Contains(ansi.Strip(m.renderHeader()), "next focus") {
-		t.Fatalf("got %s, waiting %v, header %q, want C:/dev/elsewhere with no next focus", m.repository.Dir,
-			m.waitingFocus, ansi.Strip(m.renderHeader()))
-	}
+	require.Equal(t, "C:/dev/elsewhere", model.repository.Dir)
+	require.Nil(t, model.waitingFocus)
+	require.NotContains(t, header, "next focus")
 }
 
 func TestAFocusThatKeepsTheReviewedRepositoryAppliesAtOnceAndDropsAWaitingRejection(t *testing.T) {
-	m := update(t, reviewingRepository(t, gitrepo.Status{Files: twoFiles()}),
-		FocusRejection{Reason: "outside the dev directory"})
+	model := reviewingRepository(t, gitrepo.Status{Files: twoFiles()})
+	model = update(t, model, FocusRejection{Reason: "outside the dev directory"})
 
-	m = update(t, m, focus.Focus{Repositories: []gitrepo.Repository{{Dir: "C:/dev/repo"}, {Dir: "C:/dev/other"}},
+	model = update(t, model, focus.Focus{Repositories: []gitrepo.Repository{{Dir: "C:/dev/repo"}, {Dir: "C:/dev/other"}},
 		Refusals: []error{}})
+	header := plainHeader(model)
 
-	if m.repository.Dir != "C:/dev/repo" || len(m.focused) != 2 || m.waitingFocus != nil ||
-		strings.Contains(ansi.Strip(m.renderHeader()), "next focus") {
-		t.Fatalf("got %s, %d focused, waiting %v, header %q, want C:/dev/repo with 2 focused and no next focus",
-			m.repository.Dir, len(m.focused), m.waitingFocus, ansi.Strip(m.renderHeader()))
-	}
+	require.Equal(t, "C:/dev/repo", model.repository.Dir)
+	require.Len(t, model.focused, 2)
+	require.Nil(t, model.waitingFocus)
+	require.NotContains(t, header, "next focus")
 }
 
 func typingCommitDraft(t *testing.T, summary string) Model {
 	t.Helper()
-	m := update(t, reviewingRepository(t, gitrepo.Status{Files: twoFiles()}), tea.KeyPressMsg{Code: 'c', Text: "c"})
-	for _, character := range summary {
-		m = update(t, m, tea.KeyPressMsg{Code: character, Text: string(character)})
-	}
-	return m
+	model := reviewingRepository(t, gitrepo.Status{Files: twoFiles()})
+	model = update(t, model, tea.KeyPressMsg{Code: 'c', Text: "c"})
+	return typeText(t, model, summary)
 }
 
 func unstagedFiles() []gitrepo.FileStatus {
@@ -1271,91 +1319,93 @@ func unstagedFiles() []gitrepo.FileStatus {
 }
 
 func TestFullscreenDiffCoversTheListsSoAClickThereSelectsNothing(t *testing.T) {
-	m := reviewingRepository(t, gitrepo.Status{Files: twoFiles()})
+	model := reviewingRepository(t, gitrepo.Status{Files: twoFiles()})
 
-	m = update(t, m, tea.KeyPressMsg{Code: 'd', Text: "d"})
-	m = update(t, m, tea.MouseClickMsg{X: 3, Y: 3, Button: tea.MouseLeft})
+	model = update(t, model, tea.KeyPressMsg{Code: 'd', Text: "d"})
+	model = update(t, model, tea.MouseClickMsg{X: 3, Y: 3, Button: tea.MouseLeft})
+	diffWidth := model.diffInnerWidth()
 
-	if m.diffInnerWidth() != 118 || m.selectedChange != 0 {
-		t.Fatalf("got diff width %d, selected file %d, want 118 and file 0", m.diffInnerWidth(), m.selectedChange)
-	}
+	require.Equal(t, 118, diffWidth)
+	require.Equal(t, 0, model.selectedChange)
 }
 
 func TestADivergedBranchOffersAForcePush(t *testing.T) {
-	m := pressPush(t, gitrepo.Status{
+	model := pressPush(t, gitrepo.Status{
 		Branch: "fix", Tracking: gitrepo.Tracking{Upstream: "origin/fix", Ahead: 2, Behind: 1},
 	})
 
-	popup := ansi.Strip(m.renderConfirmPopup())
-	if m.popup.kind != confirmPopup || !strings.Contains(popup, "replaces 1 commit on origin/fix with 2 commits") {
-		t.Fatalf("got popup %d:\n%s", m.popup.kind, popup)
-	}
+	popup := plainConfirmPopup(model)
+
+	require.Equal(t, confirmPopup, model.popup.kind)
+	require.Contains(t, popup, "replaces 1 commit on origin/fix with 2 commits")
 }
 
 func TestABranchTrackingAnotherNameIsPublishedNotPushedThere(t *testing.T) {
-	m := pressPush(t, gitrepo.Status{
+	model := pressPush(t, gitrepo.Status{
 		Branch: "enrollment-links", Tracking: gitrepo.Tracking{Upstream: "origin/main", Ahead: 1}, HasCommits: true,
 	})
 
-	popup := ansi.Strip(m.renderConfirmPopup())
-	if m.popup.kind != confirmPopup || !strings.Contains(popup, "publish enrollment-links to origin") ||
-		strings.Contains(popup, "origin/main") {
-		t.Fatalf("got popup %d:\n%s\nwant a publish that never names origin/main", m.popup.kind, popup)
-	}
+	popup := plainConfirmPopup(model)
+
+	require.Equal(t, confirmPopup, model.popup.kind)
+	require.Contains(t, popup, "publish enrollment-links to origin")
+	require.NotContains(t, popup, "origin/main")
 }
 
 func pressPush(t *testing.T, status gitrepo.Status) Model {
 	t.Helper()
-	return update(t, reviewingRepository(t, status), tea.KeyPressMsg{Code: 'P', Text: "P"})
+	model := reviewingRepository(t, status)
+	return update(t, model, tea.KeyPressMsg{Code: 'P', Text: "P"})
 }
 
 func TestRightClickingAnOlderPushedCommitOffersToAmendItWithAForcePushWarning(t *testing.T) {
-	m := reviewingRepository(t, gitrepo.Status{
+	model := reviewingRepository(t, gitrepo.Status{
 		Branch: "fix", Tracking: gitrepo.Tracking{Upstream: "origin/fix", Ahead: 1}, Files: twoFiles(), HasCommits: true,
 	})
-	m = update(t, m, logMsg{dir: "C:/dev/repo", limit: logPageSize, commits: []gitrepo.Commit{
+	model = update(t, model, logMsg{dir: "C:/dev/repo", limit: logPageSize, commits: []gitrepo.Commit{
 		{Hash: strings.Repeat("1", 40), Parents: []string{strings.Repeat("2", 40)}},
 		{Hash: strings.Repeat("2", 40), ShortHash: "2222222", Summary: "Fix wrap"},
 	}})
-	m = update(t, m, tea.KeyPressMsg{Code: tea.KeyTab})
+	model = update(t, model, tea.KeyPressMsg{Code: tea.KeyTab})
 
-	m = update(t, m, tea.MouseClickMsg{X: 3, Y: 4, Button: tea.MouseRight})
+	model = update(t, model, tea.MouseClickMsg{X: 3, Y: 4, Button: tea.MouseRight})
+	popup := plainConfirmPopup(model)
 
-	popup := ansi.Strip(m.renderConfirmPopup())
-	if m.popup.kind != confirmPopup || !strings.Contains(popup, "amend 2222222") ||
-		!strings.Contains(popup, "with 1 file staged") || !strings.Contains(popup, "rewrites every commit above it") ||
-		!strings.Contains(popup, "the next push is a force push") {
-		t.Fatalf("got popup %d:\n%s", m.popup.kind, popup)
-	}
+	require.Equal(t, confirmPopup, model.popup.kind)
+	require.Contains(t, popup, "amend 2222222")
+	require.Contains(t, popup, "with 1 file staged")
+	require.Contains(t, popup, "rewrites every commit above it")
+	require.Contains(t, popup, "the next push is a force push")
 }
 
 func TestRewordFillsInTheSelectedMessageAndEscBringsBackTheCommitDraft(t *testing.T) {
-	m := reviewingRepository(t, gitrepo.Status{Branch: "fix", HasCommits: true})
-	m = update(t, m, logMsg{dir: "C:/dev/repo", limit: logPageSize, commits: []gitrepo.Commit{
+	model := reviewingRepository(t, gitrepo.Status{Branch: "fix", HasCommits: true})
+	model = update(t, model, logMsg{dir: "C:/dev/repo", limit: logPageSize, commits: []gitrepo.Commit{
 		{Hash: strings.Repeat("1", 40), Parents: []string{strings.Repeat("2", 40)}},
 		{Hash: strings.Repeat("2", 40), ShortHash: "2222222", Summary: "Fix wrap", Message: "Fix wrap\n\nKeep words whole"},
 	}})
-	m = update(t, m, tea.KeyPressMsg{Code: 'c', Text: "c"})
-	for _, letter := range "WIP" {
-		m = update(t, m, tea.KeyPressMsg{Code: letter, Text: string(letter)})
-	}
-	m = update(t, m, tea.KeyPressMsg{Code: tea.KeyEscape})
-	m = update(t, m, tea.KeyPressMsg{Code: tea.KeyTab})
-	m = update(t, m, tea.KeyPressMsg{Code: 'j', Text: "j"})
+	model = update(t, model, tea.KeyPressMsg{Code: 'c', Text: "c"})
+	model = typeText(t, model, "WIP")
+	model = update(t, model, tea.KeyPressMsg{Code: tea.KeyEscape})
+	model = update(t, model, tea.KeyPressMsg{Code: tea.KeyTab})
+	model = update(t, model, tea.KeyPressMsg{Code: 'j', Text: "j"})
 
-	m = update(t, m, tea.KeyPressMsg{Code: 'r', Text: "r"})
-	popup := ansi.Strip(m.renderRewordPopup())
-	summary, description := m.summaryBox.Value(), m.descriptionBox.Value()
-	m = update(t, m, tea.KeyPressMsg{Code: tea.KeyEscape})
+	model = update(t, model, tea.KeyPressMsg{Code: 'r', Text: "r"})
+	renderedPopup := model.renderRewordPopup()
+	popup := ansi.Strip(renderedPopup)
+	summary := model.summaryBox.Value()
+	description := model.descriptionBox.Value()
+	model = update(t, model, tea.KeyPressMsg{Code: tea.KeyEscape})
+	draftSummary := model.summaryBox.Value()
+	draftDescription := model.descriptionBox.Value()
 
-	if summary != "Fix wrap" || description != "Keep words whole" || !strings.Contains(popup, "reword 2222222") ||
-		!strings.Contains(popup, "rewrites every commit above it") {
-		t.Fatalf("got summary %q, description %q, popup:\n%s", summary, description, popup)
-	}
-	if m.popup.kind != noPopup || m.summaryBox.Value() != "WIP" || m.descriptionBox.Value() != "" {
-		t.Fatalf("got popup %d, summary %q, description %q after esc, want the WIP draft back", m.popup.kind,
-			m.summaryBox.Value(), m.descriptionBox.Value())
-	}
+	require.Equal(t, "Fix wrap", summary)
+	require.Equal(t, "Keep words whole", description)
+	require.Contains(t, popup, "reword 2222222")
+	require.Contains(t, popup, "rewrites every commit above it")
+	require.Equal(t, noPopup, model.popup.kind)
+	require.Equal(t, "WIP", draftSummary)
+	require.Empty(t, draftDescription)
 }
 
 func TestCommitMessageFields(t *testing.T) {
@@ -1365,49 +1415,53 @@ func TestCommitMessageFields(t *testing.T) {
 }
 
 func summaryWrapsALongLineInsteadOfScrollingIt(t *testing.T) {
-	m := reviewingRepository(t, gitrepo.Status{Branch: "fix", HasCommits: true})
-	m = update(t, m, tea.KeyPressMsg{Code: 'c', Text: "c"})
+	model := reviewingRepository(t, gitrepo.Status{Branch: "fix", HasCommits: true})
+	model = update(t, model, tea.KeyPressMsg{Code: 'c', Text: "c"})
 	summary := strings.Repeat("word ", 20) + "end"
-	m = typeText(t, m, summary)
+	model = typeText(t, model, summary)
 
-	popup := ansi.Strip(m.renderCommitPopup())
-	if m.summaryBox.Value() != summary || !strings.Contains(popup, "word word") || !strings.Contains(popup, "end") ||
-		m.summaryBox.Height() != 2 {
-		t.Fatalf("got summary %q in %d rows, popup:\n%s\nwant it wrapped onto 2 rows", m.summaryBox.Value(),
-			m.summaryBox.Height(), popup)
-	}
+	renderedPopup := model.renderCommitPopup()
+	popup := ansi.Strip(renderedPopup)
+	typed := model.summaryBox.Value()
+	rows := model.summaryBox.Height()
+
+	require.Equal(t, summary, typed)
+	require.Contains(t, popup, "word word")
+	require.Contains(t, popup, "end")
+	require.Equal(t, 2, rows)
 }
 
 func summaryJoinsPastedLinesWithSpaces(t *testing.T) {
-	m := reviewingRepository(t, gitrepo.Status{Branch: "fix", HasCommits: true})
-	m = update(t, m, tea.KeyPressMsg{Code: 'c', Text: "c"})
-	m = update(t, m, tea.PasteMsg{Content: "Fix wrap\r\nin the\nsummary"})
+	model := reviewingRepository(t, gitrepo.Status{Branch: "fix", HasCommits: true})
+	model = update(t, model, tea.KeyPressMsg{Code: 'c', Text: "c"})
 
-	if m.summaryBox.Value() != "Fix wrap in the summary" {
-		t.Fatalf("got summary %q, want the pasted lines joined with spaces", m.summaryBox.Value())
-	}
+	model = update(t, model, tea.PasteMsg{Content: "Fix wrap\r\nin the\nsummary"})
+	summary := model.summaryBox.Value()
+
+	require.Equal(t, "Fix wrap in the summary", summary)
 }
 
 func ctrlAThenBackspaceClearsOnlyTheFocusedField(t *testing.T) {
-	m := reviewingRepository(t, gitrepo.Status{Branch: "fix", HasCommits: true})
-	m = update(t, m, tea.KeyPressMsg{Code: 'c', Text: "c"})
-	m = typeText(t, m, "Fix wrap")
-	m = update(t, m, tea.KeyPressMsg{Code: tea.KeyTab})
-	m = typeText(t, m, "Keep words whole")
-	m = update(t, m, tea.KeyPressMsg{Code: tea.KeyEnter})
-	m = typeText(t, m, "in the diff")
+	model := reviewingRepository(t, gitrepo.Status{Branch: "fix", HasCommits: true})
+	model = update(t, model, tea.KeyPressMsg{Code: 'c', Text: "c"})
+	model = typeText(t, model, "Fix wrap")
+	model = update(t, model, tea.KeyPressMsg{Code: tea.KeyTab})
+	model = typeText(t, model, "Keep words whole")
+	model = update(t, model, tea.KeyPressMsg{Code: tea.KeyEnter})
+	model = typeText(t, model, "in the diff")
 
-	m = update(t, m, tea.KeyPressMsg{Code: 'a', Mod: tea.ModCtrl})
-	m = update(t, m, tea.KeyPressMsg{Code: tea.KeyBackspace})
-	description := m.descriptionBox.Value()
-	m = update(t, m, tea.KeyPressMsg{Code: tea.KeyTab})
-	m = update(t, m, tea.KeyPressMsg{Code: 'a', Mod: tea.ModCtrl})
-	m = update(t, m, tea.KeyPressMsg{Code: tea.KeyBackspace})
+	model = update(t, model, tea.KeyPressMsg{Code: 'a', Mod: tea.ModCtrl})
+	model = update(t, model, tea.KeyPressMsg{Code: tea.KeyBackspace})
+	description := model.descriptionBox.Value()
+	summaryKept := model.summaryBox.Value()
+	model = update(t, model, tea.KeyPressMsg{Code: tea.KeyTab})
+	model = update(t, model, tea.KeyPressMsg{Code: 'a', Mod: tea.ModCtrl})
+	model = update(t, model, tea.KeyPressMsg{Code: tea.KeyBackspace})
+	summary := model.summaryBox.Value()
 
-	if description != "" || m.summaryBox.Value() != "" {
-		t.Fatalf("got description %q after clearing it, summary %q after clearing it, want both empty",
-			description, m.summaryBox.Value())
-	}
+	require.Empty(t, description)
+	require.Equal(t, "Fix wrap", summaryKept)
+	require.Empty(t, summary)
 }
 
 func TestLog(t *testing.T) {
@@ -1416,7 +1470,9 @@ func TestLog(t *testing.T) {
 	t.Run("searchKeepsOnlyMatchingMessagesIgnoringCase", searchKeepsOnlyMatchingMessagesIgnoringCase)
 	t.Run("anUppercaseLetterMakesTheSearchCaseSensitive", anUppercaseLetterMakesTheSearchCaseSensitive)
 	t.Run("searchNeedsEveryWordInAnyOrder", searchNeedsEveryWordInAnyOrder)
-	t.Run("searchLooksAtTheHashAuthorAndRefs", searchLooksAtTheHashAuthorAndRefs)
+	t.Run("searchLooksAtTheAuthor", searchLooksAtTheAuthor)
+	t.Run("searchLooksAtTheRefs", searchLooksAtTheRefs)
+	t.Run("searchLooksAtTheHash", searchLooksAtTheHash)
 	t.Run("aPasteIntoTheSearchFiltersTheLog", aPasteIntoTheSearchFiltersTheLog)
 	t.Run("clickingTheFoldedLogOpensIt", clickingTheFoldedLogOpensIt)
 	t.Run("clickingTheFoldedChangesDuringASearchClosesIt", clickingTheFoldedChangesDuringASearchClosesIt)
@@ -1428,200 +1484,217 @@ func TestLog(t *testing.T) {
 }
 
 func clickingTheFoldedLogOpensIt(t *testing.T) {
-	m := reviewingRepository(t, gitrepo.Status{Files: twoFiles(), HasCommits: true})
-	m = update(t, m, logMsg{dir: "C:/dev/repo", limit: logPageSize, commits: []gitrepo.Commit{
+	model := reviewingRepository(t, gitrepo.Status{Files: twoFiles(), HasCommits: true})
+	model = update(t, model, logMsg{dir: "C:/dev/repo", limit: logPageSize, commits: []gitrepo.Commit{
 		{Hash: strings.Repeat("1", 40)}, {Hash: strings.Repeat("2", 40)},
 	}})
 
-	m = update(t, m, tea.MouseClickMsg{X: 3, Y: 27, Button: tea.MouseLeft})
-	m = update(t, m, tea.MouseClickMsg{X: 3, Y: 4, Button: tea.MouseLeft})
+	model = update(t, model, tea.MouseClickMsg{X: 3, Y: 27, Button: tea.MouseLeft})
+	model = update(t, model, tea.MouseClickMsg{X: 3, Y: 4, Button: tea.MouseLeft})
 
-	if m.view != viewLog || m.selectedCommit != 1 {
-		t.Fatalf("got view %d, selected commit %d, want the log open on commit 1", m.view, m.selectedCommit)
-	}
+	require.Equal(t, viewLog, model.view)
+	require.Equal(t, 1, model.selectedCommit)
 }
 
 func clickingTheFoldedChangesDuringASearchClosesIt(t *testing.T) {
-	m := logOf(t, []gitrepo.Commit{{Hash: strings.Repeat("1", 40)}})
-	m = update(t, m, tea.KeyPressMsg{Code: '/', Text: "/"})
+	model := logOf(t, []gitrepo.Commit{{Hash: strings.Repeat("1", 40)}})
+	model = update(t, model, tea.KeyPressMsg{Code: '/', Text: "/"})
+	foldedChangesY := model.foldedPaneY(viewChanges)
 
-	m = update(t, m, tea.MouseClickMsg{X: 3, Y: m.foldedPaneY(viewChanges), Button: tea.MouseLeft})
+	model = update(t, model, tea.MouseClickMsg{X: 3, Y: foldedChangesY, Button: tea.MouseLeft})
 
-	if m.view != viewChanges || m.mode != modeBrowsing {
-		t.Fatalf("got view %d, mode %d, want the changes view browsing", m.view, m.mode)
-	}
+	require.Equal(t, viewChanges, model.view)
+	require.Equal(t, modeBrowsing, model.mode)
 }
 
 func backspaceOnAnEmptySearchClosesIt(t *testing.T) {
-	m := logOf(t, []gitrepo.Commit{{Hash: strings.Repeat("1", 40)}})
-	m = update(t, m, tea.KeyPressMsg{Code: '/', Text: "/"})
-	m = update(t, m, tea.KeyPressMsg{Code: 'a', Text: "a"})
+	model := logOf(t, []gitrepo.Commit{{Hash: strings.Repeat("1", 40)}})
+	model = update(t, model, tea.KeyPressMsg{Code: '/', Text: "/"})
+	model = update(t, model, tea.KeyPressMsg{Code: 'a', Text: "a"})
 
-	m = update(t, m, tea.KeyPressMsg{Code: tea.KeyBackspace})
-	afterDeleting := m.mode
-	m = update(t, m, tea.KeyPressMsg{Code: tea.KeyBackspace})
+	model = update(t, model, tea.KeyPressMsg{Code: tea.KeyBackspace})
+	afterDeleting := model.mode
+	model = update(t, model, tea.KeyPressMsg{Code: tea.KeyBackspace})
 
-	if afterDeleting != modeSearching || m.mode != modeBrowsing {
-		t.Fatalf("got mode %d after deleting a, then %d, want searching then browsing", afterDeleting, m.mode)
-	}
+	require.Equal(t, modeSearching, afterDeleting)
+	require.Equal(t, modeBrowsing, model.mode)
 }
 
 func expandingACommitListsItsFilesUnderIt(t *testing.T) {
 	first := gitrepo.Commit{Hash: strings.Repeat("1", 40), Message: "Add tree"}
 	second := gitrepo.Commit{Hash: strings.Repeat("2", 40), Message: "Fix wrap"}
-	m := logOf(t, []gitrepo.Commit{first, second})
-	m = update(t, m, commitDiffMsg{
+	model := logOf(t, []gitrepo.Commit{first, second})
+	model = update(t, model, commitDiffMsg{
 		dir: "C:/dev/repo", hash: first.Hash, contextLines: hunkContext, sections: []diff.FileSection{
 			{Path: "a.go", FileDiff: diff.FileDiff{Change: diff.FileAdded}},
 			{Path: "b.go", FileDiff: diff.FileDiff{Change: diff.FileModified}},
 		}})
 
-	m = update(t, m, tea.KeyPressMsg{Code: tea.KeyEnter})
-	m = update(t, m, tea.KeyPressMsg{Code: 'j', Text: "j"})
-	m = update(t, m, tea.KeyPressMsg{Code: 'j', Text: "j"})
+	model = update(t, model, tea.KeyPressMsg{Code: tea.KeyEnter})
+	model = update(t, model, tea.KeyPressMsg{Code: 'j', Text: "j"})
+	model = update(t, model, tea.KeyPressMsg{Code: 'j', Text: "j"})
+	rows := model.visibleLogRows()
+	title := model.commitPaneTitle()
 
 	want := []treeRow{{commit: 0, file: commitRow}, {commit: 0, file: 0}, {commit: 0, file: 1},
 		{commit: 1, file: commitRow}}
-	if !reflect.DeepEqual(m.visibleLogRows(), want) || m.selectedCommitFile != 1 || m.commitPaneTitle() != " b.go" {
-		t.Fatalf("got rows %v, selected file %d, title %q", m.visibleLogRows(), m.selectedCommitFile, m.commitPaneTitle())
-	}
+	require.Equal(t, want, rows)
+	require.Equal(t, 1, model.selectedCommitFile)
+	require.Equal(t, " b.go", title)
 }
 
 func searchKeepsOnlyMatchingMessagesIgnoringCase(t *testing.T) {
-	m := logOf(t, []gitrepo.Commit{
+	model := logOf(t, []gitrepo.Commit{
 		{Hash: strings.Repeat("1", 40), Message: "Add tree"},
 		{Hash: strings.Repeat("2", 40), Message: "Fix WRAP of long lines"},
 	})
 
-	m = typeSearch(t, m, "wr.p")
+	model = typeSearch(t, model, "wr.p")
+	rows := model.visibleLogRows()
 
-	if !reflect.DeepEqual(m.visibleLogRows(), []treeRow{{commit: 1, file: commitRow}}) || m.selectedCommit != 1 {
-		t.Fatalf("got rows %v, selected commit %d", m.visibleLogRows(), m.selectedCommit)
-	}
+	require.Equal(t, []treeRow{{commit: 1, file: commitRow}}, rows)
+	require.Equal(t, 1, model.selectedCommit)
 }
 
 func anUppercaseLetterMakesTheSearchCaseSensitive(t *testing.T) {
-	m := logOf(t, []gitrepo.Commit{
+	model := logOf(t, []gitrepo.Commit{
 		{Hash: strings.Repeat("1", 40), Message: "fix tree"},
 		{Hash: strings.Repeat("2", 40), Message: "Fix wrap"},
 	})
 
-	m = typeSearch(t, m, "Fix")
+	model = typeSearch(t, model, "Fix")
+	rows := model.visibleLogRows()
 
-	if !reflect.DeepEqual(m.visibleLogRows(), []treeRow{{commit: 1, file: commitRow}}) {
-		t.Fatalf("got rows %v", m.visibleLogRows())
-	}
+	require.Equal(t, []treeRow{{commit: 1, file: commitRow}}, rows)
 }
 
 func searchNeedsEveryWordInAnyOrder(t *testing.T) {
-	m := logOf(t, []gitrepo.Commit{
+	model := logOf(t, []gitrepo.Commit{
 		{Hash: strings.Repeat("1", 40), Message: "Fix wrap"},
 		{Hash: strings.Repeat("2", 40), Message: "Fix the log paging"},
 		{Hash: strings.Repeat("3", 40), Message: "log tree"},
 	})
 
-	m = typeSearch(t, m, "log fix")
+	model = typeSearch(t, model, "log fix")
+	rows := model.visibleLogRows()
 
-	if !reflect.DeepEqual(m.visibleLogRows(), []treeRow{{commit: 1, file: commitRow}}) {
-		t.Fatalf("got rows %v", m.visibleLogRows())
-	}
+	require.Equal(t, []treeRow{{commit: 1, file: commitRow}}, rows)
 }
 
-func searchLooksAtTheHashAuthorAndRefs(t *testing.T) {
-	commits := []gitrepo.Commit{
+func searchLooksAtTheAuthor(t *testing.T) {
+	log := logOf(t, authorRefAndHashCommits())
+
+	model := typeSearch(t, log, "ada")
+	rows := model.visibleLogRows()
+
+	require.Equal(t, []treeRow{{commit: 0, file: commitRow}}, rows)
+}
+
+func searchLooksAtTheRefs(t *testing.T) {
+	log := logOf(t, authorRefAndHashCommits())
+
+	model := typeSearch(t, log, "v1")
+	rows := model.visibleLogRows()
+
+	require.Equal(t, []treeRow{{commit: 1, file: commitRow}}, rows)
+}
+
+func searchLooksAtTheHash(t *testing.T) {
+	log := logOf(t, authorRefAndHashCommits())
+
+	model := typeSearch(t, log, "3333")
+	rows := model.visibleLogRows()
+
+	require.Equal(t, []treeRow{{commit: 2, file: commitRow}}, rows)
+}
+
+// authorRefAndHashCommits share one message, so only the author Ada, the tag v1 or the hash 3333 tells them apart.
+func authorRefAndHashCommits() []gitrepo.Commit {
+	return []gitrepo.Commit{
 		{Hash: strings.Repeat("1", 40), Author: "Ada", Message: "Add tree"},
 		{Hash: strings.Repeat("2", 40), Refs: []string{"tag: v1"}, Message: "Add tree"},
 		{Hash: strings.Repeat("3", 40), Message: "Add tree"},
-	}
-	for want, pattern := range []string{"ada", "v1", "3333"} {
-		m := typeSearch(t, logOf(t, commits), pattern)
-
-		if !reflect.DeepEqual(m.visibleLogRows(), []treeRow{{commit: want, file: commitRow}}) {
-			t.Fatalf("searching %q got rows %v, want commit %d", pattern, m.visibleLogRows(), want)
-		}
 	}
 }
 
 func logOf(t *testing.T, commits []gitrepo.Commit) Model {
 	t.Helper()
-	m := update(t, New(findNothing, openAnything, nil, AgentHost{}), focusOnOne("C:/dev/repo"))
-	m = update(t, m, logMsg{dir: "C:/dev/repo", limit: logPageSize, commits: commits})
-	return update(t, m, tea.KeyPressMsg{Code: tea.KeyTab})
+	model := New(findNothing, openAnything, nil, AgentHost{})
+	model = update(t, model, focusOnOne("C:/dev/repo"))
+	model = update(t, model, logMsg{dir: "C:/dev/repo", limit: logPageSize, commits: commits})
+	return update(t, model, tea.KeyPressMsg{Code: tea.KeyTab})
 }
 
-func typeSearch(t *testing.T, m Model, pattern string) Model {
+func typeSearch(t *testing.T, model Model, pattern string) Model {
 	t.Helper()
-	m = update(t, m, tea.KeyPressMsg{Code: '/', Text: "/"})
-	for _, character := range pattern {
-		m = update(t, m, tea.KeyPressMsg{Code: character, Text: string(character)})
-	}
-	return update(t, m, tea.KeyPressMsg{Code: tea.KeyEnter})
+	model = update(t, model, tea.KeyPressMsg{Code: '/', Text: "/"})
+	model = typeText(t, model, pattern)
+	return update(t, model, tea.KeyPressMsg{Code: tea.KeyEnter})
 }
 
 func selectionFollowsTheCommitWhenNewOnesArriveAbove(t *testing.T) {
 	first := gitrepo.Commit{Hash: strings.Repeat("1", 40)}
 	second := gitrepo.Commit{Hash: strings.Repeat("2", 40)}
 	added := gitrepo.Commit{Hash: strings.Repeat("3", 40)}
-	m := update(t, logOf(t, []gitrepo.Commit{first, second}), tea.KeyPressMsg{Code: 'j', Text: "j"})
+	model := logOf(t, []gitrepo.Commit{first, second})
+	model = update(t, model, tea.KeyPressMsg{Code: 'j', Text: "j"})
 
-	m = update(t, m, logMsg{dir: "C:/dev/repo", limit: logPageSize, commits: []gitrepo.Commit{added, first, second}})
+	model = update(t, model, logMsg{dir: "C:/dev/repo", limit: logPageSize, commits: []gitrepo.Commit{added, first, second}})
+	selected := model.selectedCommitHash()
 
-	if m.selectedCommitHash() != second.Hash {
-		t.Fatalf("got selected commit %q, want %q", m.selectedCommitHash(), second.Hash)
-	}
+	require.Equal(t, second.Hash, selected)
 }
 
 func dropsFilesLoadedForThePreviousRepository(t *testing.T) {
-	m := update(t, New(findNothing, openAnything, nil, AgentHost{}), focusOnOne("C:/dev/old"))
-	m = update(t, m, tea.BlurMsg{})
-	m = update(t, m, focusOnOne("C:/dev/new"))
+	model := New(findNothing, openAnything, nil, AgentHost{})
+	model = update(t, model, focusOnOne("C:/dev/old"))
+	model = update(t, model, tea.BlurMsg{})
+	model = update(t, model, focusOnOne("C:/dev/new"))
 
-	m = update(t, m, statusMsg{dir: "C:/dev/old", status: gitrepo.Status{Branch: "master", Files: twoFiles()}})
+	model = update(t, model, statusMsg{dir: "C:/dev/old", status: gitrepo.Status{Branch: "master", Files: twoFiles()}})
 
-	if len(m.status.Files) != 0 || m.status.Branch != "" {
-		t.Fatalf("got files %v on branch %q from the previous repository", m.status.Files, m.status.Branch)
-	}
+	require.Empty(t, model.status.Files)
+	require.Empty(t, model.status.Branch)
 }
 
 func rejectionClearsTheReviewAndThePopup(t *testing.T) {
-	m := update(t, New(findNothing, openAnything, nil, AgentHost{}), focusOnOne("C:/dev/repo"))
-	m = update(t, m, statusMsg{dir: "C:/dev/repo", status: gitrepo.Status{Branch: "master", Files: twoFiles()}})
-	m = update(t, m, tea.KeyPressMsg{Code: 'c', Text: "c"})
-	m = update(t, m, tea.BlurMsg{})
+	model := New(findNothing, openAnything, nil, AgentHost{})
+	model = update(t, model, focusOnOne("C:/dev/repo"))
+	model = update(t, model, statusMsg{dir: "C:/dev/repo", status: gitrepo.Status{Branch: "master", Files: twoFiles()}})
+	model = update(t, model, tea.KeyPressMsg{Code: 'c', Text: "c"})
+	model = update(t, model, tea.BlurMsg{})
 
-	m = update(t, m, FocusRejection{Reason: "outside\nthe dev directory"})
+	model = update(t, model, FocusRejection{Reason: "outside\nthe dev directory"})
 
-	if m.repository.Dir != "" || len(m.status.Files) != 0 || m.popup.kind != noPopup || m.rejection != "outside | the dev directory" {
-		t.Fatalf("got repository %q, %d files, popup %d, rejection %q", m.repository.Dir, len(m.status.Files), m.popup.kind,
-			m.rejection)
-	}
+	require.Empty(t, model.repository.Dir)
+	require.Empty(t, model.status.Files)
+	require.Equal(t, noPopup, model.popup.kind)
+	require.Equal(t, "outside | the dev directory", model.rejection)
 }
 
 func refocusingTheSameRepositoryKeepsTheSelection(t *testing.T) {
-	m := update(t, New(findNothing, openAnything, nil, AgentHost{}), focusOnOne("C:/dev/repo"))
-	m = update(t, m, statusMsg{dir: "C:/dev/repo", status: gitrepo.Status{Branch: "master", Files: twoFiles()}})
-	m = update(t, m, tea.KeyPressMsg{Code: 'j', Text: "j"})
+	model := New(findNothing, openAnything, nil, AgentHost{})
+	model = update(t, model, focusOnOne("C:/dev/repo"))
+	model = update(t, model, statusMsg{dir: "C:/dev/repo", status: gitrepo.Status{Branch: "master", Files: twoFiles()}})
+	model = update(t, model, tea.KeyPressMsg{Code: 'j', Text: "j"})
 
-	m = update(t, m, focusOnOne("C:/dev/repo"))
+	model = update(t, model, focusOnOne("C:/dev/repo"))
 
-	if m.selectedChange != 1 || len(m.status.Files) != 2 {
-		t.Fatalf("got selection %d of %d files, want 1 of 2", m.selectedChange, len(m.status.Files))
-	}
+	require.Equal(t, 1, model.selectedChange)
+	require.Len(t, model.status.Files, 2)
 }
 
-func update(t *testing.T, m Model, msg tea.Msg) Model {
+func update(t *testing.T, model Model, msg tea.Msg) Model {
 	t.Helper()
-	next, _ := m.Update(msg)
+	next, _ := model.Update(msg)
 	return asModel(t, next)
 }
 
 func asModel(t *testing.T, next tea.Model) Model {
 	t.Helper()
-	model, isModel := next.(Model)
-	if !isModel {
-		t.Fatalf("got %T, want Model", next)
-	}
-	return model
+	nextModel, isModel := next.(Model)
+	require.True(t, isModel, "got %T, want Model", next)
+	return nextModel
 }
 
 func twoFiles() []gitrepo.FileStatus {
@@ -1632,44 +1705,40 @@ func twoFiles() []gitrepo.FileStatus {
 }
 
 func nearingTheEndOfAFullPageLoadsTheNextOne(t *testing.T) {
-	m := update(t, logOf(t, numberedCommits(logPageSize)), tea.WindowSizeMsg{Width: 120, Height: 30})
+	model := logOf(t, numberedCommits(logPageSize))
+	model = update(t, model, tea.WindowSizeMsg{Width: 120, Height: 30})
 
-	next, _ := selectLogRow(t, m, logPageSize-1)
+	next, _ := selectLogRow(t, model, logPageSize-1)
 
-	if next.logLimit != 2*logPageSize {
-		t.Fatalf("got limit %d, want %d", next.logLimit, 2*logPageSize)
-	}
+	require.Equal(t, 2*logPageSize, next.logLimit)
 }
 
 func aShortLogIsTheWholeHistory(t *testing.T) {
-	m := update(t, logOf(t, numberedCommits(3)), tea.WindowSizeMsg{Width: 120, Height: 30})
+	model := logOf(t, numberedCommits(3))
+	model = update(t, model, tea.WindowSizeMsg{Width: 120, Height: 30})
 
-	next, _ := selectLogRow(t, m, 2)
+	next, _ := selectLogRow(t, model, 2)
 
-	if next.logLimit != logPageSize {
-		t.Fatalf("got limit %d, want %d", next.logLimit, logPageSize)
-	}
+	require.Equal(t, logPageSize, next.logLimit)
 }
 
 func aReloadReadWithTheOldLimitIsDropped(t *testing.T) {
-	m := update(t, logOf(t, numberedCommits(logPageSize)), tea.WindowSizeMsg{Width: 120, Height: 30})
-	m, _ = selectLogRow(t, m, logPageSize-1)
+	model := logOf(t, numberedCommits(logPageSize))
+	model = update(t, model, tea.WindowSizeMsg{Width: 120, Height: 30})
+	model, _ = selectLogRow(t, model, logPageSize-1)
 
-	m = update(t, m, logMsg{dir: "C:/dev/repo", limit: logPageSize, commits: numberedCommits(2)})
+	model = update(t, model, logMsg{dir: "C:/dev/repo", limit: logPageSize, commits: numberedCommits(2)})
 
-	if len(m.commits) != logPageSize || m.selectedCommit != logPageSize-1 {
-		t.Fatalf("got %d commits, selected %d, want the page kept", len(m.commits), m.selectedCommit)
-	}
+	require.Len(t, model.commits, logPageSize)
+	require.Equal(t, logPageSize-1, model.selectedCommit)
 }
 
 func searchLoadsTheWholeHistory(t *testing.T) {
-	m := logOf(t, numberedCommits(logPageSize))
+	model := logOf(t, numberedCommits(logPageSize))
 
-	m = typeSearch(t, m, "commit")
+	model = typeSearch(t, model, "commit")
 
-	if m.logLimit != wholeHistory {
-		t.Fatalf("got limit %d, want %d", m.logLimit, wholeHistory)
-	}
+	require.Equal(t, wholeHistory, model.logLimit)
 }
 
 func numberedCommits(count int) []gitrepo.Commit {
@@ -1680,8 +1749,8 @@ func numberedCommits(count int) []gitrepo.Commit {
 	return commits
 }
 
-func selectLogRow(t *testing.T, m Model, index int) (Model, tea.Cmd) {
+func selectLogRow(t *testing.T, model Model, index int) (Model, tea.Cmd) {
 	t.Helper()
-	next, cmd := m.selectLogRow(index)
+	next, cmd := model.selectLogRow(index)
 	return asModel(t, next), cmd
 }

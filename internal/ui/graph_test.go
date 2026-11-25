@@ -1,11 +1,11 @@
 package ui
 
 import (
-	"slices"
 	"strings"
 	"testing"
 
 	"github.com/charmbracelet/x/ansi"
+	"github.com/stretchr/testify/require"
 
 	"github.com/CLBRITTON2/perusal/internal/gitrepo"
 )
@@ -34,53 +34,57 @@ func mergedBranch() []gitrepo.Commit {
 }
 
 func drawsABranchMergedBackIn(t *testing.T) {
+	commits := mergedBranch()
+	rows := commitGraph(commits)
+
 	got := []string{}
-	for _, row := range commitGraph(mergedBranch()) {
-		got = append(got, ansi.Strip(renderGraphCells(row.commit, nil))+"|"+ansi.Strip(renderGraphCells(row.below, nil)))
+	for _, row := range rows {
+		commitCells := renderGraphCells(row.commit, nil)
+		belowCells := renderGraphCells(row.below, nil)
+		plainCommitCells := ansi.Strip(commitCells)
+		plainBelowCells := ansi.Strip(belowCells)
+		got = append(got, plainCommitCells+"|"+plainBelowCells)
 	}
 
 	want := []string{"○─╮ |│ │ ", "│ ● |│ │ ", "● │ |│ │ ", "●─╯ |    "}
-	if strings.Join(got, "\n") != strings.Join(want, "\n") {
-		t.Fatalf("got\n%s\nwant\n%s", strings.Join(got, "\n"), strings.Join(want, "\n"))
-	}
+	require.Equal(t, want, got)
 }
 
 func aConnectorTakesTheColorOfTheLaneItJoins(t *testing.T) {
-	rows := commitGraph(mergedBranch())
+	commits := mergedBranch()
+	rows := commitGraph(commits)
 
-	got := [][]int32{}
-	for _, row := range []graphRow{rows[0], rows[3]} {
-		lanes := []int32{}
-		for _, cell := range row.commit[:3] {
-			lanes = append(lanes, cell.lane)
-		}
-		got = append(got, lanes)
+	mergeLanes := []int32{}
+	for _, cell := range rows[0].commit[:3] {
+		mergeLanes = append(mergeLanes, cell.lane)
+	}
+	rootLanes := []int32{}
+	for _, cell := range rows[3].commit[:3] {
+		rootLanes = append(rootLanes, cell.lane)
 	}
 
-	if !slices.EqualFunc(got, [][]int32{{0, 1, 1}, {0, 1, 1}}, slices.Equal) {
-		t.Fatalf("got lanes %v for the merge and root rows' first three cells", got)
-	}
+	require.Equal(t, []int32{0, 1, 1}, mergeLanes)
+	require.Equal(t, []int32{0, 1, 1}, rootLanes)
 }
 
 func theLineRunsUpTheSameLaneAndDownFirstParents(t *testing.T) {
-	rows := commitGraph(mergedBranch())
+	commits := mergedBranch()
+	rows := commitGraph(commits)
 
 	fromSide := pathThrough(rows, 1)
 	fromMainline := pathThrough(rows, 2)
 
-	if !slices.Equal(fromSide, []bool{false, true, false, true}) ||
-		!slices.Equal(fromMainline, []bool{true, false, true, true}) {
-		t.Fatalf("got line %v from the side commit, %v from the mainline commit", fromSide, fromMainline)
-	}
+	require.Equal(t, []bool{false, true, false, true}, fromSide)
+	require.Equal(t, []bool{true, false, true, true}, fromMainline)
 }
 
 func onlyTheSelectedLineKeepsItsFullColor(t *testing.T) {
-	rows := commitGraph(mergedBranch())
+	commits := mergedBranch()
+	rows := commitGraph(commits)
+	selectedLine := pathThrough(rows, 1)
 
-	got := renderGraphCells(rows[3].commit, pathThrough(rows, 1))
+	got := renderGraphCells(rows[3].commit, selectedLine)
 
 	want := laneStyles[0].line.Render("●") + laneStyles[1].line.Render("─╯") + laneStyles[1].dim.Render(" ")
-	if got != want {
-		t.Fatalf("got %q, want %q", got, want)
-	}
+	require.Equal(t, want, got)
 }
