@@ -336,6 +336,10 @@ func (r repositoryRow) relativePath() string {
 	return r.RelativePath
 }
 
+func (r repositoryRow) hasWork() bool {
+	return len(r.status.Files) > 0 || len(r.outgoing) > 0 || len(r.incoming) > 0
+}
+
 func (r refusedRow) relativePath() string {
 	return r.RelativePath
 }
@@ -350,16 +354,29 @@ func (m Model) openOverview() (tea.Model, tea.Cmd) {
 	m.overviewRows = []overviewRow{}
 	m.overviewQuery.Reset()
 	m.overviewQuery.Blur()
+	m.hidingRowsWithNoWork = false
 	return m, overviewRequest{findRepositories: m.findRepositories}.load
 }
 
 // Lists the focused repositories first and keeps the selected repository on a refresh, or else selects the one under
-// review, so enter right away keeps it. Each pending row loads on its own, so the table shows before the slowest
+// review, so enter right away keeps it. A refresh keeps the order of the rows already listed, so a sort survives it,
+// and lists the new ones after them. Each pending row loads on its own, so the table shows before the slowest
 // repository is done.
 func (m Model) withOverviewLoaded(msg overviewMsg) (tea.Model, tea.Cmd) {
+	listedIndexes := map[string]int{}
+	for index, row := range m.overviewRows {
+		listedIndexes[row.relativePath()] = index
+	}
+	listedRank := func(row overviewRow) int {
+		index, isListed := listedIndexes[row.relativePath()]
+		if !isListed {
+			return len(listedIndexes)
+		}
+		return index
+	}
 	rows := slices.Clone(msg.rows)
 	slices.SortStableFunc(rows, func(a overviewRow, b overviewRow) int {
-		return cmp.Compare(m.focusRank(a), m.focusRank(b))
+		return cmp.Or(cmp.Compare(m.focusRank(a), m.focusRank(b)), cmp.Compare(listedRank(a), listedRank(b)))
 	})
 	selectedRow, _ := m.overview.selectedRow()
 	selectedRepository, isRepository := rowRepository(selectedRow)
@@ -370,9 +387,9 @@ func (m Model) withOverviewLoaded(msg overviewMsg) (tea.Model, tea.Cmd) {
 		selectedDir = m.repository.Dir
 	}
 	m.overviewRows = rows
-	matching := m.matchingOverviewRows()
-	loadedOverview := selectableList[overviewRow]{loaded: true, rows: matching, selected: 0, offset: 0}
-	m.overview = loadedOverview.withSelected(slices.IndexFunc(matching, isRowAt(selectedDir)))
+	shown := m.shownOverviewRows()
+	loadedOverview := selectableList[overviewRow]{loaded: true, rows: shown, selected: 0, offset: 0}
+	m.overview = loadedOverview.withSelected(slices.IndexFunc(shown, isRowAt(selectedDir)))
 	loads := []tea.Cmd{}
 	for _, row := range rows {
 		pending, isPending := row.(pendingRow)
@@ -396,14 +413,16 @@ func (m Model) withOverviewRowFailed(msg overviewRowFailureMsg) Model {
 	return m.withOverviewRows(rows).withFooterError("skipped " + msg.err.Error())
 }
 
-// withOverviewRows lists the rows overviewQuery matches and keeps the selected row, or else the selected index.
+// withOverviewRows lists the shown rows and keeps the selected row, or else the shown row nearest it in rows, or else
+// the selected index once the row is gone from rows.
 func (m Model) withOverviewRows(rows []overviewRow) Model {
 	selectedRow, hasRows := m.overview.selectedRow()
 	m.overviewRows = rows
-	m.overview.rows = m.matchingOverviewRows()
-	selected := slices.IndexFunc(m.overview.rows, func(row overviewRow) bool {
-		return hasRows && row.relativePath() == selectedRow.relativePath()
-	})
+	m.overview.rows = m.shownOverviewRows()
+	selected := -1
+	if hasRows {
+		selected = nearestShownRow(rows, m.overview.rows, selectedRow.relativePath())
+	}
 	if selected < 0 {
 		selected = m.overview.selected
 	}
@@ -411,20 +430,76 @@ func (m Model) withOverviewRows(rows []overviewRow) Model {
 	return m
 }
 
-// matchingOverviewRows matches the query on the relative path, and on a loaded row's branch too.
-func (m Model) matchingOverviewRows() []overviewRow {
+// nearestShownRow indexes shown, a subsequence of rows, at the row at path, or else at the shown row nearest it in
+// rows, the one below on a tie.
+func nearestShownRow(rows []overviewRow, shown []overviewRow, path string) int {
+	index := slices.IndexFunc(rows, func(row overviewRow) bool { return row.relativePath() == path })
+	if index < 0 {
+		return -1
+	}
+	for distance := range len(rows) {
+		for _, candidate := range []int{index + distance, index - distance} {
+			if candidate < 0 || candidate >= len(rows) {
+				continue
+			}
+			candidatePath := rows[candidate].relativePath()
+			shownIndex := slices.IndexFunc(shown, func(row overviewRow) bool { return row.relativePath() == candidatePath })
+			if shownIndex >= 0 {
+				return shownIndex
+			}
+		}
+	}
+	return -1
+}
+
+// shownOverviewRows matches the query on the relative path, and on a loaded row's branch too.
+func (m Model) shownOverviewRows() []overviewRow {
 	query := m.overviewQueryWords()
-	matching := []overviewRow{}
+	shown := []overviewRow{}
 	for _, row := range m.overviewRows {
 		fields := []string{row.relativePath()}
 		if loaded, isLoaded := row.(repositoryRow); isLoaded {
 			fields = append(fields, loaded.status.Branch)
 		}
-		if query.matchEvery(fields) {
-			matching = append(matching, row)
+		if query.matchEvery(fields) && !m.isHidden(row) {
+			shown = append(shown, row)
 		}
 	}
-	return matching
+	return shown
+}
+
+// isHidden keeps a pending row, whose work is not known yet.
+func (m Model) isHidden(row overviewRow) bool {
+	if !m.hidingRowsWithNoWork || m.isFocused(row) {
+		return false
+	}
+	switch typedRow := row.(type) {
+	case refusedRow:
+		return true
+	case repositoryRow:
+		return !typedRow.hasWork()
+	}
+	return false
+}
+
+// withOverviewSortedByWork sorts once, so a row that loads or reloads later stays where it is.
+func (m Model) withOverviewSortedByWork() Model {
+	rows := slices.Clone(m.overviewRows)
+	slices.SortFunc(rows, func(a overviewRow, b overviewRow) int {
+		return cmp.Or(cmp.Compare(m.workRank(a), m.workRank(b)), strings.Compare(a.relativePath(), b.relativePath()))
+	})
+	return m.withOverviewRows(rows)
+}
+
+func (m Model) workRank(row overviewRow) int {
+	loaded, isLoaded := row.(repositoryRow)
+	switch {
+	case m.isFocused(row):
+		return 0
+	case isLoaded && loaded.hasWork():
+		return 1
+	}
+	return 2
 }
 
 func (m Model) overviewQueryWords() subsequenceWords {
@@ -491,6 +566,11 @@ func (m Model) updateOverview(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	case key.Matches(msg, upKey):
 		m.overview = m.overview.withSelected(m.overview.selected - 1).scrolled(m.overviewTableInnerHeight())
 		return m, nil
+	case key.Matches(msg, sortByWorkKey):
+		return m.withOverviewSortedByWork(), nil
+	case key.Matches(msg, hideNoWorkKey):
+		m.hidingRowsWithNoWork = !m.hidingRowsWithNoWork
+		return m.withOverviewRows(m.overviewRows), nil
 	case key.Matches(msg, openRepositoryKey):
 		return m.withSelectedRepository(m.openRepositoryRow)
 	case key.Matches(msg, fetchKey):
@@ -785,12 +865,16 @@ func (m Model) openRepositoryRow(row repositoryRow) (tea.Model, tea.Cmd) {
 // The table sits on top and the selected repository's changes, outgoing and incoming commits take the rest.
 func (m Model) renderOverview() string {
 	var title, emptyText string
-	if len(m.overviewQueryWords()) > 0 {
-		title = "repositories /" + sanitizeText(m.overviewQuery.Value())
-		emptyText = "no repositories match"
+	if m.hidingRowsWithNoWork {
+		title = "repositories with work"
+		emptyText = "no repositories with work"
 	} else {
 		title = "repositories"
 		emptyText = "no repositories found"
+	}
+	if len(m.overviewQueryWords()) > 0 {
+		title += " /" + sanitizeText(m.overviewQuery.Value())
+		emptyText = "no repositories match"
 	}
 	table := renderListPane(title, m.overview, m.overviewCells, emptyText, m.width-2, m.overviewTableInnerHeight())
 	return lipgloss.JoinVertical(lipgloss.Left, table, m.renderOverviewDetails())

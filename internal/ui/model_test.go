@@ -759,7 +759,7 @@ func theFooterShowsTheQueryWhileTypingThenTheOverviewKeys(t *testing.T) {
 
 	require.Contains(t, typing, " /dns")
 	require.Contains(t, typing, "enter open  tab keep  esc clear")
-	require.Contains(t, kept, "j/k select  / search  enter open")
+	require.Contains(t, kept, "j/k select  s sort by work  h hide no work  / search  enter open")
 }
 
 func enterWhileTypingOpensTheSelectedRow(t *testing.T) {
@@ -898,6 +898,284 @@ func workTreeRows() []overviewRow {
 		workTree("fix-dns"),
 		repositoryRow{FoundRepository: foundAt("ziti", "C:/dev/ziti"), status: gitrepo.Status{Branch: "main"}},
 	}
+}
+
+func TestOverviewWork(t *testing.T) {
+	t.Run("sortListsTheFocusedRowsThenTheRowsWithWorkThenTheRest", sortListsTheFocusedRowsThenTheRowsWithWorkThenTheRest)
+	t.Run("sortKeepsTheSelectedRow", sortKeepsTheSelectedRow)
+	t.Run("aRowGainingWorkAfterTheSortStaysInPlace", aRowGainingWorkAfterTheSortStaysInPlace)
+	t.Run("refreshKeepsTheSortedOrder", refreshKeepsTheSortedOrder)
+	t.Run("refreshListsNewRowsByPathAfterTheListedOnesAndDropsGoneOnes",
+		refreshListsNewRowsByPathAfterTheListedOnesAndDropsGoneOnes)
+	t.Run("reopeningTheOverviewListsTheFocusedRowsThenByPath", reopeningTheOverviewListsTheFocusedRowsThenByPath)
+	t.Run("hideLeavesTheFocusedPendingAndWorkRowsAndRetitlesThePane",
+		hideLeavesTheFocusedPendingAndWorkRowsAndRetitlesThePane)
+	t.Run("hideAgainShowsEveryRow", hideAgainShowsEveryRow)
+	t.Run("hideMovesTheSelectionToTheNearestRowLeft", hideMovesTheSelectionToTheNearestRowLeft)
+	t.Run("aRowReloadedIntoNoWorkLeavesWhileHiding", aRowReloadedIntoNoWorkLeavesWhileHiding)
+	t.Run("aRowLeavingBetweenTwoShownRowsSelectsTheOneBelow", aRowLeavingBetweenTwoShownRowsSelectsTheOneBelow)
+	t.Run("aRowGainingWorkAppearsWhileHiding", aRowGainingWorkAppearsWhileHiding)
+	t.Run("hidingSurvivesAFocusSwitchWithTheOverviewOpen", hidingSurvivesAFocusSwitchWithTheOverviewOpen)
+	t.Run("aQueryWhileHidingTitlesThePaneWithBoth", aQueryWhileHidingTitlesThePaneWithBoth)
+	t.Run("hidingEveryRowSaysNoRepositoriesWithWork", hidingEveryRowSaysNoRepositoriesWithWork)
+	t.Run("reopeningTheOverviewStartsWithHidingOff", reopeningTheOverviewStartsWithHidingOff)
+}
+
+func sortListsTheFocusedRowsThenTheRowsWithWorkThenTheRest(t *testing.T) {
+	model := overviewWithWork(t)
+
+	model = update(t, model, tea.KeyPressMsg{Code: 's', Text: "s"})
+	paths := overviewPaths(model)
+
+	want := []string{"first", "changed", "incoming", "outgoing", "alpha", "beta", "pending", "refused", "zeta"}
+	require.Equal(t, want, paths)
+}
+
+func sortKeepsTheSelectedRow(t *testing.T) {
+	model := overviewWithWork(t)
+	model = update(t, model, tea.KeyPressMsg{Code: 'j', Text: "j"})
+
+	model = update(t, model, tea.KeyPressMsg{Code: 's', Text: "s"})
+	selected, _ := model.overview.selectedRow()
+	selectedPath := selected.relativePath()
+
+	require.Equal(t, "alpha", selectedPath)
+	require.Equal(t, 4, model.overview.selected)
+}
+
+func aRowGainingWorkAfterTheSortStaysInPlace(t *testing.T) {
+	model := overviewWithWork(t)
+	model = update(t, model, tea.KeyPressMsg{Code: 's', Text: "s"})
+
+	model = update(t, model, overviewRowMsg{row: rowWithChangedFile("zeta", "C:/dev/zeta")})
+	paths := overviewPaths(model)
+
+	want := []string{"first", "changed", "incoming", "outgoing", "alpha", "beta", "pending", "refused", "zeta"}
+	require.Equal(t, want, paths)
+}
+
+func refreshKeepsTheSortedOrder(t *testing.T) {
+	model := overviewWithWork(t)
+	model = update(t, model, tea.KeyPressMsg{Code: 's', Text: "s"})
+	model = update(t, model, tea.KeyPressMsg{Code: 'r', Text: "r"})
+
+	model = update(t, model, overviewMsg{rows: pendingRowsWithWork()})
+	paths := overviewPaths(model)
+
+	want := []string{"first", "changed", "incoming", "outgoing", "alpha", "beta", "pending", "refused", "zeta"}
+	require.Equal(t, want, paths)
+}
+
+func refreshListsNewRowsByPathAfterTheListedOnesAndDropsGoneOnes(t *testing.T) {
+	model := overviewWithWork(t)
+	model = update(t, model, tea.KeyPressMsg{Code: 's', Text: "s"})
+	model = update(t, model, tea.KeyPressMsg{Code: 'r', Text: "r"})
+	newRows := []overviewRow{pendingRow{FoundRepository: foundAt("aardvark", "C:/dev/aardvark")},
+		pendingRow{FoundRepository: foundAt("abacus", "C:/dev/abacus")}}
+	withoutBeta := slices.Delete(pendingRowsWithWork(), 1, 2)
+	reloaded := append(newRows, withoutBeta...)
+
+	model = update(t, model, overviewMsg{rows: reloaded})
+	paths := overviewPaths(model)
+
+	want := []string{"first", "changed", "incoming", "outgoing", "alpha", "pending", "refused", "zeta", "aardvark", "abacus"}
+	require.Equal(t, want, paths)
+}
+
+func reopeningTheOverviewListsTheFocusedRowsThenByPath(t *testing.T) {
+	model := overviewWithWork(t)
+	model = update(t, model, tea.KeyPressMsg{Code: 's', Text: "s"})
+	model = update(t, model, tea.KeyPressMsg{Code: 'o', Text: "o"})
+
+	model = update(t, model, tea.KeyPressMsg{Code: 'o', Text: "o"})
+	model = update(t, model, overviewMsg{rows: pendingRowsWithWork()})
+	paths := overviewPaths(model)
+
+	want := []string{"first", "alpha", "beta", "changed", "incoming", "outgoing", "pending", "refused", "zeta"}
+	require.Equal(t, want, paths)
+}
+
+// pendingRowsWithWork is what a refresh of rowsWithWork lists before any row loads.
+func pendingRowsWithWork() []overviewRow {
+	rows := []overviewRow{}
+	for _, row := range rowsWithWork() {
+		loaded, isLoaded := row.(repositoryRow)
+		if isLoaded {
+			rows = append(rows, pendingRow{FoundRepository: loaded.FoundRepository})
+		} else {
+			rows = append(rows, row)
+		}
+	}
+	return rows
+}
+
+func hideLeavesTheFocusedPendingAndWorkRowsAndRetitlesThePane(t *testing.T) {
+	model := overviewWithWork(t)
+	shownFooter := plainFooter(model)
+
+	model = update(t, model, tea.KeyPressMsg{Code: 'h', Text: "h"})
+	paths := overviewPaths(model)
+	screen := plainScreen(model)
+	hidingFooter := plainFooter(model)
+
+	want := []string{"first", "changed", "incoming", "outgoing", "pending"}
+	require.Equal(t, want, paths)
+	require.Contains(t, screen, "repositories with work")
+	require.Contains(t, shownFooter, "j/k select  s sort by work  h hide no work  / search")
+	require.Contains(t, hidingFooter, "j/k select  s sort by work  h show all  / search")
+}
+
+func hideAgainShowsEveryRow(t *testing.T) {
+	model := overviewWithWork(t)
+	model = update(t, model, tea.KeyPressMsg{Code: 'h', Text: "h"})
+
+	model = update(t, model, tea.KeyPressMsg{Code: 'h', Text: "h"})
+	paths := overviewPaths(model)
+	screen := plainScreen(model)
+
+	want := []string{"first", "alpha", "beta", "changed", "incoming", "outgoing", "pending", "refused", "zeta"}
+	require.Equal(t, want, paths)
+	require.NotContains(t, screen, "repositories with work")
+}
+
+func hideMovesTheSelectionToTheNearestRowLeft(t *testing.T) {
+	model := overviewWithWork(t)
+	model = typeText(t, model, "jj")
+
+	model = update(t, model, tea.KeyPressMsg{Code: 'h', Text: "h"})
+	selected, _ := model.overview.selectedRow()
+	selectedPath := selected.relativePath()
+
+	require.Equal(t, "changed", selectedPath)
+}
+
+func aRowReloadedIntoNoWorkLeavesWhileHiding(t *testing.T) {
+	model := overviewWithWork(t)
+	model = update(t, model, tea.KeyPressMsg{Code: 'h', Text: "h"})
+	model = update(t, model, tea.KeyPressMsg{Code: 'j', Text: "j"})
+
+	model = update(t, model, overviewRowMsg{row: repositoryRow{FoundRepository: foundAt("changed", "C:/dev/changed")}})
+	paths := overviewPaths(model)
+	selected, _ := model.overview.selectedRow()
+	selectedPath := selected.relativePath()
+
+	want := []string{"first", "incoming", "outgoing", "pending"}
+	require.Equal(t, want, paths)
+	require.Equal(t, "incoming", selectedPath)
+}
+
+func aRowLeavingBetweenTwoShownRowsSelectsTheOneBelow(t *testing.T) {
+	model := overviewWithWork(t)
+	model = update(t, model, tea.KeyPressMsg{Code: 'h', Text: "h"})
+	model = typeText(t, model, "jj")
+
+	model = update(t, model, overviewRowMsg{row: repositoryRow{FoundRepository: foundAt("incoming", "C:/dev/incoming")}})
+	selected, _ := model.overview.selectedRow()
+	selectedPath := selected.relativePath()
+
+	require.Equal(t, "outgoing", selectedPath)
+}
+
+func hidingSurvivesAFocusSwitchWithTheOverviewOpen(t *testing.T) {
+	model := overviewWithWork(t)
+	model = update(t, model, tea.KeyPressMsg{Code: 'h', Text: "h"})
+	model = update(t, model, tea.BlurMsg{})
+	focused := []gitrepo.Repository{{Dir: "C:/dev/other"}, {Dir: "C:/dev/first"}}
+
+	model = update(t, model, focus.Focus{Repositories: focused, Refusals: []error{}})
+	paths := overviewPaths(model)
+	screen := plainScreen(model)
+
+	want := []string{"first", "changed", "incoming", "outgoing", "pending"}
+	require.Equal(t, modeOverview, model.mode)
+	require.True(t, model.hidingRowsWithNoWork)
+	require.Equal(t, want, paths)
+	require.Contains(t, screen, "repositories with work")
+}
+
+func aRowGainingWorkAppearsWhileHiding(t *testing.T) {
+	model := overviewWithWork(t)
+	model = update(t, model, tea.KeyPressMsg{Code: 'h', Text: "h"})
+
+	model = update(t, model, overviewRowMsg{row: rowWithChangedFile("alpha", "C:/dev/alpha")})
+	paths := overviewPaths(model)
+
+	want := []string{"first", "alpha", "changed", "incoming", "outgoing", "pending"}
+	require.Equal(t, want, paths)
+}
+
+func aQueryWhileHidingTitlesThePaneWithBoth(t *testing.T) {
+	model := overviewWithWork(t)
+	model = update(t, model, tea.KeyPressMsg{Code: 'h', Text: "h"})
+
+	model = typeText(t, model, "/out")
+	screen := plainScreen(model)
+
+	require.Contains(t, screen, "repositories with work /out")
+}
+
+func hidingEveryRowSaysNoRepositoriesWithWork(t *testing.T) {
+	model := overviewOfWorkTrees(t)
+
+	model = update(t, model, tea.KeyPressMsg{Code: 'h', Text: "h"})
+	screen := plainScreen(model)
+
+	require.Empty(t, model.overview.rows)
+	require.Contains(t, screen, "no repositories with work")
+}
+
+func reopeningTheOverviewStartsWithHidingOff(t *testing.T) {
+	model := overviewWithWork(t)
+	model = update(t, model, tea.KeyPressMsg{Code: 'h', Text: "h"})
+	model = update(t, model, tea.KeyPressMsg{Code: 'o', Text: "o"})
+
+	model = update(t, model, tea.KeyPressMsg{Code: 'o', Text: "o"})
+	model = update(t, model, overviewMsg{rows: rowsWithWork()})
+	paths := overviewPaths(model)
+
+	require.False(t, model.hidingRowsWithNoWork)
+	require.Len(t, paths, 9)
+}
+
+// overviewWithWork lists the focused first, clean alpha, beta and zeta, changed with an uncommitted file, outgoing and
+// incoming with a commit each way, a pending row and a refused one, with first selected.
+func overviewWithWork(t *testing.T) Model {
+	t.Helper()
+	model := focusOnSeveral(t, map[string]bool{"C:/dev/cwd": false, "C:/dev/first": true, "C:/dev/second": false})
+	model = update(t, model, tea.KeyPressMsg{Code: 'o', Text: "o"})
+	return update(t, model, overviewMsg{rows: rowsWithWork()})
+}
+
+func rowsWithWork() []overviewRow {
+	outgoing := repositoryRow{FoundRepository: foundAt("outgoing", "C:/dev/outgoing"),
+		outgoing: []gitrepo.Commit{{ShortHash: "aaa1111", Summary: "Add the local change"}}}
+	incoming := repositoryRow{FoundRepository: foundAt("incoming", "C:/dev/incoming"),
+		incoming: []gitrepo.Commit{{ShortHash: "bbb2222", Summary: "Add the remote change"}}}
+	return []overviewRow{
+		repositoryRow{FoundRepository: foundAt("alpha", "C:/dev/alpha")},
+		repositoryRow{FoundRepository: foundAt("beta", "C:/dev/beta")},
+		rowWithChangedFile("changed", "C:/dev/changed"),
+		repositoryRow{FoundRepository: foundAt("first", "C:/dev/first")},
+		incoming,
+		outgoing,
+		pendingRow{FoundRepository: foundAt("pending", "C:/dev/pending")},
+		refusedRow{FoundRefusal: focus.FoundRefusal{RelativePath: "refused", Err: fs.ErrPermission}},
+		repositoryRow{FoundRepository: foundAt("zeta", "C:/dev/zeta")},
+	}
+}
+
+func rowWithChangedFile(relativePath string, dir string) repositoryRow {
+	return repositoryRow{FoundRepository: foundAt(relativePath, dir), status: gitrepo.Status{
+		Files: []gitrepo.FileStatus{{Path: "edited.go", IndexStatus: ' ', WorktreeStatus: 'M'}},
+	}}
+}
+
+func overviewPaths(model Model) []string {
+	paths := []string{}
+	for _, row := range model.overview.rows {
+		paths = append(paths, row.relativePath())
+	}
+	return paths
 }
 
 func typeText(t *testing.T, model Model, text string) Model {

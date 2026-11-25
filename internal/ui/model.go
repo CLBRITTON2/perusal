@@ -150,10 +150,11 @@ type Model struct {
 	takeFailure       string
 	ownerStateFailure string
 
-	// overview lists the overviewRows that overviewQuery matches.
-	overview      selectableList[overviewRow]
-	overviewRows  []overviewRow
-	overviewQuery textinput.Model
+	// overview lists the overviewRows that overviewQuery matches and hidingRowsWithNoWork leaves.
+	overview             selectableList[overviewRow]
+	overviewRows         []overviewRow
+	overviewQuery        textinput.Model
+	hidingRowsWithNoWork bool
 	// syncing maps the Dir of each repository an overview pull, fetch or rebase is running in to what its row shows.
 	syncing      map[string]string
 	branches     branchList
@@ -708,6 +709,7 @@ func (m Model) withRepository(repository gitrepo.Repository, rejection string) M
 	next.overview = m.overview
 	next.overviewRows = m.overviewRows
 	next.overviewQuery = m.overviewQuery
+	next.hidingRowsWithNoWork = m.hidingRowsWithNoWork
 	next.syncing = m.syncing
 	next.takeFailure = m.takeFailure
 	next.ownerStateFailure = m.ownerStateFailure
@@ -1733,6 +1735,8 @@ func (m Model) renderFooter() string {
 		return fitToWidth(errorStyle.Render("✗ "+standingFailure), m.width)
 	case m.typingOverviewQuery():
 		return spaceBetween(" "+m.overviewQuery.View(), m.help.ShortHelpView(filterHelp)+" ", m.width)
+	case m.mode == modeOverview && m.hidingRowsWithNoWork:
+		return m.renderHelpLine(overviewHidingHelp)
 	case m.mode == modeOverview:
 		return m.renderHelpLine(overviewHelp)
 	case m.mode == modeBranches:

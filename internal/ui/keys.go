@@ -39,6 +39,9 @@ var (
 	cherryPickKey     = key.NewBinding(key.WithKeys("C"), key.WithHelp("C", "cherry-pick to main"))
 	confirmPickKey    = key.NewBinding(key.WithKeys("enter"), key.WithHelp("enter", "cherry-pick"))
 	refreshKey        = key.NewBinding(key.WithKeys("r"), key.WithHelp("r", "refresh"))
+	sortByWorkKey     = key.NewBinding(key.WithKeys("s"), key.WithHelp("s", "sort by work"))
+	hideNoWorkKey     = key.NewBinding(key.WithKeys("h"), key.WithHelp("h", "hide no work"))
+	showAllKey        = key.NewBinding(key.WithKeys("h"), key.WithHelp("h", "show all"))
 	closeOverviewKey  = key.NewBinding(key.WithKeys("esc", "o"), key.WithHelp("esc", "close"))
 	branchesKey       = key.NewBinding(key.WithKeys("b"), key.WithHelp("b", "branches"))
 	switchBranchKey   = key.NewBinding(key.WithKeys("enter"), key.WithHelp("enter", "switch"))
@@ -89,13 +92,17 @@ var (
 	diffKeys    = []key.Binding{scrollDownKey, nextChangeKey, fullscreenKey, wholeFileKey, unifiedKey}
 	reviewKeys  = []key.Binding{commitKey, pushKey, switchViewKey, stashesKey, branchesKey, workTreesKey, overviewKey,
 		quitKey}
+	overviewKeys = []key.Binding{searchKey, openRepositoryKey, fetchKey, pullKey, rebaseKey, pushKey, cherryPickKey,
+		deleteWorkTreeKey, refreshKey, closeOverviewKey, quitKey}
 	// Not every key fits one line, so the footer leaves the rest to the key list.
 	reviewHelp   = []key.Binding{commitKey, pushKey, switchViewKey, keyListKey, quitKey}
 	changesHelp  = slices.Concat(changesKeys, reviewHelp)
 	logHelp      = slices.Concat(logKeys, reviewHelp)
 	stashHelp    = slices.Concat(stashKeys, reviewHelp)
-	overviewHelp = []key.Binding{downKey, searchKey, openRepositoryKey, fetchKey, pullKey, rebaseKey, pushKey, cherryPickKey,
-		deleteWorkTreeKey, refreshKey, closeOverviewKey, quitKey}
+	overviewHelp = slices.Concat([]key.Binding{downKey, sortByWorkKey, hideNoWorkKey}, overviewKeys)
+
+	overviewHidingHelp = slices.Concat([]key.Binding{downKey, sortByWorkKey, showAllKey}, overviewKeys)
+
 	branchesHelp = []key.Binding{downKey, switchBranchKey, newBranchKey, deleteBranchKey, fetchBranchesKey,
 		closeBranchesKey, quitKey}
 	workTreesHelp = []key.Binding{downKey, openRepositoryKey, deleteWorkTreeKey, closeWorkTreesKey, quitKey}
