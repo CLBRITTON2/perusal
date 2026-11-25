@@ -2,12 +2,11 @@ package ui
 
 import (
 	"errors"
-	"slices"
-	"strings"
 	"testing"
 
 	tea "charm.land/bubbletea/v2"
 	"github.com/charmbracelet/x/ansi"
+	"github.com/stretchr/testify/require"
 
 	"github.com/CLBRITTON2/perusal/internal/gitrepo"
 )
@@ -16,166 +15,203 @@ func TestDeleteBranch(t *testing.T) {
 	t.Run("aMergedBranchIsDeletedAfterAConfirmAndTheListReloadsInPlace",
 		aMergedBranchIsDeletedAfterAConfirmAndTheListReloadsInPlace)
 	t.Run("anUnmergedBranchIsDeletedAfterAWarning", anUnmergedBranchIsDeletedAfterAWarning)
-	for name, test := range map[string]struct {
-		moves         int
-		defaultBranch gitrepo.RemoteBranch
-		want          string
-	}{
-		"refusesTheCurrentBranch": {
-			moves: 0, defaultBranch: originMain(), want: "fix is checked out, so it cannot be deleted",
-		},
-		"refusesTheDefaultBranch": {
-			moves: 1, defaultBranch: originMain(), want: "main is the default branch, which perusal never deletes",
-		},
-		"refusesABranchWhenTheDefaultBranchIsUnknown": {
-			moves: 2, want: "origin's default branch is unknown, so perusal cannot rule out that done is it",
-		},
-		"refusesABranchCheckedOutInAnotherWorkTree": {
-			moves: 4, defaultBranch: originMain(),
-			want: "side is checked out in C:/dev/repo/.claude/worktrees/side, so it cannot be deleted",
-		},
-		"refusesARemoteBranch": {
-			moves: 5, defaultBranch: originMain(), want: "origin/fix-x is a remote branch, which perusal never deletes",
-		},
-	} {
-		t.Run(name, func(t *testing.T) {
-			m := selectRow(t, branchesOf(t, gitrepo.Status{}, test.defaultBranch), test.moves)
-
-			m = update(t, m, tea.KeyPressMsg{Code: 'D', Text: "D"})
-
-			if m.popup.kind != noPopup || !m.footer.isError || m.footer.text != test.want {
-				t.Fatalf("got popup %d, footer %q, want the refusal %q", m.popup.kind, m.footer.text, test.want)
-			}
-		})
-	}
+	t.Run("refusesTheCurrentBranch", refusesTheCurrentBranch)
+	t.Run("refusesTheDefaultBranch", refusesTheDefaultBranch)
+	t.Run("refusesABranchWhenTheDefaultBranchIsUnknown", refusesABranchWhenTheDefaultBranchIsUnknown)
+	t.Run("refusesABranchCheckedOutInAnotherWorkTree", refusesABranchCheckedOutInAnotherWorkTree)
+	t.Run("refusesARemoteBranch", refusesARemoteBranch)
 }
 
 func aMergedBranchIsDeletedAfterAConfirmAndTheListReloadsInPlace(t *testing.T) {
-	m := selectRow(t, branchesOf(t, gitrepo.Status{}, originMain()), 2)
-	screen := ansi.Strip(m.renderScreen())
-	m = update(t, m, tea.KeyPressMsg{Code: 'D', Text: "D"})
-	popup := ansi.Strip(m.renderConfirmPopup())
-	next, deleting := m.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
-	m = asModel(t, next)
-	next, reloading := m.Update(popupSuccessMsg{dir: "C:/dev/repo", notice: "deleted done"})
-	m = asModel(t, next)
+	branches := branchesOf(t, gitrepo.Status{}, originMain())
+	model := selectRow(t, branches, 2)
+	screen := plainScreen(model)
+	model = update(t, model, tea.KeyPressMsg{Code: 'D', Text: "D"})
+	popup := plainConfirmPopup(model)
+	next, deleting := model.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
+	model = asModel(t, next)
+	next, reloading := model.Update(popupSuccessMsg{dir: "C:/dev/repo", notice: "deleted done"})
+	model = asModel(t, next)
 	rows := sixBranches()
-	m = update(t, m, branchesMsg{
+	model = update(t, model, branchesMsg{
 		dir: "C:/dev/repo", rows: []branchRow{rows[0], rows[1], rows[3]}, defaultBranch: originMain()})
+	selected := model.branches.rows[model.branches.selected]
 
-	if !strings.Contains(screen, "origin/done deleted") || !strings.Contains(screen, "merged into origin/main") ||
-		!strings.Contains(screen, "in work tree side") {
-		t.Fatalf("got screen:\n%s\nwant done marked merged with its upstream deleted and side's work tree", screen)
-	}
-	if !strings.Contains(popup, "delete done") || !strings.Contains(popup, "origin/main has all its changes") {
-		t.Fatalf("got popup:\n%s", popup)
-	}
-	if deleting == nil || reloading == nil || m.popup.kind != noPopup || m.footer.text != "deleted done" ||
-		m.branches.rows[m.branches.selected].branch.Name != "wip" {
-		t.Fatalf("got delete %v, reload %v, popup %d, footer %q, selected %d, want wip selected after the delete",
-			deleting, reloading, m.popup.kind, m.footer.text, m.branches.selected)
-	}
+	require.Contains(t, screen, "origin/done deleted")
+	require.Contains(t, screen, "merged into origin/main")
+	require.Contains(t, screen, "in work tree side")
+	require.Contains(t, popup, "delete done")
+	require.Contains(t, popup, "origin/main has all its changes")
+	require.NotNil(t, deleting)
+	require.NotNil(t, reloading)
+	require.Equal(t, noPopup, model.popup.kind)
+	require.Equal(t, "deleted done", model.footer.text)
+	require.Equal(t, "wip", selected.branch.Name)
 }
 
 func anUnmergedBranchIsDeletedAfterAWarning(t *testing.T) {
-	m := selectRow(t, branchesOf(t, gitrepo.Status{}, originMain()), 3)
-	m = update(t, m, tea.KeyPressMsg{Code: 'D', Text: "D"})
-	popup := ansi.Strip(m.renderConfirmPopup())
+	branches := branchesOf(t, gitrepo.Status{}, originMain())
+	model := selectRow(t, branches, 3)
+	model = update(t, model, tea.KeyPressMsg{Code: 'D', Text: "D"})
+	popup := plainConfirmPopup(model)
 
-	_, deleting := m.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
+	_, deleting := model.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
 
-	if !strings.Contains(popup, "delete wip") || !strings.Contains(popup, "origin/main lacks some of its changes") ||
-		deleting == nil {
-		t.Fatalf("got popup:\n%s\ndelete %v, want a warning and then the delete", popup, deleting)
-	}
+	require.Contains(t, popup, "delete wip")
+	require.Contains(t, popup, "origin/main lacks some of its changes")
+	require.NotNil(t, deleting)
 }
 
-func TestTheCurrentBranchShowsMergedOnlyWithNoUncommittedChanges(t *testing.T) {
-	for name, test := range map[string]struct {
-		files      []gitrepo.FileStatus
-		wantMerged bool
-	}{
-		"clean":                  {files: []gitrepo.FileStatus{}, wantMerged: true},
-		"withUncommittedChanges": {files: twoFiles(), wantMerged: false},
-	} {
-		t.Run(name, func(t *testing.T) {
-			m := reviewingRepository(t, gitrepo.Status{Branch: "fix", Files: test.files})
-			m = update(t, m, tea.KeyPressMsg{Code: 'b', Text: "b"})
-			m = update(t, m, branchesMsg{
-				dir:           "C:/dev/repo",
-				rows:          []branchRow{{branch: gitrepo.Branch{Name: "fix", Current: true}, mergedIntoDefault: true}},
-				defaultBranch: originMain(),
-			})
+func refusesTheCurrentBranch(t *testing.T) {
+	model := pressDeleteOnRow(t, originMain(), 0)
 
-			screen := ansi.Strip(m.renderScreen())
+	require.Equal(t, noPopup, model.popup.kind)
+	require.True(t, model.footer.isError)
+	require.Equal(t, "fix is checked out, so it cannot be deleted", model.footer.text)
+}
 
-			if strings.Contains(screen, "merged into origin/main") != test.wantMerged {
-				t.Fatalf("got screen:\n%s\nwant merged shown: %v", screen, test.wantMerged)
-			}
-		})
-	}
+func refusesTheDefaultBranch(t *testing.T) {
+	model := pressDeleteOnRow(t, originMain(), 1)
+
+	require.Equal(t, noPopup, model.popup.kind)
+	require.True(t, model.footer.isError)
+	require.Equal(t, "main is the default branch, which perusal never deletes", model.footer.text)
+}
+
+func refusesABranchWhenTheDefaultBranchIsUnknown(t *testing.T) {
+	model := pressDeleteOnRow(t, gitrepo.RemoteBranch{}, 2)
+
+	require.Equal(t, noPopup, model.popup.kind)
+	require.True(t, model.footer.isError)
+	require.Equal(t, "origin's default branch is unknown, so perusal cannot rule out that done is it", model.footer.text)
+}
+
+func refusesABranchCheckedOutInAnotherWorkTree(t *testing.T) {
+	model := pressDeleteOnRow(t, originMain(), 4)
+
+	require.Equal(t, noPopup, model.popup.kind)
+	require.True(t, model.footer.isError)
+	require.Equal(t, "side is checked out in C:/dev/repo/.claude/worktrees/side, so it cannot be deleted", model.footer.text)
+}
+
+func refusesARemoteBranch(t *testing.T) {
+	model := pressDeleteOnRow(t, originMain(), 5)
+
+	require.Equal(t, noPopup, model.popup.kind)
+	require.True(t, model.footer.isError)
+	require.Equal(t, "origin/fix-x is a remote branch, which perusal never deletes", model.footer.text)
+}
+
+func pressDeleteOnRow(t *testing.T, defaultBranch gitrepo.RemoteBranch, moves int) Model {
+	t.Helper()
+	branches := branchesOf(t, gitrepo.Status{}, defaultBranch)
+	model := selectRow(t, branches, moves)
+	return update(t, model, tea.KeyPressMsg{Code: 'D', Text: "D"})
+}
+
+func TestTheCurrentBranchMergedMark(t *testing.T) {
+	t.Run("theCurrentBranchShowsMergedWhenClean", theCurrentBranchShowsMergedWhenClean)
+	t.Run("theCurrentBranchHidesMergedWithUncommittedChanges", theCurrentBranchHidesMergedWithUncommittedChanges)
+}
+
+func theCurrentBranchShowsMergedWhenClean(t *testing.T) {
+	model := currentBranchMergedIntoDefault(t, []gitrepo.FileStatus{})
+
+	screen := plainScreen(model)
+
+	require.Contains(t, screen, "merged into origin/main")
+}
+
+func theCurrentBranchHidesMergedWithUncommittedChanges(t *testing.T) {
+	model := currentBranchMergedIntoDefault(t, twoFiles())
+
+	screen := plainScreen(model)
+
+	require.NotContains(t, screen, "merged into origin/main")
+}
+
+func currentBranchMergedIntoDefault(t *testing.T, files []gitrepo.FileStatus) Model {
+	t.Helper()
+	model := reviewingRepository(t, gitrepo.Status{Branch: "fix", Files: files})
+	model = update(t, model, tea.KeyPressMsg{Code: 'b', Text: "b"})
+	return update(t, model, branchesMsg{
+		dir:           "C:/dev/repo",
+		rows:          []branchRow{{branch: gitrepo.Branch{Name: "fix", Current: true}, mergedIntoDefault: true}},
+		defaultBranch: originMain(),
+	})
 }
 
 func TestSwitchBranch(t *testing.T) {
-	t.Run("isRefusedWithUncommittedChanges", isRefusedWithUncommittedChanges)
+	t.Run("toALocalBranchIsRefusedWithUncommittedChanges", toALocalBranchIsRefusedWithUncommittedChanges)
+	t.Run("toARemoteBranchIsRefusedWithUncommittedChanges", toARemoteBranchIsRefusedWithUncommittedChanges)
 	t.Run("closesTheListAndReloadsTheStatus", closesTheListAndReloadsTheStatus)
 	t.Run("toARemoteBranchCreatesItsLocalBranch", toARemoteBranchCreatesItsLocalBranch)
 }
 
-func isRefusedWithUncommittedChanges(t *testing.T) {
-	for name, moves := range map[string]int{"local": 3, "remote": 5} {
-		t.Run(name, func(t *testing.T) {
-			m := selectRow(t, branchesOf(t, gitrepo.Status{Branch: "fix", Files: twoFiles()}, originMain()), moves)
+func toALocalBranchIsRefusedWithUncommittedChanges(t *testing.T) {
+	branches := branchesOf(t, gitrepo.Status{Branch: "fix", Files: twoFiles()}, originMain())
+	model := selectRow(t, branches, 3)
 
-			next, cmd := m.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
-			m = asModel(t, next)
+	next, cmd := model.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
+	model = asModel(t, next)
 
-			if cmd != nil || !m.footer.isError || m.mode != modeBranches {
-				t.Fatalf("got command %v, footer %q, want a refusal with the list still open", cmd, m.footer.text)
-			}
-		})
-	}
+	require.Nil(t, cmd)
+	require.True(t, model.footer.isError)
+	require.Equal(t, modeBranches, model.mode)
+}
+
+func toARemoteBranchIsRefusedWithUncommittedChanges(t *testing.T) {
+	branches := branchesOf(t, gitrepo.Status{Branch: "fix", Files: twoFiles()}, originMain())
+	model := selectRow(t, branches, 5)
+
+	next, cmd := model.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
+	model = asModel(t, next)
+
+	require.Nil(t, cmd)
+	require.True(t, model.footer.isError)
+	require.Equal(t, modeBranches, model.mode)
 }
 
 func toARemoteBranchCreatesItsLocalBranch(t *testing.T) {
-	m := selectRow(t, branchesOf(t, gitrepo.Status{Branch: "fix"}, originMain()), 5)
-	screen := ansi.Strip(m.renderScreen())
+	branches := branchesOf(t, gitrepo.Status{Branch: "fix"}, originMain())
+	model := selectRow(t, branches, 5)
+	screen := plainScreen(model)
 
-	_, switching := m.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
+	_, switching := model.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
 
-	if !strings.Contains(screen, "origin/fix-x") || switching == nil {
-		t.Fatalf("got screen:\n%s\nswitch %v, want origin/fix-x listed and switched to", screen, switching)
-	}
+	require.Contains(t, screen, "origin/fix-x")
+	require.NotNil(t, switching)
 }
 
 func TestFetchInTheBranchListReloadsIt(t *testing.T) {
-	m := branchesOf(t, gitrepo.Status{Branch: "fix"}, originMain())
+	model := branchesOf(t, gitrepo.Status{Branch: "fix"}, originMain())
 
-	next, fetching := m.Update(tea.KeyPressMsg{Code: 'f', Text: "f"})
-	m = asModel(t, next)
-	fetchingText := m.footer.text
-	next, reloading := m.Update(branchesFetchedMsg{dir: "C:/dev/repo"})
-	m = asModel(t, next)
+	next, fetching := model.Update(tea.KeyPressMsg{Code: 'f', Text: "f"})
+	model = asModel(t, next)
+	fetchingText := model.footer.text
+	next, reloading := model.Update(branchesFetchedMsg{dir: "C:/dev/repo"})
+	model = asModel(t, next)
 
-	if fetching == nil || fetchingText != "fetching..." || reloading == nil || m.mode != modeBranches ||
-		m.footer.text != "fetched" {
-		t.Fatalf("got fetch %v (%q), reload %v, mode %d, footer %q, want a fetch then a reload of the open list",
-			fetching, fetchingText, reloading, m.mode, m.footer.text)
-	}
+	require.NotNil(t, fetching)
+	require.Equal(t, "fetching...", fetchingText)
+	require.NotNil(t, reloading)
+	require.Equal(t, modeBranches, model.mode)
+	require.Equal(t, "fetched", model.footer.text)
 }
 
 func closesTheListAndReloadsTheStatus(t *testing.T) {
-	m := selectRow(t, branchesOf(t, gitrepo.Status{Branch: "fix"}, originMain()), 3)
+	branches := branchesOf(t, gitrepo.Status{Branch: "fix"}, originMain())
+	model := selectRow(t, branches, 3)
 
-	next, switching := m.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
-	m = asModel(t, next)
-	next, reloading := m.Update(branchSwitchMsg{dir: "C:/dev/repo", branch: "wip"})
-	m = asModel(t, next)
+	next, switching := model.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
+	model = asModel(t, next)
+	next, reloading := model.Update(branchSwitchMsg{dir: "C:/dev/repo", branch: "wip"})
+	model = asModel(t, next)
 
-	if switching == nil || reloading == nil || m.mode == modeBranches || m.footer.text != "switched to wip" {
-		t.Fatalf("got switch %v, reload %v, mode %d, footer %q, want the list closed after the switch", switching,
-			reloading, m.mode, m.footer.text)
-	}
+	require.NotNil(t, switching)
+	require.NotNil(t, reloading)
+	require.NotEqual(t, modeBranches, model.mode)
+	require.Equal(t, "switched to wip", model.footer.text)
 }
 
 func TestNewBranch(t *testing.T) {
@@ -187,64 +223,60 @@ func TestNewBranch(t *testing.T) {
 }
 
 func isCreatedFromTheDefaultBranchWithTheUncommittedFilesAndClosesTheList(t *testing.T) {
-	m := branchesOf(t, gitrepo.Status{Branch: "fix", Files: twoFiles()}, originMain())
-	m = update(t, m, tea.KeyPressMsg{Code: 'n', Text: "n"})
-	for _, letter := range "feat" {
-		m = update(t, m, tea.KeyPressMsg{Code: letter, Text: string(letter)})
-	}
-	popup := ansi.Strip(m.renderNewBranchPopup())
+	model := branchesOf(t, gitrepo.Status{Branch: "fix", Files: twoFiles()}, originMain())
+	model = update(t, model, tea.KeyPressMsg{Code: 'n', Text: "n"})
+	model = typeText(t, model, "feat")
+	renderedPopup := model.renderNewBranchPopup()
+	popup := ansi.Strip(renderedPopup)
 
-	next, creating := m.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
-	m = asModel(t, next)
-	running := m.popup.running
-	next, reloading := m.Update(branchSwitchMsg{dir: "C:/dev/repo", branch: "feat"})
-	m = asModel(t, next)
+	next, creating := model.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
+	model = asModel(t, next)
+	running := model.popup.running
+	next, reloading := model.Update(branchSwitchMsg{dir: "C:/dev/repo", branch: "feat"})
+	model = asModel(t, next)
 
-	if !strings.Contains(popup, "new branch from origin/main") || !strings.Contains(popup, "feat") ||
-		!strings.Contains(popup, "takes along 2 uncommitted files") {
-		t.Fatalf("got popup:\n%s", popup)
-	}
-	if creating == nil || !running || reloading == nil || m.popup.kind != noPopup || m.mode == modeBranches ||
-		m.footer.text != "switched to feat" {
-		t.Fatalf("got create %v (running %v), reload %v, popup %d, mode %d, footer %q, want the list closed on feat",
-			creating, running, reloading, m.popup.kind, m.mode, m.footer.text)
-	}
+	require.Contains(t, popup, "new branch from origin/main")
+	require.Contains(t, popup, "feat")
+	require.Contains(t, popup, "takes along 2 uncommitted files")
+	require.NotNil(t, creating)
+	require.True(t, running)
+	require.NotNil(t, reloading)
+	require.Equal(t, noPopup, model.popup.kind)
+	require.NotEqual(t, modeBranches, model.mode)
+	require.Equal(t, "switched to feat", model.footer.text)
 }
 
 func isRefusedWhenTheDefaultBranchIsUnknown(t *testing.T) {
-	m := branchesOf(t, gitrepo.Status{Branch: "fix"}, gitrepo.RemoteBranch{})
+	model := branchesOf(t, gitrepo.Status{Branch: "fix"}, gitrepo.RemoteBranch{})
 
-	m = update(t, m, tea.KeyPressMsg{Code: 'n', Text: "n"})
+	model = update(t, model, tea.KeyPressMsg{Code: 'n', Text: "n"})
 
-	if m.popup.kind != noPopup || !m.footer.isError {
-		t.Fatalf("got popup %d, footer %q, want a refusal", m.popup.kind, m.footer.text)
-	}
+	require.Equal(t, noPopup, model.popup.kind)
+	require.True(t, model.footer.isError)
 }
 
 func needsAName(t *testing.T) {
-	m := branchesOf(t, gitrepo.Status{Branch: "fix"}, originMain())
-	m = update(t, m, tea.KeyPressMsg{Code: 'n', Text: "n"})
+	model := branchesOf(t, gitrepo.Status{Branch: "fix"}, originMain())
+	model = update(t, model, tea.KeyPressMsg{Code: 'n', Text: "n"})
 
-	next, creating := m.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
-	m = asModel(t, next)
+	next, creating := model.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
+	model = asModel(t, next)
 
-	if creating != nil || m.popup.kind != newBranchPopup || m.popup.err != "the name is required" {
-		t.Fatalf("got create %v, popup %d, error %q, want the popup kept open asking for a name", creating,
-			m.popup.kind, m.popup.err)
-	}
+	require.Nil(t, creating)
+	require.Equal(t, newBranchPopup, model.popup.kind)
+	require.Equal(t, "the name is required", model.popup.err)
 }
 
 func showsGitsRefusalInThePopup(t *testing.T) {
-	m := branchesOf(t, gitrepo.Status{Branch: "fix"}, originMain())
-	m = update(t, m, tea.KeyPressMsg{Code: 'n', Text: "n"})
-	m = update(t, m, tea.KeyPressMsg{Code: tea.KeyEnter})
+	model := branchesOf(t, gitrepo.Status{Branch: "fix"}, originMain())
+	model = update(t, model, tea.KeyPressMsg{Code: 'n', Text: "n"})
+	model = update(t, model, tea.KeyPressMsg{Code: tea.KeyEnter})
 
-	m = update(t, m, popupFailureMsg{dir: "C:/dev/repo", err: errors.New("a branch named 'main' already exists")})
+	model = update(t, model, popupFailureMsg{dir: "C:/dev/repo", err: errors.New("a branch named 'main' already exists")})
 
-	if m.popup.kind != newBranchPopup || m.popup.running || !strings.Contains(m.popup.err, "already exists") {
-		t.Fatalf("got popup %d, running %v, error %q, want git's refusal in the open popup", m.popup.kind,
-			m.popup.running, m.popup.err)
-	}
+	require.Equal(t, newBranchPopup, model.popup.kind)
+	require.False(t, model.popup.running)
+	require.Contains(t, model.popup.err, "already exists")
 }
 
 func TestRemoteOnlyBranchesDropsEachOneALocalBranchShadows(t *testing.T) {
@@ -259,9 +291,7 @@ func TestRemoteOnlyBranchesDropsEachOneALocalBranchShadows(t *testing.T) {
 	got := remoteOnlyBranches(local, remote)
 
 	want := []gitrepo.RemoteBranch{remote[1], remote[3]}
-	if !slices.Equal(got, want) {
-		t.Fatalf("got %+v, want %+v", got, want)
-	}
+	require.Equal(t, want, got)
 }
 
 func originMain() gitrepo.RemoteBranch {
@@ -270,17 +300,17 @@ func originMain() gitrepo.RemoteBranch {
 
 func branchesOf(t *testing.T, status gitrepo.Status, defaultBranch gitrepo.RemoteBranch) Model {
 	t.Helper()
-	m := reviewingRepository(t, status)
-	m = update(t, m, tea.KeyPressMsg{Code: 'b', Text: "b"})
-	return update(t, m, branchesMsg{dir: "C:/dev/repo", rows: sixBranches(), defaultBranch: defaultBranch})
+	model := reviewingRepository(t, status)
+	model = update(t, model, tea.KeyPressMsg{Code: 'b', Text: "b"})
+	return update(t, model, branchesMsg{dir: "C:/dev/repo", rows: sixBranches(), defaultBranch: defaultBranch})
 }
 
-func selectRow(t *testing.T, m Model, moves int) Model {
+func selectRow(t *testing.T, model Model, moves int) Model {
 	t.Helper()
 	for range moves {
-		m = update(t, m, tea.KeyPressMsg{Code: 'j', Text: "j"})
+		model = update(t, model, tea.KeyPressMsg{Code: 'j', Text: "j"})
 	}
-	return m
+	return model
 }
 
 func sixBranches() []branchRow {

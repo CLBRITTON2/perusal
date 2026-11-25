@@ -4,16 +4,15 @@ package focus
 
 import (
 	"context"
-	"errors"
 	"io/fs"
 	"os"
 	"os/exec"
 	"path/filepath"
-	"slices"
 	"strings"
 	"testing"
 
 	"github.com/CLBRITTON2/perusal/internal/gitrepo"
+	"github.com/stretchr/testify/require"
 	"golang.org/x/sys/windows"
 )
 
@@ -28,76 +27,130 @@ func TestMain(m *testing.M) {
 	os.Exit(m.Run())
 }
 
-func TestMapPath(t *testing.T) {
-	cases := []struct {
-		name      string
-		agentPath string
-		want      string
-		wantErr   error
-	}{
-		{"mapsARepository", `C:\Users\claude\dev\perusal`, `C:\Users\Chris\dev\perusal`, nil},
-		{"mapsANestedDirectory", `C:\Users\claude\dev\openziti\ziti\cmd`, `C:\Users\Chris\dev\openziti\ziti\cmd`, nil},
-		{"mapsTheDevDirectoryItself", `C:\Users\claude\dev\`, `C:\Users\Chris\dev`, nil},
-		{"ignoresCase", `c:\users\CLAUDE\Dev\perusal`, `C:\Users\Chris\dev\perusal`, nil},
-		{"refusesASiblingWithTheSamePrefix", `C:\Users\claude\devtools\x`, "", ErrOutsideAgentDir},
-		{"refusesDotDotOutOfTheAgentDirectory", `C:\Users\claude\dev\..\..\Chris\.ssh`, "", ErrOutsideAgentDir},
-		{"refusesARelativePath", `dev\perusal`, "", ErrOutsideAgentDir},
-		{"refusesADriveRelativePath", `C:dev\perusal`, "", ErrOutsideAgentDir},
-		{"refusesAVerbatimPrefix", `\\?\C:\Users\claude\dev\perusal`, "", ErrOutsideAgentDir},
-	}
-	for _, testCase := range cases {
-		t.Run(testCase.name, func(t *testing.T) {
-			got, err := mapPath(testCase.agentPath, `C:\Users\claude\dev`, `C:\Users\Chris\dev`)
+const (
+	mappedAgentDir = `C:\Users\claude\dev`
+	mappedOwnerDir = `C:\Users\Chris\dev`
+)
 
-			if !errors.Is(err, testCase.wantErr) || got != testCase.want {
-				t.Fatalf("got %q, %v, want %q, %v", got, err, testCase.want, testCase.wantErr)
-			}
-		})
-	}
+func TestMapPath(t *testing.T) {
+	t.Run("mapPathMapsARepository", mapPathMapsARepository)
+	t.Run("mapPathMapsANestedDirectory", mapPathMapsANestedDirectory)
+	t.Run("mapPathMapsTheDevDirectoryItself", mapPathMapsTheDevDirectoryItself)
+	t.Run("mapPathIgnoresCase", mapPathIgnoresCase)
+	t.Run("mapPathRefusesASiblingWithTheSamePrefix", mapPathRefusesASiblingWithTheSamePrefix)
+	t.Run("mapPathRefusesDotDotOutOfTheAgentDirectory", mapPathRefusesDotDotOutOfTheAgentDirectory)
+	t.Run("mapPathRefusesARelativePath", mapPathRefusesARelativePath)
+	t.Run("mapPathRefusesADriveRelativePath", mapPathRefusesADriveRelativePath)
+	t.Run("mapPathRefusesAVerbatimPrefix", mapPathRefusesAVerbatimPrefix)
+}
+
+func mapPathMapsARepository(t *testing.T) {
+	got, err := mapPath(`C:\Users\claude\dev\perusal`, mappedAgentDir, mappedOwnerDir)
+	require.NoError(t, err)
+	require.Equal(t, `C:\Users\Chris\dev\perusal`, got)
+}
+
+func mapPathMapsANestedDirectory(t *testing.T) {
+	got, err := mapPath(`C:\Users\claude\dev\openziti\ziti\cmd`, mappedAgentDir, mappedOwnerDir)
+	require.NoError(t, err)
+	require.Equal(t, `C:\Users\Chris\dev\openziti\ziti\cmd`, got)
+}
+
+func mapPathMapsTheDevDirectoryItself(t *testing.T) {
+	got, err := mapPath(`C:\Users\claude\dev\`, mappedAgentDir, mappedOwnerDir)
+	require.NoError(t, err)
+	require.Equal(t, `C:\Users\Chris\dev`, got)
+}
+
+func mapPathIgnoresCase(t *testing.T) {
+	got, err := mapPath(`c:\users\CLAUDE\Dev\perusal`, mappedAgentDir, mappedOwnerDir)
+	require.NoError(t, err)
+	require.Equal(t, `C:\Users\Chris\dev\perusal`, got)
+}
+
+func mapPathRefusesASiblingWithTheSamePrefix(t *testing.T) {
+	got, err := mapPath(`C:\Users\claude\devtools\x`, mappedAgentDir, mappedOwnerDir)
+	require.ErrorIs(t, err, ErrOutsideAgentDir)
+	require.Empty(t, got)
+}
+
+func mapPathRefusesDotDotOutOfTheAgentDirectory(t *testing.T) {
+	got, err := mapPath(`C:\Users\claude\dev\..\..\Chris\.ssh`, mappedAgentDir, mappedOwnerDir)
+	require.ErrorIs(t, err, ErrOutsideAgentDir)
+	require.Empty(t, got)
+}
+
+func mapPathRefusesARelativePath(t *testing.T) {
+	got, err := mapPath(`dev\perusal`, mappedAgentDir, mappedOwnerDir)
+	require.ErrorIs(t, err, ErrOutsideAgentDir)
+	require.Empty(t, got)
+}
+
+func mapPathRefusesADriveRelativePath(t *testing.T) {
+	got, err := mapPath(`C:dev\perusal`, mappedAgentDir, mappedOwnerDir)
+	require.ErrorIs(t, err, ErrOutsideAgentDir)
+	require.Empty(t, got)
+}
+
+func mapPathRefusesAVerbatimPrefix(t *testing.T) {
+	got, err := mapPath(`\\?\C:\Users\claude\dev\perusal`, mappedAgentDir, mappedOwnerDir)
+	require.ErrorIs(t, err, ErrOutsideAgentDir)
+	require.Empty(t, got)
 }
 
 func TestAgentCopyDirs(t *testing.T) {
-	rules := Rules{Config: Config{AgentDir: `C:\Users\claude\dev`, OwnerDir: `C:\Users\Chris\dev`}}
-	cases := []struct {
-		name          string
-		repositoryDir string
-		want          []string
-	}{
-		{"mapsARepository", `C:\Users\Chris\dev\perusal`, []string{`C:\Users\claude\dev\perusal`}},
-		{"mapsANestedRepository", `C:\Users\Chris\dev\openziti\ziti`, []string{`C:\Users\claude\dev\openziti\ziti`}},
-		{"mapsTheOwnerDirectoryItself", `C:\Users\Chris\dev`, []string{`C:\Users\claude\dev`}},
-		{"ignoresCase", `c:\users\chris\DEV\perusal`, []string{`C:\Users\claude\dev\perusal`}},
-	}
-	for _, testCase := range cases {
-		t.Run(testCase.name, func(t *testing.T) {
-			got, err := agentCopyDirs(rules, []gitrepo.Repository{{Dir: testCase.repositoryDir}})
-
-			if err != nil || !slices.Equal(got, testCase.want) {
-				t.Fatalf("got %q, %v, want %q", got, err, testCase.want)
-			}
-		})
-	}
+	t.Run("agentCopyDirsMapsARepository", agentCopyDirsMapsARepository)
+	t.Run("agentCopyDirsMapsANestedRepository", agentCopyDirsMapsANestedRepository)
+	t.Run("agentCopyDirsMapsTheOwnerDirectoryItself", agentCopyDirsMapsTheOwnerDirectoryItself)
+	t.Run("agentCopyDirsIgnoresCase", agentCopyDirsIgnoresCase)
+	t.Run("agentCopyDirsRefusesARepositoryOutsideTheOwnerDirectory",
+		agentCopyDirsRefusesARepositoryOutsideTheOwnerDirectory)
 }
 
-func TestAgentCopyDirsRefusesARepositoryOutsideTheOwnerDirectory(t *testing.T) {
-	rules := Rules{Config: Config{AgentDir: `C:\Users\claude\dev`, OwnerDir: `C:\Users\Chris\dev`}}
+func agentCopyDirsMapsARepository(t *testing.T) {
+	rules := Rules{Config: Config{AgentDir: mappedAgentDir, OwnerDir: mappedOwnerDir}}
+	got, err := agentCopyDirs(rules, []gitrepo.Repository{{Dir: `C:\Users\Chris\dev\perusal`}})
+	require.NoError(t, err)
+	require.Equal(t, []string{`C:\Users\claude\dev\perusal`}, got)
+}
 
-	got, err := agentCopyDirs(rules, []gitrepo.Repository{{Dir: `C:\Users\Chris\devtools\x`}})
+func agentCopyDirsMapsANestedRepository(t *testing.T) {
+	rules := Rules{Config: Config{AgentDir: mappedAgentDir, OwnerDir: mappedOwnerDir}}
+	got, err := agentCopyDirs(rules, []gitrepo.Repository{{Dir: `C:\Users\Chris\dev\openziti\ziti`}})
+	require.NoError(t, err)
+	require.Equal(t, []string{`C:\Users\claude\dev\openziti\ziti`}, got)
+}
 
-	if err == nil {
-		t.Fatalf("got %q, want an error", got)
-	}
+func agentCopyDirsMapsTheOwnerDirectoryItself(t *testing.T) {
+	rules := Rules{Config: Config{AgentDir: mappedAgentDir, OwnerDir: mappedOwnerDir}}
+	got, err := agentCopyDirs(rules, []gitrepo.Repository{{Dir: `C:\Users\Chris\dev`}})
+	require.NoError(t, err)
+	require.Equal(t, []string{`C:\Users\claude\dev`}, got)
+}
+
+func agentCopyDirsIgnoresCase(t *testing.T) {
+	rules := Rules{Config: Config{AgentDir: mappedAgentDir, OwnerDir: mappedOwnerDir}}
+	got, err := agentCopyDirs(rules, []gitrepo.Repository{{Dir: `c:\users\chris\DEV\perusal`}})
+	require.NoError(t, err)
+	require.Equal(t, []string{`C:\Users\claude\dev\perusal`}, got)
+}
+
+func agentCopyDirsRefusesARepositoryOutsideTheOwnerDirectory(t *testing.T) {
+	rules := Rules{Config: Config{AgentDir: mappedAgentDir, OwnerDir: mappedOwnerDir}}
+	_, err := agentCopyDirs(rules, []gitrepo.Repository{{Dir: `C:\Users\Chris\devtools\x`}})
+	require.Error(t, err)
 }
 
 func TestExistingOnAgentHostDropsAWorkTreeRemovedOnTheAgentHost(t *testing.T) {
 	agentDir := t.TempDir()
+	removedDir := filepath.Join(agentDir, "removed")
 	kept := MissingWorkTree{AgentDir: agentDir, RelativePath: "worktrees/repo/kept"}
-	removed := MissingWorkTree{AgentDir: filepath.Join(agentDir, "removed"), RelativePath: "worktrees/repo/removed"}
+	removed := MissingWorkTree{AgentDir: removedDir, RelativePath: "worktrees/repo/removed"}
+
 	existing, err := existingOnAgentHost(context.Background(), runLocalScript, []MissingWorkTree{kept, removed})
 
-	if err != nil || !slices.Equal(existing, []MissingWorkTree{kept}) {
-		t.Fatalf("got %+v, %v, want only %+v", existing, err, kept)
-	}
+	require.NoError(t, err)
+	require.Equal(t, []MissingWorkTree{kept}, existing)
 }
 
 func TestParseFocusFile(t *testing.T) {
@@ -109,17 +162,14 @@ func readsOnePathPerLineWithAnyLineBreak(t *testing.T) {
 	got, err := parseFocusFile("C:\\Users\\claude\\dev\\a\r\nC:\\Users\\claude\\dev\\b\nC:\\Users\\claude\\dev\\c\r\n")
 
 	want := []string{`C:\Users\claude\dev\a`, `C:\Users\claude\dev\b`, `C:\Users\claude\dev\c`}
-	if err != nil || !slices.Equal(got, want) {
-		t.Fatalf("got %q, %v, want %q", got, err, want)
-	}
+	require.NoError(t, err)
+	require.Equal(t, want, got)
 }
 
 func refusesAnEmptyLine(t *testing.T) {
 	_, err := parseFocusFile("C:\\Users\\claude\\dev\\a\n\nC:\\Users\\claude\\dev\\b")
 
-	if !errors.Is(err, ErrMalformedFocusFile) {
-		t.Fatalf("got %v, want %v", err, ErrMalformedFocusFile)
-	}
+	require.ErrorIs(t, err, ErrMalformedFocusFile)
 }
 
 func TestFindWorkTree(t *testing.T) {
@@ -131,26 +181,25 @@ func findsTheNearestGitAbove(t *testing.T) {
 	devDir := t.TempDir()
 	repository := filepath.Join(devDir, "org", "repo")
 	mustMkdir(t, filepath.Join(repository, ".git"))
-	mustMkdir(t, filepath.Join(repository, "cmd", "tool"))
+	tool := filepath.Join(repository, "cmd", "tool")
+	mustMkdir(t, tool)
 
-	got, err := findWorkTree(filepath.Join(repository, "cmd", "tool"), devDir)
+	got, err := findWorkTree(tool, devDir)
 
-	if err != nil || got != repository {
-		t.Fatalf("got %q, %v, want %q", got, err, repository)
-	}
+	require.NoError(t, err)
+	require.Equal(t, repository, got)
 }
 
 func stopsAtTheOwnerDirectory(t *testing.T) {
 	outer := t.TempDir()
 	mustMkdir(t, filepath.Join(outer, ".git"))
 	devDir := filepath.Join(outer, "dev")
-	mustMkdir(t, filepath.Join(devDir, "notes"))
+	notes := filepath.Join(devDir, "notes")
+	mustMkdir(t, notes)
 
-	_, err := findWorkTree(filepath.Join(devDir, "notes"), devDir)
+	_, err := findWorkTree(notes, devDir)
 
-	if !errors.Is(err, ErrNotWorkTree) {
-		t.Fatalf("got %v, want %v", err, ErrNotWorkTree)
-	}
+	require.ErrorIs(t, err, ErrNotWorkTree)
 }
 
 func TestResolve(t *testing.T) {
@@ -165,45 +214,43 @@ func opensTheCheckedWorkTree(t *testing.T) {
 	devDir := t.TempDir()
 	repository := filepath.Join(devDir, "repo")
 	gitInit(t, repository)
-	denyGuests(t, filepath.Join(repository, ".git"), deniedWriteMask)
-	rules := guestRules(t, devDir, focusFileHolding(t, agentDevDir+`\repo`))
+	gitDir := filepath.Join(repository, ".git")
+	denyGuests(t, gitDir, deniedWriteMask)
+	focusFile := focusFileHolding(t, agentDevDir+`\repo`)
+	rules := guestRules(t, devDir, focusFile)
 
 	got, err := resolve(context.Background(), rules)
 
-	if err != nil || len(got.Repositories) != 1 {
-		t.Fatalf("got %v, %v, want one repository", got, err)
-	}
-	same, err := isSameDirectory(got.Repositories[0].Dir, repository)
-	if err != nil || !same {
-		t.Fatalf("got %q, %v, want %q", got.Repositories[0].Dir, err, repository)
-	}
-	if want := filepath.Join(repository, ".git"); !strings.EqualFold(got.Repositories[0].GitDir, want) {
-		t.Fatalf("got git directory %q, want %q", got.Repositories[0].GitDir, want)
-	}
+	require.NoError(t, err)
+	require.Len(t, got.Repositories, 1)
+	opened := got.Repositories[0]
+	requireSameDirectory(t, opened.Dir, repository)
+	sameGitDir := strings.EqualFold(opened.GitDir, gitDir)
+	require.True(t, sameGitDir, "got git directory %q, want %q", opened.GitDir, gitDir)
 }
 
 func keepsEachRepositoryOnceAndReportsTheRefusedPaths(t *testing.T) {
 	devDir := t.TempDir()
-	for _, name := range []string{"first", "second"} {
-		gitInit(t, filepath.Join(devDir, name))
-		denyGuests(t, filepath.Join(devDir, name, ".git"), deniedWriteMask)
+	first := filepath.Join(devDir, "first")
+	second := filepath.Join(devDir, "second")
+	for _, repository := range []string{first, second} {
+		gitInit(t, repository)
+		denyGuests(t, filepath.Join(repository, ".git"), deniedWriteMask)
 	}
-	mustMkdir(t, filepath.Join(devDir, "first", "cmd"))
+	mustMkdir(t, filepath.Join(first, "cmd"))
 	mustMkdir(t, filepath.Join(devDir, "notes"))
 	lines := []string{agentDevDir + `\second`, agentDevDir + `\notes`, agentDevDir + `\first\cmd`, agentDevDir + `\first`}
-	rules := guestRules(t, devDir, focusFileHolding(t, strings.Join(lines, "\n")))
+	focusFile := focusFileHolding(t, strings.Join(lines, "\n"))
+	rules := guestRules(t, devDir, focusFile)
 
 	got, err := resolve(context.Background(), rules)
 
-	if err != nil || len(got.Repositories) != 2 || len(got.Refusals) != 1 || !errors.Is(got.Refusals[0], ErrNotWorkTree) {
-		t.Fatalf("got %v, %v, want second and first, and notes refused", got, err)
-	}
-	for index, name := range []string{"second", "first"} {
-		same, err := isSameDirectory(got.Repositories[index].Dir, filepath.Join(devDir, name))
-		if err != nil || !same {
-			t.Fatalf("got repository %d %q, %v, want %s", index, got.Repositories[index].Dir, err, name)
-		}
-	}
+	require.NoError(t, err)
+	require.Len(t, got.Repositories, 2)
+	require.Len(t, got.Refusals, 1)
+	require.ErrorIs(t, got.Refusals[0], ErrNotWorkTree)
+	requireSameDirectory(t, got.Repositories[0].Dir, second)
+	requireSameDirectory(t, got.Repositories[1].Dir, first)
 }
 
 func doesNotOpenTheRepositoryAboveAnUnusableGitDir(t *testing.T) {
@@ -213,13 +260,12 @@ func doesNotOpenTheRepositoryAboveAnUnusableGitDir(t *testing.T) {
 	emptyGitDir := filepath.Join(devDir, "repo", ".git")
 	mustMkdir(t, emptyGitDir)
 	denyGuests(t, emptyGitDir, deniedWriteMask)
-	rules := guestRules(t, devDir, focusFileHolding(t, agentDevDir+`\repo`))
+	focusFile := focusFileHolding(t, agentDevDir+`\repo`)
+	rules := guestRules(t, devDir, focusFile)
 
-	got, err := resolve(context.Background(), rules)
+	_, err := resolve(context.Background(), rules)
 
-	if err == nil {
-		t.Fatalf("got %v, want an error", got)
-	}
+	require.Error(t, err)
 }
 
 func TestMissingWorkTree(t *testing.T) {
@@ -230,57 +276,61 @@ func TestMissingWorkTree(t *testing.T) {
 
 func resolveAgainFindsTheSameWhileTheWorkTreeIsMissing(t *testing.T) {
 	devDir := t.TempDir()
-	rules := guestRules(t, devDir, focusFileHolding(t, strings.Join(claudeXFocusLines(t, devDir), "\n")))
+	lines := claudeXFocusLines(t, devDir)
+	focusFile := focusFileHolding(t, strings.Join(lines, "\n"))
+	rules := guestRules(t, devDir, focusFile)
 	rules.AgentHost = "agent-vm"
 
 	first, firstErr := resolve(context.Background(), rules)
 	second, secondErr := resolve(context.Background(), rules)
 
-	if !lacksOwnerCopy(first, firstErr) {
-		t.Fatalf("got %+v, %v, want it to lack the owner's copy of claude-x", first, firstErr)
-	}
-	if !isSameResult(Result{Focus: first, Err: firstErr}, Result{Focus: second, Err: secondErr}) {
-		t.Fatalf("got %+v, %v then %+v, %v, want the same twice", first, firstErr, second, secondErr)
-	}
-	if isSameResult(Result{Focus: first, Err: firstErr}, Result{Focus: Focus{}, Err: firstErr}) {
-		t.Fatalf("got %+v the same as an empty focus", first)
-	}
+	lacksClaudeX := lacksOwnerCopy(first, firstErr)
+	require.True(t, lacksClaudeX)
+	firstResult := Result{Focus: first, Err: firstErr}
+	secondResult := Result{Focus: second, Err: secondErr}
+	sameTwice := isSameResult(firstResult, secondResult)
+	require.True(t, sameTwice)
+	emptyResult := Result{Focus: Focus{}, Err: firstErr}
+	sameAsEmpty := isSameResult(firstResult, emptyResult)
+	require.False(t, sameAsEmpty)
 }
 
 func resolveReportsAnAgentHostsWorkTreeTheOwnerLacksOnce(t *testing.T) {
 	devDir := t.TempDir()
-	rules := guestRules(t, devDir, focusFileHolding(t, strings.Join(claudeXFocusLines(t, devDir), "\n")))
+	lines := claudeXFocusLines(t, devDir)
+	focusFile := focusFileHolding(t, strings.Join(lines, "\n"))
+	rules := guestRules(t, devDir, focusFile)
 	rules.AgentHost = "agent-vm"
 
 	got, err := resolve(context.Background(), rules)
 
+	require.NoError(t, err)
+	require.Empty(t, got.Repositories)
+	require.Len(t, got.MissingWorkTrees, 1)
+	require.Len(t, got.Refusals, 1)
+	require.ErrorIs(t, got.Refusals[0], ErrNotWorkTree)
+	missing := got.MissingWorkTrees[0]
+	clone := filepath.Join(devDir, "org", "repo")
+	requireSameDirectory(t, missing.Clone.Dir, clone)
+	missing.Clone = gitrepo.Repository{}
 	want := MissingWorkTree{
 		AgentDir:     agentDevDir + `\worktrees\org\repo\claude-x`,
 		Dir:          filepath.Join(devDir, "worktrees", "org", "repo", "claude-x"),
 		RelativePath: "worktrees/org/repo/claude-x",
 	}
-	if err != nil || len(got.Repositories) != 0 || len(got.MissingWorkTrees) != 1 || len(got.Refusals) != 1 ||
-		!errors.Is(got.Refusals[0], ErrNotWorkTree) {
-		t.Fatalf("got %+v, %v, want claude-x missing once and worktrees\\nothing refused", got, err)
-	}
-	missing := got.MissingWorkTrees[0]
-	same, sameErr := isSameDirectory(missing.Clone.Dir, filepath.Join(devDir, "org", "repo"))
-	missing.Clone = gitrepo.Repository{}
-	if missing != want || sameErr != nil || !same {
-		t.Fatalf("got %+v (clone same: %v, %v), want %+v with org\\repo's clone", got.MissingWorkTrees[0], same,
-			sameErr, want)
-	}
+	require.Equal(t, want, missing)
 }
 
 func resolveRefusesTheSamePathWithoutAnAgentHost(t *testing.T) {
 	devDir := t.TempDir()
-	rules := guestRules(t, devDir, focusFileHolding(t, strings.Join(claudeXFocusLines(t, devDir), "\n")))
+	lines := claudeXFocusLines(t, devDir)
+	focusFile := focusFileHolding(t, strings.Join(lines, "\n"))
+	rules := guestRules(t, devDir, focusFile)
 
 	got, err := resolve(context.Background(), rules)
 
-	if !errors.Is(err, ErrNotWorkTree) || len(got.MissingWorkTrees) != 0 {
-		t.Fatalf("got %+v, %v, want every path refused", got, err)
-	}
+	require.ErrorIs(t, err, ErrNotWorkTree)
+	require.Empty(t, got.MissingWorkTrees)
 }
 
 // claudeXFocusLines makes org\repo a protected clone and returns focus lines naming its worktree claude-x, which does
@@ -299,56 +349,52 @@ func claudeXFocusLines(t *testing.T, devDir string) []string {
 
 func TestFindRepositoriesRefusesAnUnprotectedOneAndSkipsANestedOne(t *testing.T) {
 	devDir := t.TempDir()
-	gitInit(t, filepath.Join(devDir, "org", "repo"))
-	denyGuests(t, filepath.Join(devDir, "org", "repo", ".git"), deniedWriteMask)
-	gitInit(t, filepath.Join(devDir, "org", "repo", "vendored"))
-	denyGuests(t, filepath.Join(devDir, "org", "repo", "vendored", ".git"), deniedWriteMask)
+	repository := filepath.Join(devDir, "org", "repo")
+	gitInit(t, repository)
+	denyGuests(t, filepath.Join(repository, ".git"), deniedWriteMask)
+	vendored := filepath.Join(repository, "vendored")
+	gitInit(t, vendored)
+	denyGuests(t, filepath.Join(vendored, ".git"), deniedWriteMask)
 	gitInit(t, filepath.Join(devDir, "plain"))
 	mustMkdir(t, filepath.Join(devDir, "notes"))
 	rules := guestRules(t, devDir, "")
 
 	got, err := FindRepositories(context.Background(), rules)
 
-	if err != nil || len(got.Repositories) != 1 || got.Repositories[0].RelativePath != "org/repo" {
-		t.Fatalf("got %v, %v, want only org/repo", got, err)
-	}
-	if len(got.Refusals) != 1 || got.Refusals[0].RelativePath != "plain" ||
-		got.Refusals[0].Summary() != "not write-denied to the agent" {
-		t.Fatalf("got refusals %v, want plain refused as %v", got.Refusals, ErrGitDirUnprotected)
-	}
+	require.NoError(t, err)
+	require.Len(t, got.Repositories, 1)
+	require.Equal(t, "org/repo", got.Repositories[0].RelativePath)
+	require.Len(t, got.Refusals, 1)
+	refusal := got.Refusals[0]
+	require.Equal(t, "plain", refusal.RelativePath)
+	summary := refusal.Summary()
+	require.Equal(t, "not write-denied to the agent", summary)
 }
 
 func TestFindRepositoriesListsAnUnprotectedOneForAnAgentHost(t *testing.T) {
 	devDir := t.TempDir()
-	repository, _ := repositoryWithWorkTree(t, devDir)
-	rules, err := NewRules(Config{FocusFile: "", AgentDir: agentDevDir, OwnerDir: devDir, AgentHost: "agent-vm"})
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() {
-		if err := rules.held.release(); err != nil {
-			t.Error(err)
-		}
-	})
+	repositoryWithWorkTree(t, devDir)
+	rules := agentHostRules(t, agentDevDir, devDir)
 
 	got, err := FindRepositories(context.Background(), rules)
 
-	if err != nil || len(got.Repositories) != 2 || len(got.Refusals) != 0 {
-		t.Fatalf("got %v, %v, want %s and its linked work tree", got, err, repository)
-	}
+	require.NoError(t, err)
+	require.Len(t, got.Repositories, 2)
+	require.Empty(t, got.Refusals)
 }
 
 func TestFindRepositoriesListsALinkedWorkTree(t *testing.T) {
 	devDir := t.TempDir()
 	repository, _ := repositoryWithWorkTree(t, devDir)
 	denyGuests(t, filepath.Join(repository, ".git"), deniedWriteMask)
+	rules := guestRules(t, devDir, "")
 
-	got, err := FindRepositories(context.Background(), guestRules(t, devDir, ""))
+	got, err := FindRepositories(context.Background(), rules)
 
-	if err != nil || len(got.Repositories) != 2 || got.Repositories[1].RelativePath != "repo-side" ||
-		len(got.Refusals) != 0 {
-		t.Fatalf("got %v, %v, want repo and repo-side", got, err)
-	}
+	require.NoError(t, err)
+	require.Len(t, got.Repositories, 2)
+	require.Equal(t, "repo-side", got.Repositories[1].RelativePath)
+	require.Empty(t, got.Refusals)
 }
 
 func TestLinkedWorkTree(t *testing.T) {
@@ -362,31 +408,29 @@ func opensThroughItsCheckedRepository(t *testing.T) {
 	devDir := t.TempDir()
 	repository, side := repositoryWithWorkTree(t, devDir)
 	denyGuests(t, filepath.Join(repository, ".git"), deniedWriteMask)
+	focusFile := focusFileHolding(t, agentDevDir+`\repo-side\cmd`)
+	rules := guestRules(t, devDir, focusFile)
 
-	got, err := resolve(context.Background(), guestRules(t, devDir, focusFileHolding(t, agentDevDir+`\repo-side\cmd`)))
+	got, err := resolve(context.Background(), rules)
 
-	if err != nil || len(got.Repositories) != 1 {
-		t.Fatalf("got %v, %v, want one repository", got, err)
-	}
-	same, err := isSameDirectory(got.Repositories[0].Dir, side)
-	if err != nil || !same {
-		t.Fatalf("got %q, %v, want %q", got.Repositories[0].Dir, err, side)
-	}
-	status, err := got.Repositories[0].Status(context.Background())
-	if err != nil || status.Branch != "side" {
-		t.Fatalf("got branch %q, %v, want side", status.Branch, err)
-	}
+	require.NoError(t, err)
+	require.Len(t, got.Repositories, 1)
+	opened := got.Repositories[0]
+	requireSameDirectory(t, opened.Dir, side)
+	sideStatus, err := opened.Status(context.Background())
+	require.NoError(t, err)
+	require.Equal(t, "side", sideStatus.Branch)
 }
 
 func isRefusedWhenItsRepositoryIsUnprotected(t *testing.T) {
 	devDir := t.TempDir()
 	repositoryWithWorkTree(t, devDir)
+	focusFile := focusFileHolding(t, agentDevDir+`\repo-side`)
+	rules := guestRules(t, devDir, focusFile)
 
-	_, err := resolve(context.Background(), guestRules(t, devDir, focusFileHolding(t, agentDevDir+`\repo-side`)))
+	_, err := resolve(context.Background(), rules)
 
-	if !errors.Is(err, ErrGitDirUnprotected) {
-		t.Fatalf("got %v, want %v", err, ErrGitDirUnprotected)
-	}
+	require.ErrorIs(t, err, ErrGitDirUnprotected)
 }
 
 func isRefusedWhenItsGitFileNamesAnotherWorkTree(t *testing.T) {
@@ -395,72 +439,80 @@ func isRefusedWhenItsGitFileNamesAnotherWorkTree(t *testing.T) {
 	mustGit(t, "-C", repository, "worktree", "add", "-b", "other", filepath.Join(devDir, "repo-other"))
 	denyGuests(t, filepath.Join(repository, ".git"), deniedWriteMask)
 	writeGitFile(t, side, filepath.Join(repository, ".git", "worktrees", "repo-other"))
+	focusFile := focusFileHolding(t, agentDevDir+`\repo-side`)
+	rules := guestRules(t, devDir, focusFile)
 
-	_, err := resolve(context.Background(), guestRules(t, devDir, focusFileHolding(t, agentDevDir+`\repo-side`)))
+	_, err := resolve(context.Background(), rules)
 
-	if !errors.Is(err, ErrNotLinkedWorkTree) {
-		t.Fatalf("got %v, want %v", err, ErrNotLinkedWorkTree)
-	}
+	require.ErrorIs(t, err, ErrNotLinkedWorkTree)
 }
 
 func opensThroughAJunctionAsItsRealPath(t *testing.T) {
 	devDir := t.TempDir()
 	repository, side := repositoryWithWorkTree(t, devDir)
-	denyGuests(t, filepath.Join(repository, ".git"), deniedWriteMask)
+	gitDir := filepath.Join(repository, ".git")
+	denyGuests(t, gitDir, deniedWriteMask)
 	junction := filepath.Join(t.TempDir(), "link")
-	if output, err := exec.Command("cmd", "/c", "mklink", "/J", junction, filepath.Join(repository, ".git")).
-		CombinedOutput(); err != nil {
-		t.Fatalf("mklink: %v: %s", err, output)
-	}
+	makeJunction(t, junction, gitDir)
 	writeGitFile(t, side, filepath.Join(junction, "worktrees", "repo-side"))
+	focusFile := focusFileHolding(t, agentDevDir+`\repo-side`)
+	rules := guestRules(t, devDir, focusFile)
 
-	got, err := resolve(context.Background(), guestRules(t, devDir, focusFileHolding(t, agentDevDir+`\repo-side`)))
+	got, err := resolve(context.Background(), rules)
 
-	want := filepath.Join(repository, ".git", "worktrees", "repo-side")
-	if err != nil || len(got.Repositories) != 1 || !strings.EqualFold(got.Repositories[0].GitDir, want) {
-		t.Fatalf("got %v, %v, want git directory %s", got, err, want)
-	}
+	require.NoError(t, err)
+	require.Len(t, got.Repositories, 1)
+	want := filepath.Join(gitDir, "worktrees", "repo-side")
+	openedGitDir := got.Repositories[0].GitDir
+	sameGitDir := strings.EqualFold(openedGitDir, want)
+	require.True(t, sameGitDir, "got git directory %q, want %q", openedGitDir, want)
 }
 
 func TestACheckedRepositoryCannotBeMovedAside(t *testing.T) {
-	cases := []struct {
-		name    string
-		focused string
-	}{
-		{"afterItsMainWorkTreeOpens", agentDevDir + `\repo`},
-		{"afterItsLinkedWorkTreeOpens", agentDevDir + `\repo-side`},
-	}
-	for _, testCase := range cases {
-		t.Run(testCase.name, func(t *testing.T) {
-			devDir := t.TempDir()
-			repository, _ := repositoryWithWorkTree(t, devDir)
-			denyGuests(t, filepath.Join(repository, ".git"), deniedWriteMask)
-			rules := guestRules(t, devDir, focusFileHolding(t, testCase.focused))
-			if _, err := resolve(context.Background(), rules); err != nil {
-				t.Fatal(err)
-			}
+	t.Run("afterItsMainWorkTreeOpens", afterItsMainWorkTreeOpens)
+	t.Run("afterItsLinkedWorkTreeOpens", afterItsLinkedWorkTreeOpens)
+}
 
-			err := os.Rename(repository, repository+"-moved")
+func afterItsMainWorkTreeOpens(t *testing.T) {
+	repository := repositoryResolvedFrom(t, agentDevDir+`\repo`)
 
-			if !errors.Is(err, fs.ErrPermission) {
-				t.Fatalf("got %v, want %v", err, fs.ErrPermission)
-			}
-		})
-	}
+	err := os.Rename(repository, repository+"-moved")
+
+	require.ErrorIs(t, err, fs.ErrPermission)
+}
+
+func afterItsLinkedWorkTreeOpens(t *testing.T) {
+	repository := repositoryResolvedFrom(t, agentDevDir+`\repo-side`)
+
+	err := os.Rename(repository, repository+"-moved")
+
+	require.ErrorIs(t, err, fs.ErrPermission)
+}
+
+func repositoryResolvedFrom(t *testing.T, focusedAgentPath string) string {
+	t.Helper()
+	devDir := t.TempDir()
+	repository, _ := repositoryWithWorkTree(t, devDir)
+	denyGuests(t, filepath.Join(repository, ".git"), deniedWriteMask)
+	focusFile := focusFileHolding(t, focusedAgentPath)
+	rules := guestRules(t, devDir, focusFile)
+	_, err := resolve(context.Background(), rules)
+	require.NoError(t, err)
+	return repository
 }
 
 func TestARefusedRepositoryCanStillBeMoved(t *testing.T) {
 	devDir := t.TempDir()
 	repository := filepath.Join(devDir, "repo")
 	gitInit(t, repository)
-	_, err := resolve(context.Background(), guestRules(t, devDir, focusFileHolding(t, agentDevDir+`\repo`)))
-	if !errors.Is(err, ErrGitDirUnprotected) {
-		t.Fatalf("got %v, want %v", err, ErrGitDirUnprotected)
-	}
+	focusFile := focusFileHolding(t, agentDevDir+`\repo`)
+	rules := guestRules(t, devDir, focusFile)
+	_, err := resolve(context.Background(), rules)
+	require.ErrorIs(t, err, ErrGitDirUnprotected)
 
-	if err := os.Rename(repository, repository+"-moved"); err != nil {
-		t.Fatal(err)
-	}
+	err = os.Rename(repository, repository+"-moved")
+
+	require.NoError(t, err)
 }
 
 // repositoryWithWorkTree makes devDir/repo with one commit and its linked work tree devDir/repo-side on branch side.
@@ -476,11 +528,17 @@ func repositoryWithWorkTree(t *testing.T, devDir string) (string, string) {
 	return repository, side
 }
 
+func requireSameDirectory(t *testing.T, dir string, want string) {
+	t.Helper()
+	same, err := isSameDirectory(dir, want)
+	require.NoError(t, err)
+	require.True(t, same, "got %q, want %q", dir, want)
+}
+
 func writeGitFile(t *testing.T, workTree string, adminDir string) {
 	t.Helper()
-	if err := os.WriteFile(filepath.Join(workTree, ".git"), []byte("gitdir: "+adminDir+"\n"), 0o600); err != nil {
-		t.Fatal(err)
-	}
+	err := os.WriteFile(filepath.Join(workTree, ".git"), []byte("gitdir: "+adminDir+"\n"), 0o600)
+	require.NoError(t, err)
 }
 
 func gitInit(t *testing.T, dir string) {
@@ -490,21 +548,20 @@ func gitInit(t *testing.T, dir string) {
 
 func mustGit(t *testing.T, args ...string) string {
 	t.Helper()
-	output, err := exec.Command("git", args...).CombinedOutput()
-	if err != nil {
-		t.Fatalf("git %s: %v\n%s", strings.Join(args, " "), err, output)
-	}
+	command := exec.Command("git", args...)
+	output, err := command.CombinedOutput()
+	require.NoError(t, err, "git %q\n%s", args, output)
 	return string(output)
 }
 
 func guestRules(t *testing.T, devDir string, focusFile string) Rules {
 	t.Helper()
 	config := Config{FocusFile: focusFile, AgentDir: agentDevDir, OwnerDir: devDir}
-	rules := Rules{Config: config, AgentSID: parsedGuestsSID(t), held: &heldGitDirs{handles: map[string]windows.Handle{}}}
+	agentSID := parsedGuestsSID(t)
+	rules := Rules{Config: config, AgentSID: agentSID, held: &heldGitDirs{handles: map[string]windows.Handle{}}}
 	t.Cleanup(func() {
-		if err := rules.held.release(); err != nil {
-			t.Error(err)
-		}
+		err := rules.held.release()
+		require.NoError(t, err)
 	})
 	return rules
 }
@@ -512,15 +569,13 @@ func guestRules(t *testing.T, devDir string, focusFile string) Rules {
 func focusFileHolding(t *testing.T, agentPath string) string {
 	t.Helper()
 	focusFile := filepath.Join(t.TempDir(), ".herdr-focus")
-	if err := os.WriteFile(focusFile, []byte(agentPath), 0o600); err != nil {
-		t.Fatal(err)
-	}
+	err := os.WriteFile(focusFile, []byte(agentPath), 0o600)
+	require.NoError(t, err)
 	return focusFile
 }
 
 func mustMkdir(t *testing.T, dir string) {
 	t.Helper()
-	if err := os.MkdirAll(dir, 0o700); err != nil {
-		t.Fatal(err)
-	}
+	err := os.MkdirAll(dir, 0o700)
+	require.NoError(t, err)
 }

@@ -3,12 +3,12 @@
 package focus
 
 import (
-	"errors"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"testing"
 
+	"github.com/stretchr/testify/require"
 	"golang.org/x/sys/windows"
 )
 
@@ -23,67 +23,70 @@ func TestVerifyGitDir(t *testing.T) {
 	t.Run("refusesAGitFile", refusesAGitFile)
 	t.Run("refusesAnEntryThatGrantsWritesAheadOfTheDeny", refusesAnEntryThatGrantsWritesAheadOfTheDeny)
 	t.Run("refusesAJunctionInside", refusesAJunctionInside)
-	t.Run("refusesAGrantThatCanLiftTheDeny", refusesAGrantThatCanLiftTheDeny)
+	t.Run("refusesAWriteDacGrantThatCanLiftTheDeny", refusesAWriteDacGrantThatCanLiftTheDeny)
+	t.Run("refusesAWriteOwnerGrantThatCanLiftTheDeny", refusesAWriteOwnerGrantThatCanLiftTheDeny)
 }
 
-func refusesAGrantThatCanLiftTheDeny(t *testing.T) {
-	for _, mask := range []uint32{windows.WRITE_DAC, windows.WRITE_OWNER} {
-		gitDir := deniedGitDir(t, deniedWriteMask)
-		addGuestsACE(t, gitDir, mask, windows.GRANT_ACCESS)
+func refusesAWriteDacGrantThatCanLiftTheDeny(t *testing.T) {
+	gitDir := deniedGitDir(t, deniedWriteMask)
+	addGuestsACE(t, gitDir, windows.WRITE_DAC, windows.GRANT_ACCESS)
+	agentSID := parsedGuestsSID(t)
 
-		err := verifyGitDir(gitDir, parsedGuestsSID(t))
+	err := verifyGitDir(gitDir, agentSID)
 
-		if !errors.Is(err, ErrGitDirUnprotected) {
-			t.Fatalf("mask %#x: got %v, want %v", mask, err, ErrGitDirUnprotected)
-		}
-	}
+	require.ErrorIs(t, err, ErrGitDirUnprotected)
+}
+
+func refusesAWriteOwnerGrantThatCanLiftTheDeny(t *testing.T) {
+	gitDir := deniedGitDir(t, deniedWriteMask)
+	addGuestsACE(t, gitDir, windows.WRITE_OWNER, windows.GRANT_ACCESS)
+	agentSID := parsedGuestsSID(t)
+
+	err := verifyGitDir(gitDir, agentSID)
+
+	require.ErrorIs(t, err, ErrGitDirUnprotected)
 }
 
 func acceptsTheSetupDeny(t *testing.T) {
 	gitDir := deniedGitDir(t, deniedWriteMask)
 	mustMkdir(t, filepath.Join(gitDir, "hooks"))
-	if err := os.WriteFile(filepath.Join(gitDir, "hooks", "pre-commit"), []byte("exit 0\n"), 0o600); err != nil {
-		t.Fatal(err)
-	}
+	err := os.WriteFile(filepath.Join(gitDir, "hooks", "pre-commit"), []byte("exit 0\n"), 0o600)
+	require.NoError(t, err)
+	agentSID := parsedGuestsSID(t)
 
-	if err := verifyGitDir(gitDir, parsedGuestsSID(t)); err != nil {
-		t.Fatal(err)
-	}
+	err = verifyGitDir(gitDir, agentSID)
+
+	require.NoError(t, err)
 }
 
 func refusesADirectoryWithoutTheDeny(t *testing.T) {
 	gitDir := filepath.Join(t.TempDir(), ".git")
 	mustMkdir(t, gitDir)
+	agentSID := parsedGuestsSID(t)
 
-	err := verifyGitDir(gitDir, parsedGuestsSID(t))
+	err := verifyGitDir(gitDir, agentSID)
 
-	if !errors.Is(err, ErrGitDirUnprotected) {
-		t.Fatalf("got %v, want %v", err, ErrGitDirUnprotected)
-	}
+	require.ErrorIs(t, err, ErrGitDirUnprotected)
 }
 
 func refusesADenyThatIsMissingDelete(t *testing.T) {
 	gitDir := deniedGitDir(t, deniedWriteMask&^windows.DELETE)
+	agentSID := parsedGuestsSID(t)
 
-	err := verifyGitDir(gitDir, parsedGuestsSID(t))
+	err := verifyGitDir(gitDir, agentSID)
 
-	if !errors.Is(err, ErrGitDirUnprotected) {
-		t.Fatalf("got %v, want %v", err, ErrGitDirUnprotected)
-	}
+	require.ErrorIs(t, err, ErrGitDirUnprotected)
 }
 
 func refusesADirectoryTheAgentOwns(t *testing.T) {
 	gitDir := deniedGitDir(t, deniedWriteMask)
-	user, err := windows.GetCurrentProcessToken().GetTokenUser()
-	if err != nil {
-		t.Fatal(err)
-	}
+	token := windows.GetCurrentProcessToken()
+	user, err := token.GetTokenUser()
+	require.NoError(t, err)
 
 	err = verifyGitDir(gitDir, user.User.Sid)
 
-	if !errors.Is(err, ErrGitDirUnprotected) {
-		t.Fatalf("got %v, want %v", err, ErrGitDirUnprotected)
-	}
+	require.ErrorIs(t, err, ErrGitDirUnprotected)
 }
 
 func refusesAnEntryThatGrantsWritesAheadOfTheDeny(t *testing.T) {
@@ -91,12 +94,11 @@ func refusesAnEntryThatGrantsWritesAheadOfTheDeny(t *testing.T) {
 	hooks := filepath.Join(gitDir, "hooks")
 	mustMkdir(t, hooks)
 	addGuestsACE(t, hooks, windows.FILE_WRITE_DATA, windows.GRANT_ACCESS)
+	agentSID := parsedGuestsSID(t)
 
-	err := verifyGitDir(gitDir, parsedGuestsSID(t))
+	err := verifyGitDir(gitDir, agentSID)
 
-	if !errors.Is(err, ErrGitDirUnprotected) {
-		t.Fatalf("got %v, want %v", err, ErrGitDirUnprotected)
-	}
+	require.ErrorIs(t, err, ErrGitDirUnprotected)
 }
 
 func refusesAJunctionInside(t *testing.T) {
@@ -104,28 +106,30 @@ func refusesAJunctionInside(t *testing.T) {
 	target := filepath.Join(t.TempDir(), "hooks")
 	mustMkdir(t, target)
 	junction := filepath.Join(gitDir, "hooks")
-	if output, err := exec.Command("cmd", "/c", "mklink", "/J", junction, target).CombinedOutput(); err != nil {
-		t.Fatalf("mklink: %v: %s", err, output)
-	}
+	makeJunction(t, junction, target)
+	agentSID := parsedGuestsSID(t)
 
-	err := verifyGitDir(gitDir, parsedGuestsSID(t))
+	err := verifyGitDir(gitDir, agentSID)
 
-	if !errors.Is(err, ErrGitDirUnprotected) {
-		t.Fatalf("got %v, want %v", err, ErrGitDirUnprotected)
-	}
+	require.ErrorIs(t, err, ErrGitDirUnprotected)
 }
 
 func refusesAGitFile(t *testing.T) {
 	gitFile := filepath.Join(t.TempDir(), ".git")
-	if err := os.WriteFile(gitFile, []byte("gitdir: ../elsewhere\n"), 0o600); err != nil {
-		t.Fatal(err)
-	}
+	err := os.WriteFile(gitFile, []byte("gitdir: ../elsewhere\n"), 0o600)
+	require.NoError(t, err)
+	agentSID := parsedGuestsSID(t)
 
-	err := verifyGitDir(gitFile, parsedGuestsSID(t))
+	err = verifyGitDir(gitFile, agentSID)
 
-	if !errors.Is(err, ErrGitDirUnprotected) {
-		t.Fatalf("got %v, want %v", err, ErrGitDirUnprotected)
-	}
+	require.ErrorIs(t, err, ErrGitDirUnprotected)
+}
+
+func makeJunction(t *testing.T, junction string, target string) {
+	t.Helper()
+	command := exec.Command("cmd", "/c", "mklink", "/J", junction, target)
+	output, err := command.CombinedOutput()
+	require.NoError(t, err, "mklink: %s", output)
 }
 
 func deniedGitDir(t *testing.T, mask uint32) string {
@@ -139,9 +143,7 @@ func deniedGitDir(t *testing.T, mask uint32) string {
 func parsedGuestsSID(t *testing.T) *windows.SID {
 	t.Helper()
 	sid, err := windows.StringToSid(guestsSID)
-	if err != nil {
-		t.Fatal(err)
-	}
+	require.NoError(t, err)
 	return sid
 }
 
@@ -153,13 +155,10 @@ func denyGuests(t *testing.T, path string, mask uint32) {
 func addGuestsACE(t *testing.T, path string, mask uint32, mode windows.ACCESS_MODE) {
 	t.Helper()
 	descriptor, err := windows.GetNamedSecurityInfo(path, windows.SE_FILE_OBJECT, windows.DACL_SECURITY_INFORMATION)
-	if err != nil {
-		t.Fatal(err)
-	}
+	require.NoError(t, err)
 	currentDACL, _, err := descriptor.DACL()
-	if err != nil {
-		t.Fatal(err)
-	}
+	require.NoError(t, err)
+	guests := parsedGuestsSID(t)
 	entry := windows.EXPLICIT_ACCESS{
 		AccessPermissions: windows.ACCESS_MASK(mask),
 		AccessMode:        mode,
@@ -167,16 +166,12 @@ func addGuestsACE(t *testing.T, path string, mask uint32, mode windows.ACCESS_MO
 		Trustee: windows.TRUSTEE{
 			TrusteeForm:  windows.TRUSTEE_IS_SID,
 			TrusteeType:  windows.TRUSTEE_IS_WELL_KNOWN_GROUP,
-			TrusteeValue: windows.TrusteeValueFromSID(parsedGuestsSID(t)),
+			TrusteeValue: windows.TrusteeValueFromSID(guests),
 		},
 	}
 	dacl, err := windows.ACLFromEntries([]windows.EXPLICIT_ACCESS{entry}, currentDACL)
-	if err != nil {
-		t.Fatal(err)
-	}
+	require.NoError(t, err)
 	err = windows.SetNamedSecurityInfo(path, windows.SE_FILE_OBJECT, windows.DACL_SECURITY_INFORMATION,
 		nil, nil, dacl, nil)
-	if err != nil {
-		t.Fatal(err)
-	}
+	require.NoError(t, err)
 }

@@ -2,18 +2,17 @@ package gitrepo
 
 import (
 	"context"
-	"errors"
 	"io/fs"
 	"math"
 	"os"
 	"path/filepath"
-	"reflect"
 	"slices"
 	"strings"
 	"testing"
 	"time"
 
 	"github.com/CLBRITTON2/perusal/internal/diff"
+	"github.com/stretchr/testify/require"
 )
 
 func TestMain(m *testing.M) {
@@ -44,18 +43,20 @@ func TestPublishSendsANewBranchToOriginAndTracksIt(t *testing.T) {
 		{"-C", clone, "commit", "--allow-empty", "--message", "Two"},
 	})
 	repository := Repository{Dir: clone}
-
 	before, beforeErr := repository.CommitsOnNoRemote(context.Background())
-	publishErr := repository.Publish(context.Background(), "feature")
-	after, afterErr := repository.CommitsOnNoRemote(context.Background())
-	status, statusErr := repository.Status(context.Background())
+	require.NoError(t, beforeErr)
+	require.Equal(t, 2, before)
 
-	if beforeErr != nil || publishErr != nil || afterErr != nil || statusErr != nil || before != 2 || after != 0 ||
-		status.Upstream != "origin/feature" || status.Ahead != 0 {
-		t.Fatalf("got %d then %d on no remote (%v, %v), publish %v, upstream %q ahead %d (%v), "+
-			"want 2 then 0 and origin/feature even", before, after, beforeErr, afterErr, publishErr, status.Upstream,
-			status.Ahead, statusErr)
-	}
+	err := repository.Publish(context.Background(), "feature")
+
+	require.NoError(t, err)
+	after, afterErr := repository.CommitsOnNoRemote(context.Background())
+	require.NoError(t, afterErr)
+	require.Equal(t, 0, after)
+	workTreeStatus, statusErr := repository.Status(context.Background())
+	require.NoError(t, statusErr)
+	require.Equal(t, "origin/feature", workTreeStatus.Upstream)
+	require.Equal(t, 0, workTreeStatus.Ahead)
 }
 
 func TestStatus(t *testing.T) {
@@ -65,9 +66,7 @@ func TestStatus(t *testing.T) {
 func leavesTheIndexUnwritten(t *testing.T) {
 	clone := t.TempDir()
 	file := filepath.Join(clone, "a.txt")
-	if err := os.WriteFile(file, []byte("a\n"), 0o600); err != nil {
-		t.Fatal(err)
-	}
+	writeFile(t, file, "a\n")
 	runSteps(t, clone, [][]string{
 		{"init", "--initial-branch=main", clone},
 		{"-C", clone, "add", "a.txt"},
@@ -75,21 +74,20 @@ func leavesTheIndexUnwritten(t *testing.T) {
 			"commit", "--no-verify", "--message", "Start"},
 	})
 	hourAgo := time.Now().Add(-time.Hour)
-	if err := os.Chtimes(file, hourAgo, hourAgo); err != nil {
-		t.Fatal(err)
-	}
+	chtimesErr := os.Chtimes(file, hourAgo, hourAgo)
+	require.NoError(t, chtimesErr)
 	index := filepath.Join(clone, ".git", "index")
-	before, err := os.Stat(index)
-	if err != nil {
-		t.Fatal(err)
-	}
+	before, beforeErr := os.Stat(index)
+	require.NoError(t, beforeErr)
 
-	_, statusErr := Repository{Dir: clone}.Status(context.Background())
+	_, err := Repository{Dir: clone}.Status(context.Background())
 
-	after, err := os.Stat(index)
-	if statusErr != nil || err != nil || !after.ModTime().Equal(before.ModTime()) {
-		t.Fatalf("got status error %v, index modified %v then %v (%v)", statusErr, before.ModTime(), after.ModTime(), err)
-	}
+	require.NoError(t, err)
+	after, afterErr := os.Stat(index)
+	require.NoError(t, afterErr)
+	modifiedBefore := before.ModTime()
+	modifiedAfter := after.ModTime()
+	require.Equal(t, modifiedBefore, modifiedAfter)
 }
 
 func sendsTheBranchToItsUpstream(t *testing.T) {
@@ -107,11 +105,10 @@ func sendsTheBranchToItsUpstream(t *testing.T) {
 
 	err := Repository{Dir: clone}.Push(context.Background(), "main")
 
-	pushed, revParseErr := Repository{Dir: remote}.git(context.Background(), "rev-parse", "main")
-	head, headErr := Repository{Dir: clone}.git(context.Background(), "rev-parse", "HEAD")
-	if err != nil || revParseErr != nil || headErr != nil || string(pushed) != string(head) {
-		t.Fatalf("got push error %v, remote main %q (%v), want local HEAD %q (%v)", err, pushed, revParseErr, head, headErr)
-	}
+	require.NoError(t, err)
+	pushed := revParse(t, remote, "main")
+	head := revParse(t, clone, "HEAD")
+	require.Equal(t, head, pushed)
 }
 
 func TestStagedLineCounts(t *testing.T) {
@@ -133,11 +130,11 @@ func countsOnlyTheStagedChanges(t *testing.T) {
 	writeFile(t, filepath.Join(clone, "a.txt"), "1\ntwo\n3\nunstaged\n")
 	writeFile(t, filepath.Join(clone, "untracked.txt"), "u1\nu2\n")
 
-	got, err := Repository{Dir: clone}.StagedLineCounts(context.Background())
+	counts, err := Repository{Dir: clone}.StagedLineCounts(context.Background())
 
-	if err != nil || got != (diff.LineCounts{Added: 2, Removed: 1}) {
-		t.Fatalf("got %+v, %v, want +2 -1 from a.txt and staged.txt", got, err)
-	}
+	require.NoError(t, err)
+	want := diff.LineCounts{Added: 2, Removed: 1}
+	require.Equal(t, want, counts)
 }
 
 func countsTheStagedLinesOnAnUnbornBranch(t *testing.T) {
@@ -148,38 +145,37 @@ func countsTheStagedLinesOnAnUnbornBranch(t *testing.T) {
 	runSteps(t, clone, [][]string{{"-C", clone, "add", "staged.txt"}})
 	writeFile(t, filepath.Join(clone, "staged.txt"), "a\nb\nc\n")
 
-	got, err := Repository{Dir: clone}.StagedLineCounts(context.Background())
+	counts, err := Repository{Dir: clone}.StagedLineCounts(context.Background())
 
-	if err != nil || got != (diff.LineCounts{Added: 2, Removed: 0}) {
-		t.Fatalf("got %+v, %v, want +2 -0", got, err)
-	}
+	require.NoError(t, err)
+	want := diff.LineCounts{Added: 2, Removed: 0}
+	require.Equal(t, want, counts)
 }
 
 func TestTheLargestContextGitParsesShowsTheWholeFile(t *testing.T) {
 	clone := repositoryWithHistory(t, []string{"1\n2\n3\n4\n5\n6\n7\n8\n9", "1\n2\n3\n4\n5\n6\n7\n8\nnine"})
 	writeFile(t, filepath.Join(clone, "a.txt"), "one\n2\n3\n4\n5\n6\n7\n8\nnine\n")
-	head, err := Repository{Dir: clone}.git(context.Background(), "rev-parse", "HEAD")
-	if err != nil {
-		t.Fatal(err)
-	}
 	repository := Repository{Dir: clone}
 	file := FileStatus{Path: "a.txt", IndexStatus: '.', WorktreeStatus: 'M'}
-	hash := strings.TrimSpace(string(head))
+	hash := revParse(t, clone, "HEAD")
 
-	got := []string{}
-	for _, contextLines := range []int{1, math.MaxInt32} {
-		fileDiff, fileErr := repository.FileDiff(context.Background(), file, contextLines)
-		commitDiff, commitErr := repository.CommitDiff(context.Background(), hash, contextLines)
-		if fileErr != nil || commitErr != nil {
-			t.Fatalf("got %v, %v", fileErr, commitErr)
-		}
-		got = append(got, hunkHeaders(fileDiff)+" "+hunkHeaders(commitDiff))
-	}
+	narrowFileDiff, narrowFileErr := repository.FileDiff(context.Background(), file, 1)
+	narrowCommitDiff, narrowCommitErr := repository.CommitDiff(context.Background(), hash, 1)
+	wholeFileDiff, wholeFileErr := repository.FileDiff(context.Background(), file, math.MaxInt32)
+	wholeCommitDiff, wholeCommitErr := repository.CommitDiff(context.Background(), hash, math.MaxInt32)
 
-	want := []string{"@@ -1,2 +1,2 @@ @@ -8,2 +8,2 @@", "@@ -1,9 +1,9 @@ @@ -1,9 +1,9 @@"}
-	if !slices.Equal(got, want) {
-		t.Fatalf("got %q, want %q", got, want)
-	}
+	require.NoError(t, narrowFileErr)
+	require.NoError(t, narrowCommitErr)
+	require.NoError(t, wholeFileErr)
+	require.NoError(t, wholeCommitErr)
+	narrowFileHeaders := hunkHeaders(narrowFileDiff)
+	narrowCommitHeaders := hunkHeaders(narrowCommitDiff)
+	wholeFileHeaders := hunkHeaders(wholeFileDiff)
+	wholeCommitHeaders := hunkHeaders(wholeCommitDiff)
+	require.Equal(t, "@@ -1,2 +1,2 @@", narrowFileHeaders)
+	require.Equal(t, "@@ -8,2 +8,2 @@", narrowCommitHeaders)
+	require.Equal(t, "@@ -1,9 +1,9 @@", wholeFileHeaders)
+	require.Equal(t, "@@ -1,9 +1,9 @@", wholeCommitHeaders)
 }
 
 func hunkHeaders(text string) string {
@@ -197,9 +193,8 @@ func TestHeadSubjectIsTheFirstLineOfHeadsMessage(t *testing.T) {
 
 	subject, err := Repository{Dir: clone}.HeadSubject(context.Background())
 
-	if err != nil || subject != "Write 2" {
-		t.Fatalf("got %q, %v, want Write 2", subject, err)
-	}
+	require.NoError(t, err)
+	require.Equal(t, "Write 2", subject)
 }
 
 func TestDefaultBranch(t *testing.T) {
@@ -220,12 +215,14 @@ func rebaseOntoDefaultMovesBranchOntoOriginsMain(t *testing.T) {
 
 	base, err := Repository{Dir: clone}.RebaseOntoDefault(context.Background())
 
+	require.NoError(t, err)
+	wantBase := RemoteBranch{Ref: "origin/main", Name: "main"}
+	require.Equal(t, wantBase, base)
 	remoteMain := revParse(t, remote, "main")
-	if err != nil || base != (RemoteBranch{Ref: "origin/main", Name: "main"}) ||
-		revParse(t, clone, "HEAD^") != remoteMain || messageAt(t, clone, "HEAD") != "Feature" {
-		t.Fatalf("got %+v, %v, HEAD^ %s, want origin/main and Feature on %s", base, err, revParse(t, clone, "HEAD^"),
-			remoteMain)
-	}
+	headParent := revParse(t, clone, "HEAD^")
+	require.Equal(t, remoteMain, headParent)
+	headMessage := messageAt(t, clone, "HEAD")
+	require.Equal(t, "Feature", headMessage)
 }
 
 func rebaseOntoDefaultPrefersUpstreamOverOrigin(t *testing.T) {
@@ -245,12 +242,12 @@ func rebaseOntoDefaultPrefersUpstreamOverOrigin(t *testing.T) {
 
 	base, err := Repository{Dir: clone}.RebaseOntoDefault(context.Background())
 
+	require.NoError(t, err)
+	wantBase := RemoteBranch{Ref: "upstream/main", Name: "main"}
+	require.Equal(t, wantBase, base)
 	upstreamMain := revParse(t, upstream, "main")
-	if err != nil || base != (RemoteBranch{Ref: "upstream/main", Name: "main"}) ||
-		revParse(t, clone, "HEAD^") != upstreamMain {
-		t.Fatalf("got %+v, %v, HEAD^ %s, want upstream/main and HEAD^ at %s", base, err, revParse(t, clone, "HEAD^"),
-			upstreamMain)
-	}
+	headParent := revParse(t, clone, "HEAD^")
+	require.Equal(t, upstreamMain, headParent)
 }
 
 func rebaseOntoDefaultAbortsAndKeepsHeadOnConflict(t *testing.T) {
@@ -260,23 +257,20 @@ func rebaseOntoDefaultAbortsAndKeepsHeadOnConflict(t *testing.T) {
 
 	_, err := Repository{Dir: clone}.RebaseOntoDefault(context.Background())
 
+	require.ErrorContains(t, err, "aborted the rebase onto origin/main")
+	headAfter := revParse(t, clone, "HEAD")
+	require.Equal(t, headBefore, headAfter)
 	porcelainStatus := gitOutput(t, clone, "status", "--porcelain")
-	if err == nil || !strings.Contains(err.Error(), "aborted the rebase onto origin/main") ||
-		revParse(t, clone, "HEAD") != headBefore || porcelainStatus != "" {
-		t.Fatalf("got %v, HEAD %s, status %q, want an aborted rebase leaving HEAD at %s and a clean tree", err,
-			revParse(t, clone, "HEAD"), porcelainStatus, headBefore)
-	}
+	require.Empty(t, porcelainStatus)
 }
 
 func failsWhenOriginHeadPointsOutsideOrigin(t *testing.T) {
 	_, clone := pushedClone(t)
 	runSteps(t, clone, [][]string{{"symbolic-ref", "refs/remotes/origin/HEAD", "refs/heads/main"}})
 
-	branch, err := Repository{Dir: clone}.DefaultBranch(context.Background())
+	_, err := Repository{Dir: clone}.DefaultBranch(context.Background())
 
-	if err == nil || !strings.Contains(err.Error(), "points to main, outside origin") {
-		t.Fatalf("got %+v, %v, want an error naming main", branch, err)
-	}
+	require.ErrorContains(t, err, "points to main, outside origin")
 }
 
 func countsTheCommitsHeadLacksFromOriginsDefaultBranch(t *testing.T) {
@@ -298,9 +292,11 @@ func countsTheCommitsHeadLacksFromOriginsDefaultBranch(t *testing.T) {
 	branch, branchErr := repository.DefaultBranch(context.Background())
 	behind, behindErr := repository.CommitsBehind(context.Background(), branch.Ref)
 
-	if branchErr != nil || behindErr != nil || branch != (RemoteBranch{Ref: "origin/main", Name: "main"}) || behind != 2 {
-		t.Fatalf("got %+v (%v), %d behind (%v), want origin/main, 2 behind", branch, branchErr, behind, behindErr)
-	}
+	require.NoError(t, branchErr)
+	require.NoError(t, behindErr)
+	wantBranch := RemoteBranch{Ref: "origin/main", Name: "main"}
+	require.Equal(t, wantBranch, branch)
+	require.Equal(t, 2, behind)
 }
 
 func isEmptyWithoutOriginHead(t *testing.T) {
@@ -308,9 +304,8 @@ func isEmptyWithoutOriginHead(t *testing.T) {
 
 	branch, err := Repository{Dir: clone}.DefaultBranch(context.Background())
 
-	if err != nil || branch != (RemoteBranch{}) {
-		t.Fatalf("got %+v, %v, want no default branch for a clone of an empty repository", branch, err)
-	}
+	require.NoError(t, err)
+	require.Zero(t, branch)
 }
 
 func TestParseLog(t *testing.T) {
@@ -325,56 +320,46 @@ func keepsASeparatorInsideTheMessage(t *testing.T) {
 	output := []byte(hash + "\x1faaaaaaa\x1f" + parent + "\x1fHEAD -> master, tag: v1\x1fAda\x1f1700000000\x1fFix it\n\nbody \x1f text\n\x00")
 
 	commits, err := parseLog(output)
-	if err != nil {
-		t.Fatal(err)
-	}
 
+	require.NoError(t, err)
 	want := []Commit{{Hash: hash, ShortHash: "aaaaaaa", Parents: []string{parent}, Refs: []string{"HEAD -> master", "tag: v1"}, Author: "Ada", AuthoredAt: time.Unix(1700000000, 0),
 		Summary: "Fix it", Message: "Fix it\n\nbody \x1f text"}}
-	if !reflect.DeepEqual(commits, want) {
-		t.Fatalf("commits:\n%+v\nwant:\n%+v", commits, want)
-	}
+	require.Equal(t, want, commits)
 }
 
 func rejectsARecordWithoutAFullHash(t *testing.T) {
-	_, err := parseLog([]byte("--output=x\x1fa\x1f\x1f\x1fAda\x1f1700000000\x1fFix\x00"))
+	output := []byte("--output=x\x1fa\x1f\x1f\x1fAda\x1f1700000000\x1fFix\x00")
 
-	if err == nil {
-		t.Fatal("got no error for a record whose hash is not a full commit hash")
-	}
+	_, err := parseLog(output)
+
+	require.Error(t, err)
 }
 
 func rejectsAParentThatIsNotAFullHash(t *testing.T) {
-	_, err := parseLog([]byte(strings.Repeat("a", 40) + "\x1faaaaaaa\x1f--all\x1f\x1fAda\x1f1700000000\x1fFix\x00"))
+	output := []byte(strings.Repeat("a", 40) + "\x1faaaaaaa\x1f--all\x1f\x1fAda\x1f1700000000\x1fFix\x00")
 
-	if err == nil {
-		t.Fatal("got no error for a parent that is not a full commit hash")
-	}
+	_, err := parseLog(output)
+
+	require.Error(t, err)
 }
 
 func failureCarriesWhatGitPrintedOnStdout(t *testing.T) {
 	dir := t.TempDir()
-	for name, text := range map[string]string{"old.txt": "old line\n", "new.txt": "new line\n"} {
-		if err := os.WriteFile(filepath.Join(dir, name), []byte(text), 0o600); err != nil {
-			t.Fatal(err)
-		}
-	}
+	writeFile(t, filepath.Join(dir, "old.txt"), "old line\n")
+	writeFile(t, filepath.Join(dir, "new.txt"), "new line\n")
 
 	_, err := Repository{Dir: dir}.git(context.Background(), "diff", "--no-index", "--exit-code", "--", "old.txt",
 		"new.txt")
 
-	if err == nil || !strings.Contains(err.Error(), "+new line") {
-		t.Fatalf("got error %v, want one holding the diff git printed on stdout", err)
-	}
+	require.ErrorContains(t, err, "+new line")
 }
 
 func runSteps(t *testing.T, dir string, steps [][]string) {
 	t.Helper()
 	repository := Repository{Dir: dir}
 	for _, step := range steps {
-		if _, err := repository.git(context.Background(), step...); err != nil {
-			t.Fatal(err)
-		}
+		_, err := repository.git(context.Background(), step...)
+		require.NoError(t, err)
 	}
 }
 
@@ -386,28 +371,23 @@ func TestDiscard(t *testing.T) {
 func discardsOnlyTheGivenFiles(t *testing.T) {
 	clone := changedWorkTree(t)
 	repository := Repository{Dir: clone}
-	status, err := repository.Status(context.Background())
-	if err != nil {
-		t.Fatal(err)
-	}
+	workTreeStatus, statusErr := repository.Status(context.Background())
+	require.NoError(t, statusErr)
 
-	for _, file := range status.Files {
+	for _, file := range workTreeStatus.Files {
 		if file.Path == "kept.txt" {
 			continue
 		}
-		if err := repository.Discard(context.Background(), file); err != nil {
-			t.Fatal(err)
-		}
+		err := repository.Discard(context.Background(), file)
+		require.NoError(t, err)
 	}
 
-	after, err := repository.Status(context.Background())
-	content, readErr := os.ReadFile(filepath.Join(clone, "a.txt"))
-	if err != nil || len(after.Files) != 1 || after.Files[0].Path != "kept.txt" {
-		t.Fatalf("got %+v, %v, want only kept.txt left", after.Files, err)
-	}
-	if readErr != nil || string(content) != "1\n" {
-		t.Fatalf("got a.txt %q, %v, want HEAD's 1", content, readErr)
-	}
+	after, afterErr := repository.Status(context.Background())
+	require.NoError(t, afterErr)
+	require.Len(t, after.Files, 1)
+	require.Equal(t, "kept.txt", after.Files[0].Path)
+	aFile := filepath.Join(clone, "a.txt")
+	assertFileHolds(t, aFile, "1\n")
 }
 
 func discardAllKeepsIgnoredFiles(t *testing.T) {
@@ -416,16 +396,14 @@ func discardAllKeepsIgnoredFiles(t *testing.T) {
 
 	err := repository.DiscardAll(context.Background())
 
+	require.NoError(t, err)
 	after, statusErr := repository.Status(context.Background())
-	_, ignoredErr := os.Stat(filepath.Join(clone, "build.log"))
+	require.NoError(t, statusErr)
+	require.Empty(t, after.Files)
+	ignoredLog := filepath.Join(clone, "build.log")
+	require.FileExists(t, ignoredLog)
 	_, untrackedDirErr := os.Stat(filepath.Join(clone, "dir"))
-	if err != nil || statusErr != nil || len(after.Files) != 0 {
-		t.Fatalf("got %+v, %v, %v, want a clean work tree", after.Files, err, statusErr)
-	}
-	if ignoredErr != nil || !errors.Is(untrackedDirErr, fs.ErrNotExist) {
-		t.Fatalf("got ignored file %v, untracked dir %v, want the ignored file kept and the dir gone", ignoredErr,
-			untrackedDirErr)
-	}
+	require.ErrorIs(t, untrackedDirErr, fs.ErrNotExist)
 }
 
 func TestOnAnUnbornBranch(t *testing.T) {
@@ -439,11 +417,11 @@ func TestOnAnUnbornBranch(t *testing.T) {
 func diffsAFileAgainstNothing(t *testing.T) {
 	repository, file := unbornWithStagedFile(t)
 
-	got, err := repository.FileDiff(context.Background(), file, 3)
+	text, err := repository.FileDiff(context.Background(), file, 3)
 
-	if err != nil || hunkHeaders(got) != "@@ -0,0 +1,2 @@" {
-		t.Fatalf("got %q, %v, want both lines added", got, err)
-	}
+	require.NoError(t, err)
+	headers := hunkHeaders(text)
+	require.Equal(t, "@@ -0,0 +1,2 @@", headers)
 }
 
 func unstagesAFile(t *testing.T) {
@@ -451,7 +429,8 @@ func unstagesAFile(t *testing.T) {
 
 	err := repository.Unstage(context.Background(), file)
 
-	assertOnlyUntracked(t, repository, err, "staged.txt")
+	require.NoError(t, err)
+	assertOnlyUntracked(t, repository, "staged.txt")
 }
 
 func unstagesEverything(t *testing.T) {
@@ -459,7 +438,8 @@ func unstagesEverything(t *testing.T) {
 
 	err := repository.UnstageAll(context.Background())
 
-	assertOnlyUntracked(t, repository, err, "staged.txt")
+	require.NoError(t, err)
+	assertOnlyUntracked(t, repository, "staged.txt")
 }
 
 func discardsAFile(t *testing.T) {
@@ -468,7 +448,8 @@ func discardsAFile(t *testing.T) {
 
 	err := repository.Discard(context.Background(), file)
 
-	assertOnlyUntracked(t, repository, err, "kept.txt")
+	require.NoError(t, err)
+	assertOnlyUntracked(t, repository, "kept.txt")
 }
 
 func discardsEverything(t *testing.T) {
@@ -477,10 +458,10 @@ func discardsEverything(t *testing.T) {
 
 	err := repository.DiscardAll(context.Background())
 
-	status, statusErr := repository.Status(context.Background())
-	if err != nil || statusErr != nil || len(status.Files) != 0 {
-		t.Fatalf("got %+v, %v, %v, want a clean work tree", status.Files, err, statusErr)
-	}
+	require.NoError(t, err)
+	workTreeStatus, statusErr := repository.Status(context.Background())
+	require.NoError(t, statusErr)
+	require.Empty(t, workTreeStatus.Files)
 }
 
 // unbornWithStagedFile makes a repository with no commits whose staged.txt is staged and then changed again.
@@ -494,13 +475,14 @@ func unbornWithStagedFile(t *testing.T) (Repository, FileStatus) {
 	return Repository{Dir: clone}, FileStatus{Path: "staged.txt", IndexStatus: 'A', WorktreeStatus: 'M'}
 }
 
-func assertOnlyUntracked(t *testing.T, repository Repository, err error, path string) {
+func assertOnlyUntracked(t *testing.T, repository Repository, path string) {
 	t.Helper()
-	status, statusErr := repository.Status(context.Background())
-	if err != nil || statusErr != nil || len(status.Files) != 1 || status.Files[0].Path != path ||
-		!status.Files[0].IsUntracked() {
-		t.Fatalf("got %+v, %v, %v, want only %s, untracked", status.Files, err, statusErr, path)
-	}
+	workTreeStatus, err := repository.Status(context.Background())
+	require.NoError(t, err)
+	require.Len(t, workTreeStatus.Files, 1)
+	require.Equal(t, path, workTreeStatus.Files[0].Path)
+	untracked := workTreeStatus.Files[0].IsUntracked()
+	require.True(t, untracked)
 }
 
 func changedWorkTree(t *testing.T) string {
@@ -512,9 +494,8 @@ func changedWorkTree(t *testing.T) string {
 		{"-C", clone, "add", "b.txt", ".gitignore"}, {"-C", clone, "commit", "--message", "Add b"}})
 	writeFile(t, filepath.Join(clone, "a.txt"), "changed\n")
 	runSteps(t, clone, [][]string{{"-C", clone, "add", "a.txt"}, {"-C", clone, "mv", "b.txt", "c.txt"}})
-	if err := os.Mkdir(filepath.Join(clone, "dir"), 0o700); err != nil {
-		t.Fatal(err)
-	}
+	mkdirErr := os.Mkdir(filepath.Join(clone, "dir"), 0o700)
+	require.NoError(t, mkdirErr)
 	writeFile(t, filepath.Join(clone, "dir", "new.txt"), "new\n")
 	writeFile(t, filepath.Join(clone, "kept.txt"), "kept\n")
 	writeFile(t, filepath.Join(clone, "build.log"), "ignored\n")
@@ -531,9 +512,10 @@ func fastForwardsToTheUpstream(t *testing.T) {
 
 	err := Repository{Dir: clone}.Pull(context.Background())
 
-	if err != nil || revParse(t, clone, "HEAD") != revParse(t, otherClone, "HEAD") {
-		t.Fatalf("got %v, want HEAD at the pushed commit", err)
-	}
+	require.NoError(t, err)
+	head := revParse(t, clone, "HEAD")
+	pushed := revParse(t, otherClone, "HEAD")
+	require.Equal(t, pushed, head)
 }
 
 func refusesADivergedBranch(t *testing.T) {
@@ -543,9 +525,9 @@ func refusesADivergedBranch(t *testing.T) {
 
 	err := Repository{Dir: clone}.Pull(context.Background())
 
-	if err == nil || revParse(t, clone, "HEAD") != before {
-		t.Fatalf("got %v, want an error and HEAD unmoved", err)
-	}
+	require.Error(t, err)
+	after := revParse(t, clone, "HEAD")
+	require.Equal(t, before, after)
 }
 
 func TestLogAheadAndBehindListTheCommitsOnEachSide(t *testing.T) {
@@ -559,11 +541,12 @@ func TestLogAheadAndBehindListTheCommitsOnEachSide(t *testing.T) {
 	ahead, aheadErr := repository.LogAhead(context.Background(), "origin/main", 10)
 	behind, behindErr := repository.LogBehind(context.Background(), "origin/main", 10)
 
-	if aheadErr != nil || behindErr != nil || len(ahead) != 1 || ahead[0].Summary != "Local" || len(behind) != 1 ||
-		behind[0].Summary != "Pushed" {
-		t.Fatalf("got ahead %+v (%v), behind %+v (%v), want Local ahead and Pushed behind", ahead, aheadErr, behind,
-			behindErr)
-	}
+	require.NoError(t, aheadErr)
+	require.NoError(t, behindErr)
+	require.Len(t, ahead, 1)
+	require.Equal(t, "Local", ahead[0].Summary)
+	require.Len(t, behind, 1)
+	require.Equal(t, "Pushed", behind[0].Summary)
 }
 
 func TestLogOnNoRemoteListsTheCommitsNoRemoteHolds(t *testing.T) {
@@ -571,9 +554,9 @@ func TestLogOnNoRemoteListsTheCommitsNoRemoteHolds(t *testing.T) {
 
 	commits, err := Repository{Dir: clone}.LogOnNoRemote(context.Background(), 10)
 
-	if err != nil || len(commits) != 1 || commits[0].Summary != "Feature" {
-		t.Fatalf("got %+v, %v, want only Feature", commits, err)
-	}
+	require.NoError(t, err)
+	require.Len(t, commits, 1)
+	require.Equal(t, "Feature", commits[0].Summary)
 }
 
 func cloneBehindOther(t *testing.T) (string, string) {
@@ -602,12 +585,12 @@ func TestFetchBringsTheRemoteCommitsAndPrunesItsDeletedBranches(t *testing.T) {
 
 	err := repository.Fetch(context.Background())
 
+	require.NoError(t, err)
 	behind, behindErr := repository.CommitsBehind(context.Background(), "origin/main")
+	require.NoError(t, behindErr)
+	require.Equal(t, 1, behind)
 	_, goneErr := repository.revParse(context.Background(), "origin/gone")
-	if err != nil || behindErr != nil || behind != 1 || goneErr == nil {
-		t.Fatalf("got %v, %d behind (%v), origin/gone error %v, want 1 behind and origin/gone pruned", err, behind,
-			behindErr, goneErr)
-	}
+	require.Error(t, goneErr)
 }
 
 func TestABranchMergedAndDeletedOnTheRemote(t *testing.T) {
@@ -620,11 +603,11 @@ func TestABranchMergedAndDeletedOnTheRemote(t *testing.T) {
 func hasItsUpstreamGone(t *testing.T) {
 	clone, _ := mergedAndDeletedOnTheRemote(t)
 
-	status, err := Repository{Dir: clone}.Status(context.Background())
+	workTreeStatus, err := Repository{Dir: clone}.Status(context.Background())
 
-	if err != nil || status.Upstream != "origin/feature" || !status.UpstreamGone {
-		t.Fatalf("got %+v, %v, want origin/feature gone", status, err)
-	}
+	require.NoError(t, err)
+	require.Equal(t, "origin/feature", workTreeStatus.Upstream)
+	require.True(t, workTreeStatus.UpstreamGone)
 }
 
 func isMergedIntoTheDefaultBranchUntilItChangesAFile(t *testing.T) {
@@ -636,10 +619,10 @@ func isMergedIntoTheDefaultBranchUntilItChangesAFile(t *testing.T) {
 	runSteps(t, clone, [][]string{{"-C", clone, "add", "local.txt"}, {"-C", clone, "commit", "--message", "Local"}})
 	mergedAfter, mergedAfterErr := repository.MergedInto(context.Background(), "HEAD", "origin/main")
 
-	if mergedErr != nil || mergedAfterErr != nil || !merged || mergedAfter {
-		t.Fatalf("got %t (%v) then %t (%v), want merged until the local commit", merged, mergedErr, mergedAfter,
-			mergedAfterErr)
-	}
+	require.NoError(t, mergedErr)
+	require.True(t, merged)
+	require.NoError(t, mergedAfterErr)
+	require.False(t, mergedAfter)
 }
 
 func switchesToTheDefaultBranchCreatedFromOriginsSoPullFastForwardsIt(t *testing.T) {
@@ -649,14 +632,14 @@ func switchesToTheDefaultBranchCreatedFromOriginsSoPullFastForwardsIt(t *testing
 	switchErr := repository.Switch(context.Background(), "main")
 	pullErr := repository.Pull(context.Background())
 
-	status, err := repository.Status(context.Background())
-	if err != nil {
-		t.Fatal(err)
-	}
-	if switchErr != nil || pullErr != nil || status.Branch != "main" ||
-		revParse(t, clone, "HEAD") != revParse(t, otherClone, "HEAD") {
-		t.Fatalf("got switch %v, pull %v, branch %q, want main at other's commit", switchErr, pullErr, status.Branch)
-	}
+	require.NoError(t, switchErr)
+	require.NoError(t, pullErr)
+	workTreeStatus, statusErr := repository.Status(context.Background())
+	require.NoError(t, statusErr)
+	require.Equal(t, "main", workTreeStatus.Branch)
+	head := revParse(t, clone, "HEAD")
+	otherHead := revParse(t, otherClone, "HEAD")
+	require.Equal(t, otherHead, head)
 }
 
 func mergedAndDeletedOnTheRemote(t *testing.T) (string, string) {
@@ -691,29 +674,32 @@ func cherryPickBranchPutsTheWorkTreesCommitsOnMain(t *testing.T) {
 
 	picked, err := Repository{Dir: clone}.CherryPickBranch(context.Background(), "feature")
 
-	if err != nil || picked != 2 || revParse(t, clone, "main~2") != mainBefore ||
-		messageAt(t, clone, "main") != "Feature two" || revParse(t, workTree, "HEAD") != featureBefore {
-		t.Fatalf("got %d, %v, main %s, want both feature commits on %s and feature unchanged", picked, err,
-			gitOutput(t, clone, "log", "--format=%s", "main"), mainBefore)
-	}
+	require.NoError(t, err)
+	require.Equal(t, 2, picked)
+	mainBase := revParse(t, clone, "main~2")
+	require.Equal(t, mainBefore, mainBase)
+	mainMessage := messageAt(t, clone, "main")
+	require.Equal(t, "Feature two", mainMessage)
+	featureAfter := revParse(t, workTree, "HEAD")
+	require.Equal(t, featureBefore, featureAfter)
 }
 
 func cherryPickBranchSkipsCommitsAlreadyPicked(t *testing.T) {
 	clone, workTree := cloneWithFeatureWorkTree(t)
 	repository := Repository{Dir: clone}
-	if _, err := repository.CherryPickBranch(context.Background(), "feature"); err != nil {
-		t.Fatal(err)
-	}
+	_, firstErr := repository.CherryPickBranch(context.Background(), "feature")
+	require.NoError(t, firstErr)
 	writeFile(t, filepath.Join(workTree, "feature.txt"), "three\n")
 	runSteps(t, workTree, [][]string{{"commit", "--all", "--message", "Feature three"}})
 
 	picked, err := repository.CherryPickBranch(context.Background(), "feature")
 	_, againErr := repository.CherryPickBranch(context.Background(), "feature")
 
-	if err != nil || picked != 1 || messageAt(t, clone, "main") != "Feature three" || againErr == nil ||
-		!strings.Contains(againErr.Error(), "already has every commit") {
-		t.Fatalf("got %d, %v, then %v, want only Feature three picked, then nothing left", picked, err, againErr)
-	}
+	require.NoError(t, err)
+	require.Equal(t, 1, picked)
+	mainMessage := messageAt(t, clone, "main")
+	require.Equal(t, "Feature three", mainMessage)
+	require.ErrorContains(t, againErr, "already has every commit")
 }
 
 func cherryPickBranchAbortsAndKeepsMainOnConflict(t *testing.T) {
@@ -724,12 +710,11 @@ func cherryPickBranchAbortsAndKeepsMainOnConflict(t *testing.T) {
 
 	_, err := Repository{Dir: clone}.CherryPickBranch(context.Background(), "feature")
 
+	require.ErrorContains(t, err, "aborted the cherry-pick of feature onto main")
+	mainAfter := revParse(t, clone, "main")
+	require.Equal(t, mainBefore, mainAfter)
 	porcelainStatus := gitOutput(t, clone, "status", "--porcelain")
-	if err == nil || !strings.Contains(err.Error(), "aborted the cherry-pick of feature onto main") ||
-		revParse(t, clone, "main") != mainBefore || porcelainStatus != "" {
-		t.Fatalf("got %v, main %s, status %q, want an abort leaving main at %s", err, revParse(t, clone, "main"),
-			porcelainStatus, mainBefore)
-	}
+	require.Empty(t, porcelainStatus)
 }
 
 func cherryPickBranchRefusesAnotherBranchCheckedOut(t *testing.T) {
@@ -738,9 +723,7 @@ func cherryPickBranchRefusesAnotherBranchCheckedOut(t *testing.T) {
 
 	_, err := Repository{Dir: clone}.CherryPickBranch(context.Background(), "feature")
 
-	if err == nil || !strings.Contains(err.Error(), `has "other" checked out, switch it to main first`) {
-		t.Fatalf("got %v, want a refusal naming other and main", err)
-	}
+	require.ErrorContains(t, err, `has "other" checked out, switch it to main first`)
 }
 
 // cloneWithFeatureWorkTree returns a clone on main, with origin/HEAD set, and its linked work tree on feature with two
@@ -795,9 +778,8 @@ func TestMergedIntoCountsASquashMergeWhoseContextChangedFirst(t *testing.T) {
 
 	merged, err := Repository{Dir: clone}.MergedInto(context.Background(), "HEAD", "origin/main")
 
-	if err != nil || !merged {
-		t.Fatalf("got %t, %v, want the squash merge counted", merged, err)
-	}
+	require.NoError(t, err)
+	require.True(t, merged)
 }
 
 func TestForcePush(t *testing.T) {
@@ -826,14 +808,19 @@ func rewordsHeadAndLeavesTheStagedChangesStaged(t *testing.T) {
 	before := identitiesAndTrees(t, clone)
 	writeFile(t, filepath.Join(clone, "b.txt"), "staged\n")
 	runSteps(t, clone, [][]string{{"-C", clone, "add", "b.txt"}})
+	head := revParse(t, clone, "HEAD")
 
-	err := Repository{Dir: clone}.Reword(context.Background(), revParse(t, clone, "HEAD"), "Reworded\n\nWith a body")
+	err := Repository{Dir: clone}.Reword(context.Background(), head, "Reworded\n\nWith a body")
 
-	if err != nil || messageAt(t, clone, "HEAD") != "Reworded\n\nWith a body" || revParse(t, clone, "HEAD~1") != parent ||
-		identitiesAndTrees(t, clone) != before || stagedNames(t, clone) != "b.txt" {
-		t.Fatalf("got error %v, message %q, staged %q, want the message replaced on the same parent and tree with b.txt "+
-			"still staged", err, messageAt(t, clone, "HEAD"), stagedNames(t, clone))
-	}
+	require.NoError(t, err)
+	headMessage := messageAt(t, clone, "HEAD")
+	require.Equal(t, "Reworded\n\nWith a body", headMessage)
+	parentAfter := revParse(t, clone, "HEAD~1")
+	require.Equal(t, parent, parentAfter)
+	after := identitiesAndTrees(t, clone)
+	require.Equal(t, before, after)
+	staged := stagedNames(t, clone)
+	require.Equal(t, "b.txt", staged)
 }
 
 func rewordsAnOlderCommitAndKeepsTheTreesTheAuthorsAndTheIndex(t *testing.T) {
@@ -842,33 +829,37 @@ func rewordsAnOlderCommitAndKeepsTheTreesTheAuthorsAndTheIndex(t *testing.T) {
 	writeFile(t, filepath.Join(clone, "b.txt"), "staged\n")
 	runSteps(t, clone, [][]string{{"-C", clone, "add", "b.txt"}})
 	writeFile(t, filepath.Join(clone, "a.txt"), "unstaged\n")
+	target := revParse(t, clone, "HEAD~1")
 
-	err := Repository{Dir: clone}.Reword(context.Background(), revParse(t, clone, "HEAD~1"), "Reworded")
+	err := Repository{Dir: clone}.Reword(context.Background(), target, "Reworded")
 
-	unstaged, readErr := os.ReadFile(filepath.Join(clone, "a.txt"))
-	if err != nil || messageAt(t, clone, "HEAD~1") != "Reworded" || messageAt(t, clone, "HEAD") != "Write 3" ||
-		identitiesAndTrees(t, clone) != before || stagedNames(t, clone) != "b.txt" || readErr != nil ||
-		string(unstaged) != "unstaged\n" {
-		t.Fatalf("got error %v, messages %q and %q, history %q, staged %q, a.txt %q (%v), want only the second "+
-			"message replaced in %q", err, messageAt(t, clone, "HEAD~1"), messageAt(t, clone, "HEAD"),
-			identitiesAndTrees(t, clone), stagedNames(t, clone), unstaged, readErr, before)
-	}
+	require.NoError(t, err)
+	targetMessage := messageAt(t, clone, "HEAD~1")
+	require.Equal(t, "Reworded", targetMessage)
+	headMessage := messageAt(t, clone, "HEAD")
+	require.Equal(t, "Write 3", headMessage)
+	after := identitiesAndTrees(t, clone)
+	require.Equal(t, before, after)
+	staged := stagedNames(t, clone)
+	require.Equal(t, "b.txt", staged)
+	aFile := filepath.Join(clone, "a.txt")
+	assertFileHolds(t, aFile, "unstaged\n")
 }
 
 func signsTheRewrittenCommitsWhenCommitGpgSignIsOn(t *testing.T) {
 	clone := repositoryWithHistory(t, []string{"1", "2", "3"})
 	head := revParse(t, clone, "HEAD")
+	target := revParse(t, clone, "HEAD~1")
 	t.Setenv("GIT_CONFIG_VALUE_0", "true")
 	t.Setenv("GIT_CONFIG_COUNT", "4")
 	t.Setenv("GIT_CONFIG_KEY_3", "gpg.program")
 	t.Setenv("GIT_CONFIG_VALUE_3", "perusal-missing-gpg")
 
-	err := Repository{Dir: clone}.Reword(context.Background(), revParse(t, clone, "HEAD~1"), "Reworded")
+	err := Repository{Dir: clone}.Reword(context.Background(), target, "Reworded")
 
-	if err == nil || revParse(t, clone, "HEAD") != head {
-		t.Fatalf("got error %v, HEAD %s, want the missing signing program to fail it with HEAD left at %s", err,
-			revParse(t, clone, "HEAD"), head)
-	}
+	require.Error(t, err)
+	headAfter := revParse(t, clone, "HEAD")
+	require.Equal(t, head, headAfter)
 }
 
 func replacesTheUpstreamCommitThisBranchRewrote(t *testing.T) {
@@ -877,10 +868,10 @@ func replacesTheUpstreamCommitThisBranchRewrote(t *testing.T) {
 
 	err := Repository{Dir: clone}.ForcePush(context.Background(), "main")
 
-	if err != nil || revParse(t, remote, "main") != revParse(t, clone, "HEAD") {
-		t.Fatalf("got push error %v, remote main %s, want local HEAD %s", err, revParse(t, remote, "main"),
-			revParse(t, clone, "HEAD"))
-	}
+	require.NoError(t, err)
+	remoteMain := revParse(t, remote, "main")
+	head := revParse(t, clone, "HEAD")
+	require.Equal(t, head, remoteMain)
 }
 
 func refusesWhenTheRemoteMovedSinceTheLastFetch(t *testing.T) {
@@ -896,10 +887,9 @@ func refusesWhenTheRemoteMovedSinceTheLastFetch(t *testing.T) {
 
 	err := Repository{Dir: clone}.ForcePush(context.Background(), "main")
 
-	if err == nil || revParse(t, remote, "main") != before {
-		t.Fatalf("got push error %v, remote main %s, want a refusal leaving it at %s", err, revParse(t, remote, "main"),
-			before)
-	}
+	require.Error(t, err)
+	after := revParse(t, remote, "main")
+	require.Equal(t, before, after)
 }
 
 func foldsTheStagedChangesIntoHead(t *testing.T) {
@@ -907,12 +897,15 @@ func foldsTheStagedChangesIntoHead(t *testing.T) {
 	parent := revParse(t, clone, "HEAD~1")
 	writeFile(t, filepath.Join(clone, "a.txt"), "3\n")
 	runSteps(t, clone, [][]string{{"-C", clone, "add", "a.txt"}})
+	head := revParse(t, clone, "HEAD")
 
-	err := Repository{Dir: clone}.Amend(context.Background(), revParse(t, clone, "HEAD"))
+	err := Repository{Dir: clone}.Amend(context.Background(), head)
 
-	if err != nil || blobAt(t, clone, "HEAD:a.txt") != "3\n" || revParse(t, clone, "HEAD~1") != parent {
-		t.Fatalf("got error %v, a.txt at HEAD %q, want 3 on the same parent", err, blobAt(t, clone, "HEAD:a.txt"))
-	}
+	require.NoError(t, err)
+	amended := blobAt(t, clone, "HEAD:a.txt")
+	require.Equal(t, "3\n", amended)
+	parentAfter := revParse(t, clone, "HEAD~1")
+	require.Equal(t, parent, parentAfter)
 }
 
 func foldsTheStagedChangesIntoAnOlderCommitAndKeepsUnstagedOnes(t *testing.T) {
@@ -920,16 +913,18 @@ func foldsTheStagedChangesIntoAnOlderCommitAndKeepsUnstagedOnes(t *testing.T) {
 	writeFile(t, filepath.Join(clone, "b.txt"), "staged\n")
 	runSteps(t, clone, [][]string{{"-C", clone, "add", "b.txt"}})
 	writeFile(t, filepath.Join(clone, "a.txt"), "unstaged\n")
+	target := revParse(t, clone, "HEAD~1")
 
-	err := Repository{Dir: clone}.Amend(context.Background(), revParse(t, clone, "HEAD~1"))
+	err := Repository{Dir: clone}.Amend(context.Background(), target)
 
-	count, countErr := Repository{Dir: clone}.git(context.Background(), "rev-list", "--count", "HEAD")
-	unstaged, readErr := os.ReadFile(filepath.Join(clone, "a.txt"))
-	if err != nil || countErr != nil || readErr != nil || strings.TrimSpace(string(count)) != "3" ||
-		blobAt(t, clone, "HEAD~1:b.txt") != "staged\n" || string(unstaged) != "unstaged\n" {
-		t.Fatalf("got error %v, %q commits (%v), a.txt %q (%v), want b.txt in the second of 3 commits, a.txt untouched",
-			err, count, countErr, unstaged, readErr)
-	}
+	require.NoError(t, err)
+	countOutput := gitOutput(t, clone, "rev-list", "--count", "HEAD")
+	count := strings.TrimSpace(countOutput)
+	require.Equal(t, "3", count)
+	amended := blobAt(t, clone, "HEAD~1:b.txt")
+	require.Equal(t, "staged\n", amended)
+	aFile := filepath.Join(clone, "a.txt")
+	assertFileHolds(t, aFile, "unstaged\n")
 }
 
 func undoesTheFixupWhenTheRebaseStops(t *testing.T) {
@@ -937,17 +932,17 @@ func undoesTheFixupWhenTheRebaseStops(t *testing.T) {
 	head := revParse(t, clone, "HEAD")
 	writeFile(t, filepath.Join(clone, "a.txt"), "4\n")
 	runSteps(t, clone, [][]string{{"-C", clone, "add", "a.txt"}})
+	target := revParse(t, clone, "HEAD~1")
 
-	err := Repository{Dir: clone}.Amend(context.Background(), revParse(t, clone, "HEAD~1"))
+	err := Repository{Dir: clone}.Amend(context.Background(), target)
 
-	staged, diffErr := Repository{Dir: clone}.git(context.Background(), "diff", "--cached", "--name-only")
+	require.Error(t, err)
+	headAfter := revParse(t, clone, "HEAD")
+	require.Equal(t, head, headAfter)
+	staged := stagedNames(t, clone)
+	require.Equal(t, "a.txt", staged)
 	_, statErr := os.Stat(filepath.Join(clone, ".git", "rebase-merge"))
-	if err == nil || revParse(t, clone, "HEAD") != head || diffErr != nil ||
-		strings.TrimSpace(string(staged)) != "a.txt" ||
-		!os.IsNotExist(statErr) {
-		t.Fatalf("got error %v, HEAD %s, staged %q (%v), rebase state %v, want HEAD back at %s with a.txt staged",
-			err, revParse(t, clone, "HEAD"), staged, diffErr, statErr, head)
-	}
+	require.ErrorIs(t, statErr, fs.ErrNotExist)
 }
 
 func refusesACommitWithAMergeAboveIt(t *testing.T) {
@@ -964,9 +959,9 @@ func refusesACommitWithAMergeAboveIt(t *testing.T) {
 
 	err := Repository{Dir: clone}.Amend(context.Background(), target)
 
-	if !errors.Is(err, ErrCannotRewrite) || revParse(t, clone, "HEAD") != head {
-		t.Fatalf("got error %v, want ErrCannotRewrite with HEAD left at %s", err, head)
-	}
+	require.ErrorIs(t, err, ErrCannotRewrite)
+	headAfter := revParse(t, clone, "HEAD")
+	require.Equal(t, head, headAfter)
 }
 
 func repositoryWithHistory(t *testing.T, contents []string) string {
@@ -1038,28 +1033,27 @@ func useTestIdentity(t *testing.T) {
 
 func writeFile(t *testing.T, path string, content string) {
 	t.Helper()
-	if err := os.WriteFile(path, []byte(content), 0o600); err != nil {
-		t.Fatal(err)
-	}
+	err := os.WriteFile(path, []byte(content), 0o600)
+	require.NoError(t, err)
 }
 
 func revParse(t *testing.T, dir string, revision string) string {
 	t.Helper()
 	hash, err := Repository{Dir: dir}.revParse(context.Background(), revision)
-	if err != nil {
-		t.Fatal(err)
-	}
+	require.NoError(t, err)
 	return hash
 }
 
 func messageAt(t *testing.T, dir string, revision string) string {
 	t.Helper()
-	return strings.TrimSpace(gitOutput(t, dir, "log", "--max-count=1", "--format=%B", revision))
+	message := gitOutput(t, dir, "log", "--max-count=1", "--format=%B", revision)
+	return strings.TrimSpace(message)
 }
 
 func stagedNames(t *testing.T, dir string) string {
 	t.Helper()
-	return strings.TrimSpace(gitOutput(t, dir, "diff", "--cached", "--name-only"))
+	names := gitOutput(t, dir, "diff", "--cached", "--name-only")
+	return strings.TrimSpace(names)
 }
 
 func identitiesAndTrees(t *testing.T, dir string) string {
@@ -1070,19 +1064,22 @@ func identitiesAndTrees(t *testing.T, dir string) string {
 func gitOutput(t *testing.T, dir string, args ...string) string {
 	t.Helper()
 	output, err := Repository{Dir: dir}.git(context.Background(), args...)
-	if err != nil {
-		t.Fatal(err)
-	}
+	require.NoError(t, err)
 	return string(output)
 }
 
 func blobAt(t *testing.T, dir string, object string) string {
 	t.Helper()
 	content, err := Repository{Dir: dir}.git(context.Background(), "show", object)
-	if err != nil {
-		t.Fatal(err)
-	}
+	require.NoError(t, err)
 	return string(content)
+}
+
+func assertFileHolds(t *testing.T, path string, want string) {
+	t.Helper()
+	content, err := os.ReadFile(path)
+	require.NoError(t, err)
+	require.Equal(t, want, string(content))
 }
 
 func sendsTheBranchToItsOwnNameEvenWhenItTracksAnother(t *testing.T) {
@@ -1090,7 +1087,8 @@ func sendsTheBranchToItsOwnNameEvenWhenItTracksAnother(t *testing.T) {
 
 	err := Repository{Dir: clone}.Push(context.Background(), "feature")
 
-	assertFeaturePushedAndMainKept(t, remote, clone, main, err)
+	require.NoError(t, err)
+	assertFeaturePushedAndMainKept(t, remote, clone, main)
 }
 
 func TestPublishSendsABranchTrackingAnotherNameToItsOwn(t *testing.T) {
@@ -1098,7 +1096,8 @@ func TestPublishSendsABranchTrackingAnotherNameToItsOwn(t *testing.T) {
 
 	err := Repository{Dir: clone}.Publish(context.Background(), "feature")
 
-	assertFeaturePushedAndMainKept(t, remote, clone, main, err)
+	require.NoError(t, err)
+	assertFeaturePushedAndMainKept(t, remote, clone, main)
 }
 
 // push.default=upstream maps a refspec with no destination onto the branch it tracks.
@@ -1113,14 +1112,13 @@ func featureTrackingMain(t *testing.T) (string, string, string) {
 	return remote, clone, revParse(t, remote, "main")
 }
 
-func assertFeaturePushedAndMainKept(t *testing.T, remote string, clone string, main string, pushErr error) {
+func assertFeaturePushedAndMainKept(t *testing.T, remote string, clone string, main string) {
 	t.Helper()
-	feature, featureErr := Repository{Dir: remote}.revParse(context.Background(), "feature")
-	if pushErr != nil || revParse(t, remote, "main") != main || featureErr != nil ||
-		feature != revParse(t, clone, "HEAD") {
-		t.Fatalf("got push error %v, remote main %s and feature %s (%v), want main left at %s and feature at local "+
-			"HEAD %s", pushErr, revParse(t, remote, "main"), feature, featureErr, main, revParse(t, clone, "HEAD"))
-	}
+	remoteMain := revParse(t, remote, "main")
+	require.Equal(t, main, remoteMain)
+	remoteFeature := revParse(t, remote, "feature")
+	head := revParse(t, clone, "HEAD")
+	require.Equal(t, head, remoteFeature)
 }
 
 func TestGitDirKeepsGitOffARewrittenDotGitFile(t *testing.T) {
@@ -1128,17 +1126,14 @@ func TestGitDirKeepsGitOffARewrittenDotGitFile(t *testing.T) {
 	side := filepath.Join(t.TempDir(), "side")
 	runSteps(t, clone, [][]string{{"worktree", "add", "-b", "side", side}})
 	writeFile(t, filepath.Join(side, ".git"), "gitdir: "+filepath.Join(t.TempDir(), "elsewhere")+"\n")
+	gitDir := filepath.Join(clone, ".git", "worktrees", "side")
+	repository, openErr := Open(context.Background(), Repository{Dir: side, GitDir: gitDir})
+	require.NoError(t, openErr)
 
-	repository, err := Open(context.Background(),
-		Repository{Dir: side, GitDir: filepath.Join(clone, ".git", "worktrees", "side")})
-	if err != nil {
-		t.Fatal(err)
-	}
-	status, err := repository.Status(context.Background())
+	workTreeStatus, err := repository.Status(context.Background())
 
-	if err != nil || status.Branch != "side" {
-		t.Fatalf("got branch %q, %v, want side", status.Branch, err)
-	}
+	require.NoError(t, err)
+	require.Equal(t, "side", workTreeStatus.Branch)
 }
 
 func TestFilesDiffParsesAsAModifiedFileForTwoFilesInDifferentDirsOutsideARepository(t *testing.T) {
@@ -1148,12 +1143,12 @@ func TestFilesDiffParsesAsAModifiedFileForTwoFilesInDifferentDirsOutsideAReposit
 	writeFile(t, newPath, "a\nB\nc\n")
 
 	text, err := FilesDiff(context.Background(), oldPath, newPath)
-	if err != nil {
-		t.Fatal(err)
-	}
-	fileDiff, err := diff.ParseFile(text)
 
-	if err != nil || fileDiff.Change != diff.FileModified || diff.CountLines(fileDiff) != (diff.LineCounts{Added: 1, Removed: 1}) {
-		t.Fatalf("got %+v, %v, want one modified line\n%s", fileDiff, err, text)
-	}
+	require.NoError(t, err)
+	fileDiff, parseErr := diff.ParseFile(text)
+	require.NoError(t, parseErr)
+	require.Equal(t, diff.FileModified, fileDiff.Change)
+	counts := diff.CountLines(fileDiff)
+	want := diff.LineCounts{Added: 1, Removed: 1}
+	require.Equal(t, want, counts)
 }

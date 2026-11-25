@@ -3,9 +3,10 @@ package gitrepo
 import (
 	"context"
 	"path/filepath"
-	"reflect"
 	"slices"
 	"testing"
+
+	"github.com/stretchr/testify/require"
 )
 
 func TestBranchesListsEachLocalBranchWithItsUpstream(t *testing.T) {
@@ -21,14 +22,13 @@ func TestBranchesListsEachLocalBranchWithItsUpstream(t *testing.T) {
 
 	branches, err := Repository{Dir: clone}.Branches(context.Background())
 
+	require.NoError(t, err)
 	want := []Branch{
 		{Name: "feature", Tracking: Tracking{Upstream: "origin/feature", UpstreamGone: true}},
 		{Name: "fix/local", Current: true},
 		{Name: "main", Tracking: Tracking{Upstream: "origin/main", Ahead: 1, Behind: 1}},
 	}
-	if err != nil || !reflect.DeepEqual(branches, want) {
-		t.Fatalf("got %+v, %v, want %+v", branches, err, want)
-	}
+	require.Equal(t, want, branches)
 }
 
 func TestBranchesNamesTheOtherWorkTreeABranchIsCheckedOutIn(t *testing.T) {
@@ -38,13 +38,12 @@ func TestBranchesNamesTheOtherWorkTreeABranchIsCheckedOutIn(t *testing.T) {
 
 	branches, err := Repository{Dir: clone}.Branches(context.Background())
 
+	require.NoError(t, err)
 	want := []Branch{
 		{Name: "main", Current: true, Tracking: Tracking{Upstream: "origin/main"}},
 		{Name: "side", OtherWorkTree: filepath.ToSlash(side)},
 	}
-	if err != nil || !reflect.DeepEqual(branches, want) {
-		t.Fatalf("got %+v, %v, want %+v", branches, err, want)
-	}
+	require.Equal(t, want, branches)
 }
 
 func TestRemoteBranchesListsEachRemoteBranchButNotARemoteHEAD(t *testing.T) {
@@ -52,15 +51,14 @@ func TestRemoteBranchesListsEachRemoteBranchButNotARemoteHEAD(t *testing.T) {
 
 	branches, err := Repository{Dir: clone}.RemoteBranches(context.Background())
 
+	require.NoError(t, err)
 	want := []RemoteBranch{
 		{Ref: "fork/fix/x", Name: "fix/x"},
 		{Ref: "fork/main", Name: "main"},
 		{Ref: "origin/fix/x", Name: "fix/x"},
 		{Ref: "origin/main", Name: "main"},
 	}
-	if err != nil || !reflect.DeepEqual(branches, want) {
-		t.Fatalf("got %+v, %v, want %+v", branches, err, want)
-	}
+	require.Equal(t, want, branches)
 }
 
 func TestRemoteBranchesNamesABranchOfARemoteNamedWithASlash(t *testing.T) {
@@ -72,10 +70,9 @@ func TestRemoteBranchesNamesABranchOfARemoteNamedWithASlash(t *testing.T) {
 
 	branches, err := Repository{Dir: clone}.RemoteBranches(context.Background())
 
+	require.NoError(t, err)
 	want := []RemoteBranch{{Ref: "origin/main", Name: "main"}, {Ref: "team/fork/main", Name: "main"}}
-	if err != nil || !reflect.DeepEqual(branches, want) {
-		t.Fatalf("got %+v, %v, want %+v", branches, err, want)
-	}
+	require.Equal(t, want, branches)
 }
 
 func TestSwitchTrackingCreatesTheBranchFromTheNamedRemoteBranch(t *testing.T) {
@@ -84,11 +81,11 @@ func TestSwitchTrackingCreatesTheBranchFromTheNamedRemoteBranch(t *testing.T) {
 
 	err := repository.SwitchTracking(context.Background(), "fork/fix/x")
 
+	require.NoError(t, err)
 	branches, branchesErr := repository.Branches(context.Background())
+	require.NoError(t, branchesErr)
 	want := Branch{Name: "fix/x", Current: true, Tracking: Tracking{Upstream: "fork/fix/x"}}
-	if err != nil || branchesErr != nil || !slices.Contains(branches, want) {
-		t.Fatalf("got %v, %+v (%v), want %+v", err, branches, branchesErr, want)
-	}
+	require.Contains(t, branches, want)
 }
 
 func cloneWithTwoRemotes(t *testing.T) string {
@@ -111,31 +108,46 @@ func TestCreateBranchStartsAtTheStartPointWithNoUpstreamAndKeepsUncommittedChang
 
 	err := repository.CreateBranch(context.Background(), "feature", "origin/main")
 
+	require.NoError(t, err)
 	branches, branchesErr := repository.Branches(context.Background())
+	require.NoError(t, branchesErr)
 	want := Branch{Name: "feature", Current: true}
-	if err != nil || branchesErr != nil || !slices.Contains(branches, want) {
-		t.Fatalf("got %v, %+v (%v), want %+v", err, branches, branchesErr, want)
-	}
-	if head, start := revParse(t, clone, "HEAD"), revParse(t, clone, "origin/main"); head != start {
-		t.Fatalf("got HEAD %s, want origin/main %s", head, start)
-	}
-	if uncommitted := gitOutput(t, clone, "status", "--porcelain"); uncommitted != "?? edit.txt\n" {
-		t.Fatalf("got status %q, want the uncommitted edit.txt", uncommitted)
-	}
+	require.Contains(t, branches, want)
+	head := revParse(t, clone, "HEAD")
+	start := revParse(t, clone, "origin/main")
+	require.Equal(t, start, head)
+	uncommitted := gitOutput(t, clone, "status", "--porcelain")
+	require.Equal(t, "?? edit.txt\n", uncommitted)
 }
 
-func TestCreateBranchRefusesAnInvalidOrTakenName(t *testing.T) {
-	for _, name := range []string{"main", "bad..name", "has space"} {
-		t.Run(name, func(t *testing.T) {
-			_, clone := pushedClone(t)
+func TestCreateBranch(t *testing.T) {
+	t.Run("createBranchRefusesATakenName", createBranchRefusesATakenName)
+	t.Run("createBranchRefusesANameWithTwoDots", createBranchRefusesANameWithTwoDots)
+	t.Run("createBranchRefusesANameWithASpace", createBranchRefusesANameWithASpace)
+}
 
-			err := Repository{Dir: clone}.CreateBranch(context.Background(), name, "origin/main")
+func createBranchRefusesATakenName(t *testing.T) {
+	_, clone := pushedClone(t)
 
-			if err == nil {
-				t.Fatalf("got no error creating %q", name)
-			}
-		})
-	}
+	err := Repository{Dir: clone}.CreateBranch(context.Background(), "main", "origin/main")
+
+	require.Error(t, err)
+}
+
+func createBranchRefusesANameWithTwoDots(t *testing.T) {
+	_, clone := pushedClone(t)
+
+	err := Repository{Dir: clone}.CreateBranch(context.Background(), "bad..name", "origin/main")
+
+	require.Error(t, err)
+}
+
+func createBranchRefusesANameWithASpace(t *testing.T) {
+	_, clone := pushedClone(t)
+
+	err := Repository{Dir: clone}.CreateBranch(context.Background(), "has space", "origin/main")
+
+	require.Error(t, err)
 }
 
 func TestDeleteBranchDeletesABranchWithChangesTheDefaultBranchLacks(t *testing.T) {
@@ -151,9 +163,10 @@ func TestDeleteBranchDeletesABranchWithChangesTheDefaultBranchLacks(t *testing.T
 
 	err := repository.DeleteBranch(context.Background(), "feature")
 
+	require.NoError(t, err)
 	branches, branchesErr := repository.Branches(context.Background())
+	require.NoError(t, branchesErr)
 	isFeature := func(branch Branch) bool { return branch.Name == "feature" }
-	if err != nil || branchesErr != nil || slices.ContainsFunc(branches, isFeature) {
-		t.Fatalf("got %v, %+v (%v), want feature deleted", err, branches, branchesErr)
-	}
+	featureListed := slices.ContainsFunc(branches, isFeature)
+	require.False(t, featureListed)
 }

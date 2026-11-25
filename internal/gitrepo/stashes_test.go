@@ -2,11 +2,11 @@ package gitrepo
 
 import (
 	"context"
-	"errors"
-	"os"
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/stretchr/testify/require"
 )
 
 func TestStash(t *testing.T) {
@@ -19,109 +19,100 @@ func TestStash(t *testing.T) {
 
 func listSplitsTheBranchFromTheSummary(t *testing.T) {
 	repository := partlyStagedWorkTree(t)
-	if err := repository.Stash(context.Background()); err != nil {
-		t.Fatal(err)
-	}
+	stashErr := repository.Stash(context.Background())
+	require.NoError(t, stashErr)
 	writeFile(t, filepath.Join(repository.Dir, "a.txt"), "newer\n")
 	runSteps(t, repository.Dir, [][]string{{"-C", repository.Dir, "stash", "push", "--message", "try: the overview"}})
 
 	stashes, err := repository.Stashes(context.Background())
 
-	if err != nil || len(stashes) != 2 || stashes[0].Branch != "main" || stashes[0].Summary != "try: the overview" ||
-		stashes[1].Branch != "main" || stashes[1].Summary != "Write 1" {
-		t.Fatalf("got %+v, %v, want both on main, summarized without git's prefix", stashes, err)
-	}
+	require.NoError(t, err)
+	require.Len(t, stashes, 2)
+	require.Equal(t, "main", stashes[0].Branch)
+	require.Equal(t, "try: the overview", stashes[0].Summary)
+	require.Equal(t, "main", stashes[1].Branch)
+	require.Equal(t, "Write 1", stashes[1].Summary)
 }
 
 func diffShowsTrackedAndUntrackedFiles(t *testing.T) {
 	repository := partlyStagedWorkTree(t)
-	if err := repository.Stash(context.Background()); err != nil {
-		t.Fatal(err)
-	}
-	stashes, err := repository.Stashes(context.Background())
-	if err != nil {
-		t.Fatal(err)
-	}
+	stashErr := repository.Stash(context.Background())
+	require.NoError(t, stashErr)
+	stashes, stashesErr := repository.Stashes(context.Background())
+	require.NoError(t, stashesErr)
 
 	text, err := repository.StashDiff(context.Background(), stashes[0], 3)
 
-	if err != nil || !strings.Contains(text, "+unstaged") || !strings.Contains(text, "+untracked") {
-		t.Fatalf("got %v, diff:\n%s\nwant a.txt's work tree change and untracked.txt", err, text)
-	}
+	require.NoError(t, err)
+	require.Contains(t, text, "+unstaged")
+	require.Contains(t, text, "+untracked")
 }
 
 func popRestoresStagedUnstagedAndUntrackedChanges(t *testing.T) {
 	repository := partlyStagedWorkTree(t)
-	if err := repository.Stash(context.Background()); err != nil {
-		t.Fatal(err)
-	}
-	stashed, err := repository.Status(context.Background())
-	if err != nil || len(stashed.Files) != 0 {
-		t.Fatalf("got %+v, %v, want a clean work tree once stashed", stashed.Files, err)
-	}
-	head := strings.TrimSpace(gitOutput(t, repository.Dir, "log", "--max-count=1", "--format=%h %s"))
-	stashes, err := repository.Stashes(context.Background())
-	if err != nil || len(stashes) != 1 || stashes[0].Ref != "stash@{0}" || stashes[0].Message != "WIP on main: "+head {
-		t.Fatalf("got %+v, %v, want one stash named for main's head", stashes, err)
-	}
+	stashErr := repository.Stash(context.Background())
+	require.NoError(t, stashErr)
+	stashed, statusErr := repository.Status(context.Background())
+	require.NoError(t, statusErr)
+	require.Empty(t, stashed.Files)
+	headLine := gitOutput(t, repository.Dir, "log", "--max-count=1", "--format=%h %s")
+	head := strings.TrimSpace(headLine)
+	stashes, stashesErr := repository.Stashes(context.Background())
+	require.NoError(t, stashesErr)
+	require.Len(t, stashes, 1)
+	require.Equal(t, "stash@{0}", stashes[0].Ref)
+	require.Equal(t, "WIP on main: "+head, stashes[0].Message)
 
-	err = repository.PopStash(context.Background(), stashes[0])
+	err := repository.PopStash(context.Background(), stashes[0])
 
-	content, readErr := os.ReadFile(filepath.Join(repository.Dir, "a.txt"))
-	_, untrackedErr := os.Stat(filepath.Join(repository.Dir, "untracked.txt"))
-	remaining, stashesErr := repository.Stashes(context.Background())
-	if err != nil || blobAt(t, repository.Dir, ":a.txt") != "staged\n" || readErr != nil ||
-		string(content) != "unstaged\n" {
-		t.Fatalf("got %v, a.txt %q (%v), want staged and unstaged changes back", err, content, readErr)
-	}
-	if untrackedErr != nil || stashesErr != nil || len(remaining) != 0 {
-		t.Fatalf("got untracked file %v, stashes %+v (%v), want it back and the stash dropped", untrackedErr, remaining,
-			stashesErr)
-	}
+	require.NoError(t, err)
+	staged := blobAt(t, repository.Dir, ":a.txt")
+	require.Equal(t, "staged\n", staged)
+	unstagedFile := filepath.Join(repository.Dir, "a.txt")
+	assertFileHolds(t, unstagedFile, "unstaged\n")
+	untracked := filepath.Join(repository.Dir, "untracked.txt")
+	require.FileExists(t, untracked)
+	remaining, remainingErr := repository.Stashes(context.Background())
+	require.NoError(t, remainingErr)
+	require.Empty(t, remaining)
 }
 
 func popRefusesAStashANewerOneShifted(t *testing.T) {
 	repository := partlyStagedWorkTree(t)
-	if err := repository.Stash(context.Background()); err != nil {
-		t.Fatal(err)
-	}
-	stashes, err := repository.Stashes(context.Background())
-	if err != nil {
-		t.Fatal(err)
-	}
+	stashErr := repository.Stash(context.Background())
+	require.NoError(t, stashErr)
+	stashes, stashesErr := repository.Stashes(context.Background())
+	require.NoError(t, stashesErr)
 	writeFile(t, filepath.Join(repository.Dir, "a.txt"), "newer\n")
-	if err := repository.Stash(context.Background()); err != nil {
-		t.Fatal(err)
-	}
+	newerStashErr := repository.Stash(context.Background())
+	require.NoError(t, newerStashErr)
 
-	err = repository.PopStash(context.Background(), stashes[0])
+	err := repository.PopStash(context.Background(), stashes[0])
 
-	remaining, stashesErr := repository.Stashes(context.Background())
-	if !errors.Is(err, ErrStashListChanged) || stashesErr != nil || len(remaining) != 2 {
-		t.Fatalf("got %v, %+v (%v), want ErrStashListChanged with both stashes kept", err, remaining, stashesErr)
-	}
+	require.ErrorIs(t, err, ErrStashListChanged)
+	remaining, remainingErr := repository.Stashes(context.Background())
+	require.NoError(t, remainingErr)
+	require.Len(t, remaining, 2)
 }
 
 func dropDropsOnlyTheGivenStash(t *testing.T) {
 	repository := partlyStagedWorkTree(t)
-	if err := repository.Stash(context.Background()); err != nil {
-		t.Fatal(err)
-	}
+	stashErr := repository.Stash(context.Background())
+	require.NoError(t, stashErr)
 	writeFile(t, filepath.Join(repository.Dir, "a.txt"), "newer\n")
-	if err := repository.Stash(context.Background()); err != nil {
-		t.Fatal(err)
-	}
-	stashes, err := repository.Stashes(context.Background())
-	if err != nil || len(stashes) != 2 {
-		t.Fatalf("got %+v, %v, want two stashes", stashes, err)
-	}
+	newerStashErr := repository.Stash(context.Background())
+	require.NoError(t, newerStashErr)
+	stashes, stashesErr := repository.Stashes(context.Background())
+	require.NoError(t, stashesErr)
+	require.Len(t, stashes, 2)
 
-	err = repository.DropStash(context.Background(), stashes[1])
+	err := repository.DropStash(context.Background(), stashes[1])
 
-	remaining, stashesErr := repository.Stashes(context.Background())
-	if err != nil || stashesErr != nil || len(remaining) != 1 || remaining[0].Hash != stashes[0].Hash {
-		t.Fatalf("got %v, %+v (%v), want only the newer stash %s left", err, remaining, stashesErr, stashes[0].Hash)
-	}
+	require.NoError(t, err)
+	remaining, remainingErr := repository.Stashes(context.Background())
+	require.NoError(t, remainingErr)
+	require.Len(t, remaining, 1)
+	require.Equal(t, stashes[0].Hash, remaining[0].Hash)
 }
 
 func partlyStagedWorkTree(t *testing.T) Repository {
