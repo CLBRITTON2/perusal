@@ -108,6 +108,11 @@ type changedDirsOutput struct {
 // wait on a new set of paths, as in a new shell, and a watcher whose buffer overflowed return every one of dirs, since
 // nothing says which changed. Changes inside a .git's objects and logs do not count, since a commit that writes them
 // also moves a ref. A dir missing on the host is not watched.
+//
+// A commit in a linked work tree writes only under its clone's .git, so for a dir whose .git is a file the wait also
+// watches the folder that file names and the clone's refs\heads and packed-refs, as read when the watch is built. A
+// change under a clone's refs or packed-refs counts only for a dir whose checked-out commit it moved, and a change
+// under a clone's worktrees folder only for the linked work tree it belongs to.
 func (session *Session) WaitForChangedDirs(ctx context.Context, dirs []string, file string,
 	timeout time.Duration) ([]string, error) {
 	quotedDirs := make([]string, len(dirs))
@@ -119,7 +124,8 @@ func (session *Session) WaitForChangedDirs(ctx context.Context, dirs []string, f
 		return []string{}, fmt.Errorf("ssh %s: watch %s: want a full path", session.host, file)
 	}
 	// Events queue in the shell between waits, so a change made while a take ran still counts. Each event carries the
-	// index of the dir its watcher watches, -1 for file.
+	// index of the dir its watcher watches, -1 for file and for a clone's refs. $global:perusalHeads holds each dir's
+	// git dir, the clone's .git it shares, and the commit its HEAD resolved to when last read.
 	script := strings.Join([]string{
 		"$watchKey = " + QuotedString(file+"|"+strings.Join(dirs, "|")),
 		"$dirs = @(" + strings.Join(quotedDirs, ", ") + ")",
@@ -128,13 +134,47 @@ func (session *Session) WaitForChangedDirs(ctx context.Context, dirs []string, f
 			"Get-EventSubscriber | Where-Object SourceIdentifier -like 'perusal-*' | Unregister-Event; " +
 			"Get-Event | Remove-Event; " +
 			"@($global:perusalWatchers) | Where-Object { $null -ne $_ } | ForEach-Object { $_.Dispose() }; " +
+			// Shares delete, so git can still rename a ref over the file while it is open.
+			"function global:perusalReadText($path) { " +
+			"try { $stream = [IO.FileStream]::new($path, 'Open', 'Read', 'ReadWrite, Delete') } " +
+			"catch [IO.FileNotFoundException], [IO.DirectoryNotFoundException] { return $null }; " +
+			"try { (New-Object IO.StreamReader -ArgumentList $stream).ReadToEnd() } finally { $stream.Dispose() } }; " +
+			"function global:perusalTreeWatcher($path, $index) { " +
+			"if (Test-Path -LiteralPath $path -PathType Container) { [pscustomobject]@{ watcher = " +
+			"(New-Object IO.FileSystemWatcher -ArgumentList $path " +
+			"-Property @{ IncludeSubdirectories = $true; InternalBufferSize = 65536 }); index = $index } } }; " +
+			"function global:perusalIsUnder($path, $dir) { " +
+			"$path.Equals($dir, [StringComparison]::OrdinalIgnoreCase) -or " +
+			"$path.StartsWith($dir + '\\', [StringComparison]::OrdinalIgnoreCase) }; " +
+			"function global:perusalHeadCommit($head) { " +
+			"$headText = perusalReadText (Join-Path $head.gitDir 'HEAD'); if ($null -eq $headText) { return '' }; " +
+			"$headText = $headText.Trim(); if (-not $headText.StartsWith('ref: ')) { return $headText }; " +
+			"$ref = $headText.Substring(5); " +
+			"$loose = perusalReadText (Join-Path $head.commonDir $ref); if ($null -ne $loose) { return $loose.Trim() }; " +
+			"$packed = perusalReadText (Join-Path $head.commonDir 'packed-refs'); if ($null -eq $packed) { return '' }; " +
+			"foreach ($line in $packed.Split([char]10)) { $line = $line.Trim(); " +
+			"if ($line.EndsWith(' ' + $ref)) { return $line.Substring(0, $line.IndexOf(' ')) } }; return '' }; " +
+			"$global:perusalHeads = @(for ($index = 0; $index -lt $dirs.Count; $index++) { " +
+			"$dotGit = Join-Path $dirs[$index] '.git'; " +
+			"if (Test-Path -LiteralPath $dotGit -PathType Container) { $gitDir = $dotGit; $commonDir = $dotGit } " +
+			"elseif (Test-Path -LiteralPath $dotGit -PathType Leaf) { " +
+			"if ((perusalReadText $dotGit) -notmatch '^gitdir: (.+)') { continue }; " +
+			"$gitDir = [IO.Path]::GetFullPath([IO.Path]::Combine($dirs[$index], $Matches[1].Trim())); " +
+			"$commonText = perusalReadText (Join-Path $gitDir 'commondir'); if ($null -eq $commonText) { continue }; " +
+			"$commonDir = [IO.Path]::GetFullPath([IO.Path]::Combine($gitDir, $commonText.Trim())) } " +
+			"else { continue }; " +
+			"$head = [pscustomobject]@{ index = $index; gitDir = $gitDir; commonDir = $commonDir; commit = '' }; " +
+			"$head.commit = perusalHeadCommit $head; $head }); " +
+			"$linkedHeads = @($global:perusalHeads | Where-Object { $_.gitDir -ne $_.commonDir }); " +
 			"$fileWatcher = New-Object IO.FileSystemWatcher -ArgumentList " + QuotedString(file[:separator]) + ", " +
 			QuotedString(file[separator+1:]) + "; " +
 			"$watched = @([pscustomobject]@{ watcher = $fileWatcher; index = -1 }) + " +
-			"@(for ($index = 0; $index -lt $dirs.Count; $index++) { " +
-			"if (Test-Path -LiteralPath $dirs[$index] -PathType Container) { [pscustomobject]@{ watcher = " +
-			"(New-Object IO.FileSystemWatcher -ArgumentList $dirs[$index] " +
-			"-Property @{ IncludeSubdirectories = $true; InternalBufferSize = 65536 }); index = $index } } }); " +
+			"@(for ($index = 0; $index -lt $dirs.Count; $index++) { perusalTreeWatcher $dirs[$index] $index }) + " +
+			"@(foreach ($head in $linkedHeads) { perusalTreeWatcher $head.gitDir $head.index }) + " +
+			"@(foreach ($commonDir in @($linkedHeads | ForEach-Object { $_.commonDir } | Sort-Object -Unique)) { " +
+			"perusalTreeWatcher (Join-Path $commonDir 'refs\\heads') -1; " +
+			"if (Test-Path -LiteralPath $commonDir -PathType Container) { [pscustomobject]@{ watcher = " +
+			"(New-Object IO.FileSystemWatcher -ArgumentList $commonDir, 'packed-refs*'); index = -1 } } }); " +
 			"$global:perusalWatchers = @($watched | ForEach-Object { $_.watcher }); " +
 			"foreach ($entry in $watched) { " +
 			"foreach ($eventName in 'Changed', 'Created', 'Deleted', 'Renamed', 'Error') { " +
@@ -152,9 +192,23 @@ func (session *Session) WaitForChangedDirs(ctx context.Context, dirs []string, f
 			"Start-Sleep -Milliseconds 200; " +
 			"foreach ($fileEvent in @(Get-Event)) { Remove-Event -EventIdentifier $fileEvent.EventIdentifier; " +
 			"$sourceArgs = $fileEvent.SourceEventArgs; " +
-			"if ($sourceArgs -is [IO.ErrorEventArgs]) { $every = $true; $woken = $true } " +
-			`elseif ($sourceArgs.FullPath -notmatch '\\\.git\\(objects|logs)(\\|$)') { $woken = $true; ` +
-			"if ($fileEvent.MessageData -ge 0) { $changedIndexes[$fileEvent.MessageData] = $true } } } }",
+			"if ($sourceArgs -is [IO.ErrorEventArgs]) { $every = $true; $woken = $true; continue } " +
+			`if ($sourceArgs.FullPath -match '\\\.git\\(objects|logs)(\\|$)') { continue }; ` +
+			// A folder's own change only echoes a change inside it, which raises its own event.
+			"if ($sourceArgs.ChangeType -eq 'Changed' -and " +
+			"(Test-Path -LiteralPath $sourceArgs.FullPath -PathType Container)) { continue }; " +
+			"$path = $sourceArgs.FullPath; " +
+			"$headsSharingRefs = @($global:perusalHeads | Where-Object { (perusalIsUnder $path (Join-Path $_.commonDir 'refs')) " +
+			"-or $path.StartsWith((Join-Path $_.commonDir 'packed-refs'), [StringComparison]::OrdinalIgnoreCase) }); " +
+			"$inWorktrees = @($global:perusalHeads | " +
+			"Where-Object { perusalIsUnder $path (Join-Path $_.commonDir 'worktrees') }).Count -gt 0; " +
+			"if ($headsSharingRefs.Count -gt 0) { foreach ($head in $headsSharingRefs) { $commit = perusalHeadCommit $head; " +
+			"if ($commit -ne $head.commit) { $head.commit = $commit; $changedIndexes[$head.index] = $true; " +
+			"$woken = $true } } } " +
+			"elseif ($inWorktrees) { foreach ($head in @($global:perusalHeads | " +
+			"Where-Object { $_.gitDir -ne $_.commonDir -and (perusalIsUnder $path $_.gitDir) })) { " +
+			"$head.commit = perusalHeadCommit $head; $changedIndexes[$head.index] = $true; $woken = $true } } " +
+			"else { $woken = $true; if ($fileEvent.MessageData -ge 0) { $changedIndexes[$fileEvent.MessageData] = $true } } } }",
 		"ConvertTo-Json -Compress -InputObject @{ every = $every; indexes = @($changedIndexes.Keys) }",
 	}, "; ")
 	output, err := session.Run(ctx, script)

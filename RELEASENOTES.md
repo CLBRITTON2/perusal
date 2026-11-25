@@ -10,6 +10,9 @@ release go under `## [Unreleased]`, renamed to the version when it is tagged.
   also has (branch, HEAD, uncommitted files, upstream counts, the last taken commit) as JSON to `ownerStateFile` there
   every 15 seconds and after each take, and shows a failed write in the footer. It runs git again only in the work
   trees whose HEAD, index, config or refs changed, so a write while nothing changed starts no git.
+- `perusal follow` with `agentHost` takes a commit made in a linked worktree on the agent's host right away, instead
+  of waiting for the next write inside that worktree's folder. A branch moving that no paired work tree has checked
+  out starts no take.
 - The commit summary wraps onto up to three rows instead of scrolling sideways. `ctrl+a` selects all of the summary
   or description, so `backspace` clears it and typing replaces it.
 - The overview's repository table takes one line per work tree instead of the top half of the screen, and the
